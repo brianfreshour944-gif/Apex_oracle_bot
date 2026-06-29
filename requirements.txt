@@ -1,0 +1,6 @@
+ccxt==4.4.96
+numpy==1.26.4
+pandas==2.2.2
+sqlalchemy==2.0.31
+aiohttp==3.9.5
+python-dotenv==1.0.1
