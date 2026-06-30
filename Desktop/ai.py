@@ -6,25 +6,7 @@ class AIClient:
         self.api_key = api_key
         self.model = model
 
-    async def evaluate(self, context: dict) -> dict:
-        """
-        Returns: {"action": "BUY"|"SELL"|"HOLD", "confidence": float, "reason": str}
-        """
-        prompt = f"""
-        You are an expert quantitative trading assistant.
-        Evaluate the following market context and decide whether the bot should BUY, SELL, or HOLD.
-
-        Context:
-        {json.dumps(context, indent=2)}
-
-        Rules:
-        - Only return BUY, SELL, or HOLD.
-        - BUY only if trend, volatility, and regime strongly support upside.
-        - SELL only if downside risk is high or position is overextended.
-        - HOLD if conditions are mixed or unclear.
-        - Include a confidence score (0–1) and a short reason.
-        """
-
+    async def _call_llm(self, prompt: str) -> dict:
         async with aiohttp.ClientSession() as session:
             async with session.post(
                 "https://api.groq.com/v1/chat/completions",
@@ -39,5 +21,46 @@ class AIClient:
 
         try:
             return json.loads(text)
-        except:
-            return {"action": "HOLD", "confidence": 0.0, "reason": "AI parse error"}
+        except Exception:
+            return {"error": "parse_error", "raw": text}
+
+    async def evaluate_trade(self, context: dict) -> dict:
+        prompt = f"""
+        You are an expert quantitative trading assistant for a live crypto bot.
+
+        Evaluate this context and respond ONLY with a JSON object.
+
+        Context:
+        {json.dumps(context, indent=2)}
+
+        Requirements:
+        - "action": "BUY", "SELL", or "HOLD".
+        - "confidence": 0–1.
+        - "reason": short explanation.
+        - "position_size_factor": 0–1.
+        - "risk_score": 0–1.
+        - "regime_override": null or a short string.
+
+        Output MUST be valid JSON only.
+        """
+
+        result = await self._call_llm(prompt)
+
+        if "error" in result:
+            return {
+                "action": "HOLD",
+                "confidence": 0.0,
+                "reason": "AI parse error",
+                "position_size_factor": 0.0,
+                "risk_score": 1.0,
+                "regime_override": None,
+            }
+
+        return {
+            "action": result.get("action", "HOLD"),
+            "confidence": float(result.get("confidence", 0.0)),
+            "reason": result.get("reason", "No reason"),
+            "position_size_factor": float(result.get("position_size_factor", 0.0)),
+            "risk_score": float(result.get("risk_score", 1.0)),
+            "regime_override": result.get("regime_override"),
+        }
