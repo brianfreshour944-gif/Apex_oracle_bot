@@ -8,9 +8,15 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import sessionmaker, declarative_base
 
-from config import DATABASE_URL, BOT_NAME
+from config import DATABASE_URL as _RAW_DATABASE_URL, BOT_NAME
 
 logger = logging.getLogger(__name__)
+
+# SQLAlchemy v2 dropped the legacy 'postgres://' dialect alias -- normalize
+# to 'postgresql://' so this works whether the env var was set by Heroku,
+# Coolify, Render, or any other platform that still emits the old scheme.
+DATABASE_URL = _RAW_DATABASE_URL.replace("postgres://", "postgresql://") \
+                                .replace("postgresql+psycopg2://", "postgresql://")
 
 # Ensure the directory for a SQLite file DB exists before the engine connects.
 if DATABASE_URL.startswith("sqlite:///"):
@@ -34,10 +40,10 @@ class TradeLog(Base):
     symbol = Column(String(20), index=True)
     side = Column(String(10))
     price = Column(Float)
-    qty = Column(Float)
+    quantity = Column(Float)   # shared schema uses 'quantity', not 'qty'
     value = Column(Float)
     fee = Column(Float, default=0.0)
-    pnl = Column(Float, nullable=True)
+    realized_pnl = Column(Float, nullable=True)  # shared schema uses 'realized_pnl'
     order_id = Column(String(100), nullable=True)
     timestamp = Column(DateTime, default=datetime.datetime.utcnow, index=True)
 
@@ -75,10 +81,10 @@ def log_trade(symbol: str, side: str, qty: float, price: float,
             symbol=symbol,
             side=side.upper(),
             price=float(price),
-            qty=float(qty),
+            quantity=float(qty),
             value=float(qty) * float(price),
             fee=float(fee),
-            pnl=float(pnl) if pnl is not None else None,
+            realized_pnl=float(pnl) if pnl is not None else None,
             order_id=str(order_id) if order_id else None,
             timestamp=datetime.datetime.utcnow(),
         )
@@ -157,7 +163,7 @@ def query_recent_trades(bot_name: str = BOT_NAME, limit: int = 30) -> list:
                 "symbol": r.symbol,
                 "side": r.side,
                 "price": float(r.price),
-                "qty": float(r.qty),
+                "qty": float(r.quantity),
                 "value": float(r.value),
                 "timestamp": r.timestamp,
             }
