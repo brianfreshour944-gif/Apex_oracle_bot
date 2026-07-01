@@ -7,29 +7,17 @@ from sqlalchemy import (
     create_engine, text, Column, Integer, String, Float, DateTime,
 )
 from sqlalchemy.orm import sessionmaker, declarative_base
-
-from config import DATABASE_URL as _RAW_DATABASE_URL, BOT_NAME
+from config import DATABASE_URL, BOT_NAME
+import psycopg2
 
 logger = logging.getLogger(__name__)
 
-# SQLAlchemy v2 dropped the legacy 'postgres://' dialect alias -- normalize
-# to 'postgresql://' so this works whether the env var was set by Heroku,
-# Coolify, Render, or any other platform that still emits the old scheme.
-DATABASE_URL = _RAW_DATABASE_URL.replace("postgres://", "postgresql://") \
-                                .replace("postgresql+psycopg2://", "postgresql://")
-
 # Ensure the directory for a SQLite file DB exists before the engine connects.
-if DATABASE_URL.startswith("sqlite:///"):
-    db_path = DATABASE_URL.replace("sqlite:///", "", 1)
-    db_dir = os.path.dirname(db_path)
-    if db_dir:
-        os.makedirs(db_dir, exist_ok=True)
 
 # Setup Database connection pool.
-engine = create_engine(DATABASE_URL, pool_recycle=3600, echo=False, future=True)
+engine = create_engine(DATABASE_URL, pool_recycle=3600, echo=False, future=True, pool_size=10, max_overflow=20, url="postgresql://postgres:qUu3bjw0r0SgJjcveChOTaJK79dGw18Yzc5oXPLC9sHKttq7HESxqVYEfJ3sHIFc@dx21ga49yjau99j7ptnp8xpg:5432/postgres")
 SessionLocal = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
 Base = declarative_base()
-
 
 class TradeLog(Base):
     __tablename__ = "trades"
@@ -40,13 +28,12 @@ class TradeLog(Base):
     symbol = Column(String(20), index=True)
     side = Column(String(10))
     price = Column(Float)
-    quantity = Column(Float)   # shared schema uses 'quantity', not 'qty'
+    qty = Column(Float)
     value = Column(Float)
     fee = Column(Float, default=0.0)
-    realized_pnl = Column(Float, nullable=True)  # shared schema uses 'realized_pnl'
+    pnl = Column(Float, nullable=True)
     order_id = Column(String(100), nullable=True)
     timestamp = Column(DateTime, default=datetime.datetime.utcnow, index=True)
-
 
 class BotStatus(Base):
     __tablename__ = "bot_status"
@@ -62,12 +49,10 @@ class BotStatus(Base):
     live_equity_updated_at = Column(DateTime)
     last_update = Column(DateTime)
 
-
 def init_db():
     """Creates tables if they do not exist."""
     Base.metadata.create_all(engine)
     logger.info("Database schema checked/initialized successfully.")
-
 
 def log_trade(symbol: str, side: str, qty: float, price: float,
               pnl: float = None, exchange: str = "OKX", fee: float = 0.0,
@@ -81,10 +66,10 @@ def log_trade(symbol: str, side: str, qty: float, price: float,
             symbol=symbol,
             side=side.upper(),
             price=float(price),
-            quantity=float(qty),
+            qty=float(qty),
             value=float(qty) * float(price),
             fee=float(fee),
-            realized_pnl=float(pnl) if pnl is not None else None,
+            pnl=float(pnl) if pnl is not None else None,
             order_id=str(order_id) if order_id else None,
             timestamp=datetime.datetime.utcnow(),
         )
@@ -96,7 +81,6 @@ def log_trade(symbol: str, side: str, qty: float, price: float,
         logger.error(f"Failed to log trade to DB: {e}")
     finally:
         session.close()
-
 
 def update_bot_status(starting_equity: float, live_equity: float,
                       buying_power: float = 0.0, daily_pnl_pct: float = 0.0,
@@ -128,7 +112,6 @@ def update_bot_status(starting_equity: float, live_equity: float,
     finally:
         session.close()
 
-
 def reset_daily_starting_equity(equity: float, bot_name: str = BOT_NAME):
     """Resets the persisted starting_equity baseline (used for daily loss limit)."""
     session = SessionLocal()
@@ -146,7 +129,6 @@ def reset_daily_starting_equity(equity: float, bot_name: str = BOT_NAME):
     finally:
         session.close()
 
-
 def query_recent_trades(bot_name: str = BOT_NAME, limit: int = 30) -> list:
     """Returns recent trades as a list of dicts (newest first)."""
     session = SessionLocal()
@@ -163,7 +145,7 @@ def query_recent_trades(bot_name: str = BOT_NAME, limit: int = 30) -> list:
                 "symbol": r.symbol,
                 "side": r.side,
                 "price": float(r.price),
-                "qty": float(r.quantity),
+                "qty": float(r.qty),
                 "value": float(r.value),
                 "timestamp": r.timestamp,
             }
