@@ -52,6 +52,7 @@ class BotStatus(Base):
 def init_db():
     """Creates tables if they do not exist."""
     Base.metadata.create_all(engine)
+    ensure_columns()
     logger.info("Database schema checked/initialized successfully.")
 
 def log_trade(symbol: str, side: str, qty: float, price: float,
@@ -156,3 +157,28 @@ def query_recent_trades(bot_name: str = BOT_NAME, limit: int = 30) -> list:
         return []
     finally:
         session.close()
+
+def ensure_columns():
+    engine = create_engine(DATABASE_URL)
+    with engine.connect() as conn:
+        # List of (column_name, data_type, default)
+        columns = [
+            ('buying_power', 'REAL', '0.0'),
+            ('daily_pnl_pct', 'REAL', '0.0'),
+            ('open_positions_count', 'INTEGER', '0'),
+            ('trades_today', 'INTEGER', '0'),
+            ('live_equity_updated_at', 'TIMESTAMP', 'NULL'),
+        ]
+        for col, dtype, default in columns:
+            # Check if column exists
+            result = conn.execute(text("""
+                SELECT column_name
+                FROM information_schema.columns
+                WHERE table_name='bot_status' AND column_name=:col
+            """), {'col': col})
+            if not result.fetchone():
+                conn.execute(text(f"""
+                    ALTER TABLE bot_status ADD COLUMN {col} {dtype} DEFAULT {default}
+                """))
+                conn.commit()
+                logger.info(f"Added missing column: {col}")
