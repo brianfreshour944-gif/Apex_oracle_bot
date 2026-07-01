@@ -28,10 +28,10 @@ class TradeLog(Base):
     symbol = Column(String(20), index=True)
     side = Column(String(10))
     price = Column(Float)
-    qty = Column(Float)
+    quantity = Column(Float)
     value = Column(Float)
     fee = Column(Float, default=0.0)
-    pnl = Column(Float, nullable=True)
+    realized_pnl = Column(Float, nullable=True)
     order_id = Column(String(100), nullable=True)
     timestamp = Column(DateTime, default=datetime.datetime.utcnow, index=True)
 
@@ -55,7 +55,7 @@ def init_db():
     ensure_columns()
     logger.info("Database schema checked/initialized successfully.")
 
-def log_trade(symbol: str, side: str, qty: float, price: float,
+def log_trade(symbol: str, side: str, quantity: float, price: float,
               pnl: float = None, exchange: str = "OKX", fee: float = 0.0,
               order_id: str = None, bot_name: str = BOT_NAME):
     """Logs an executed trade to the trades table."""
@@ -67,16 +67,16 @@ def log_trade(symbol: str, side: str, qty: float, price: float,
             symbol=symbol,
             side=side.upper(),
             price=float(price),
-            qty=float(qty),
-            value=float(qty) * float(price),
+            quantity=float(quantity),
+            value=float(quantity) * float(price),
             fee=float(fee),
-            pnl=float(pnl) if pnl is not None else None,
+            realized_pnl=float(pnl) if pnl is not None else None,
             order_id=str(order_id) if order_id else None,
             timestamp=datetime.datetime.utcnow(),
         )
         session.add(rec)
         session.commit()
-        logger.info(f"DB Log: {side.upper()} {float(qty):.6f} {symbol} @ {price}")
+        logger.info(f"DB Log: {side.upper()} {float(quantity):.6f} {symbol} @ {price}")
     except Exception as e:
         session.rollback()
         logger.error(f"Failed to log trade to DB: {e}")
@@ -146,7 +146,7 @@ def query_recent_trades(bot_name: str = BOT_NAME, limit: int = 30) -> list:
                 "symbol": r.symbol,
                 "side": r.side,
                 "price": float(r.price),
-                "qty": float(r.qty),
+                "quantity": float(r.quantity),
                 "value": float(r.value),
                 "timestamp": r.timestamp,
             }
