@@ -17,13 +17,8 @@ import config
 
 logger = logging.getLogger("exchange")
 
-
 class OKXExchange:
     def __init__(self):
-        # FIX: ccxt's default OKX hostname (www.okx.com) returns "API key
-        # doesn't exist" (error 50119) for some regions/accounts even with
-        # valid keys. Overriding to app.okx.com (OKX's actual web UI endpoint)
-        # resolves this -- confirmed fix on every other OKX bot in this fleet.
         hostname = os.getenv("OKX_HOSTNAME", "app.okx.com")
         self.client = ccxt.okx({
             "apiKey": config.OKX_API_KEY,
@@ -32,12 +27,14 @@ class OKXExchange:
             "enableRateLimit": True,
             "hostname": hostname,
             "options": {
-                # OKX spot market BUY: interpret `amount` as base currency.
                 "createMarketBuyOrderRequiresPrice": False,
                 "defaultType": "spot",
+                "x-simulated-trading": "1"
             },
         })
         self._markets_loaded = False
+
+        self.client.set_sandbox_mode(True)
 
     async def load(self):
         # Load instrument definitions from the production endpoint. OKX demo and
