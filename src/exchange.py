@@ -216,7 +216,7 @@ class AlpacaExchange:
         qty: float,
         side: str,
         type: str = "market",
-        time_in_force: str = "day",
+        time_in_force: str = "ioc",
     ) -> Dict[str, Any]:
         """Create a new order."""
         if not self.client:
