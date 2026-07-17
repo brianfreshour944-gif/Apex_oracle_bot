@@ -30,8 +30,14 @@ async def run_trading_bot() -> None:
         logger.info(f"Symbols: {settings.SYMBOLS}")
         logger.info("=================================")
 
-        # Initialize database
-        init_db()
+        # Initialize database (handle connection failures gracefully)
+        try:
+            init_db()
+            logger.info("Database connected successfully")
+        except Exception as e:
+            logger.warning(f"Database connection failed (will retry later): {e}")
+            logger.info("Running in offline mode - some features may be limited")
+
         logger.info(settings.log_config())
 
         # Initialize exchange
