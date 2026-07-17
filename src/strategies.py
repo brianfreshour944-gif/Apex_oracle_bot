@@ -255,6 +255,8 @@ class TradingStrategy:
                 # Price-based exit checks
                 exit_signal = self._check_price_based_exits(symbol, current_price, position)
                 if exit_signal:
+                    exit_signal["regime"] = regime
+                    exit_signal["rsi"] = rsi
                     return exit_signal
 
             return {
