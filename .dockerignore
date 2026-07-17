@@ -10,7 +10,6 @@ venv
 .env
 .git
 *.md
-*.txt
 *.log
 *.sqlite
 *.db
@@ -19,3 +18,4 @@ venv
 *.json
 !pyproject.toml
 !Dockerfile
+!requirements.txt
