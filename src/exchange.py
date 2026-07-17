@@ -103,7 +103,7 @@ class AlpacaExchange:
             "limit": limit,
         }
 
-        response = await self.data_client.get("/v2/crypto/bars", params=params)
+        response = await self.data_client.get("/v1beta3/crypto/us/bars", params=params)
         if response.status_code in (401, 403, 404):
             body = response.text[:300]
             raise RuntimeError(
@@ -111,7 +111,7 @@ class AlpacaExchange:
                 f"(HTTP {response.status_code}). If using a PAPER key this usually means the "
                 f"account does not have the crypto market data subscription enabled - enable it "
                 f"in the Alpaca dashboard (https://app.alpaca.markets) under 'Your API Keys' -> "
-                f"'Subscribe to market data'. Endpoint: {self.data_base_url}/v2/crypto/bars. "
+                f"'Subscribe to market data'. Endpoint: {self.data_base_url}/v1beta3/crypto/us/bars. "
                 f"Response: {body}"
             )
         response.raise_for_status()
