@@ -97,10 +97,37 @@ class AlpacaExchange:
         if not self.data_client:
             await self.load()
 
+        import datetime
+        import re
+
+        # Calculate a safe start date in the past based on timeframe and limit
+        now = datetime.datetime.now(datetime.timezone.utc)
+        match = re.match(r'(\d+)\s*([a-zA-Z]+)?', timeframe)
+        if match:
+            val = int(match.group(1))
+            unit = match.group(2)
+            if unit:
+                unit_lower = unit.lower()
+                if 'min' in unit_lower or unit_lower == 'm':
+                    delta = datetime.timedelta(minutes=val * limit * 1.5)
+                elif 'hour' in unit_lower or unit_lower == 'h':
+                    delta = datetime.timedelta(hours=val * limit * 1.5)
+                elif 'day' in unit_lower or unit_lower == 'd':
+                    delta = datetime.timedelta(days=val * limit * 1.5)
+                else:
+                    delta = datetime.timedelta(days=limit * 1.5)
+            else:
+                delta = datetime.timedelta(days=limit * 1.5)
+        else:
+            delta = datetime.timedelta(days=limit * 1.5)
+
+        start_time = now - delta
+
         params = {
             "symbols": symbol,
             "timeframe": timeframe,
             "limit": limit,
+            "start": start_time.strftime("%Y-%m-%dT%H:%M:%SZ"),
         }
 
         response = await self.data_client.get("/v1beta3/crypto/us/bars", params=params)

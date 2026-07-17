@@ -28,7 +28,13 @@ class TradingStrategy:
 
             if len(bars_df) < 20:
                 logger.warning(f"Insufficient data for {symbol}, only {len(bars_df)} bars")
-                return {"regime": "neutral", "confidence": 0.0}
+                return {
+                    "regime": "neutral",
+                    "hurst": 0.5,
+                    "atr": 0.0,
+                    "rsi": 50.0,
+                    "confidence": 0.0
+                }
 
             # Extract numpy arrays explicitly (Polars Series -> numpy)
             close_arr = bars_df["close"].to_numpy()
@@ -70,7 +76,13 @@ class TradingStrategy:
 
         except Exception as e:
             logger.error(f"Regime analysis failed: {e}")
-            return {"regime": "neutral", "confidence": 0.0}
+            return {
+                "regime": "neutral",
+                "hurst": 0.5,
+                "atr": 0.0,
+                "rsi": 50.0,
+                "confidence": 0.0
+            }
 
     def _calculate_hurst(self, returns: np.ndarray) -> float:
         """Calculate Hurst exponent using rescaled range (R/S) analysis."""
@@ -259,7 +271,9 @@ class TradingStrategy:
                 "symbol": symbol,
                 "action": "stand_aside",
                 "reason": "error",
-                "error": str(e)
+                "error": str(e),
+                "regime": "neutral",
+                "rsi": 50.0
             }
 
     def _check_price_based_exits(self, symbol: str, current_price: float, position: Dict[str, Any]) -> Optional[Dict[str, Any]]:
