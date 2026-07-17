@@ -89,19 +89,20 @@ class AlpacaExchange:
             await self.load()
 
         params = {
+            "symbols": symbol,
             "timeframe": timeframe,
             "limit": limit,
         }
 
-        response = await self.data_client.get(f"/v2/crypto/{symbol}/bars", params=params)
+        response = await self.data_client.get("/v2/crypto/bars", params=params)
         response.raise_for_status()
 
         # Convert to Polars DataFrame for modern data processing
         data = response.json()
-        bars = data.get("bars", [])
-        if not bars:
+        bars = data.get("bars", {})
+        if not bars or symbol not in bars:
             return pl.DataFrame()
-        df = pl.DataFrame(bars)
+        df = pl.DataFrame(bars[symbol])
         rename_map = {
             "t": "timestamp",
             "o": "open",
