@@ -33,7 +33,7 @@ class Base(DeclarativeBase):
     """Modern SQLAlchemy 2.0 declarative base using MappedAsDataclass style."""
     pass
 
-# Create engine at module level
+# Create engine at module level (lazy connection)
 engine = create_engine(
     settings.DATABASE_URL,
     pool_recycle=3600,
@@ -41,6 +41,7 @@ engine = create_engine(
     future=True,
     pool_size=10,
     max_overflow=20,
+    connect_args={"connect_timeout": 5} if "postgresql" in settings.DATABASE_URL else {},
 )
 
 # Database session factory
