@@ -27,11 +27,12 @@ WORKDIR /app
 
 # Copy project files
 COPY pyproject.toml ./
+COPY requirements.txt ./
 COPY src/ ./src/
 COPY test_*.py ./
 
 # Install dependencies using uv
-RUN uv pip install --system --no-cache-dir .
+RUN uv pip install --system --no-cache-dir -r requirements.txt
 
 # Create data directory
 RUN mkdir -p /app/data
