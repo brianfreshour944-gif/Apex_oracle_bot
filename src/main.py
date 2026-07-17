@@ -1,6 +1,8 @@
-"""Main entry point for the Apex Oracle Bot."""
+"""Main entry point for the Apex Oracle Bot with robust error handling."""
 
 import asyncio
+import sys
+import traceback
 from src.bot import run_trading_bot
 from src.logging_config import get_logger
 
@@ -23,7 +25,14 @@ def main() -> None:
         logger.info("Shutdown requested. Exiting gracefully.")
     except Exception as e:
         logger.error(f"Fatal error in main: {e}", exc_info=True)
+        print("\n=== FULL TRACEBACK ===", file=sys.stderr)
+        traceback.print_exc()
         raise
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception as e:
+        print(f"\n💥 UNCAUGHT STARTUP CRASH: {e}", file=sys.stderr)
+        traceback.print_exc()
+        sys.exit(1)
