@@ -9,7 +9,6 @@ from typing import Dict, Any, Optional
 
 from src.config import settings
 from src.logging_config import get_logger
-from src.bot import ex
 
 logger = get_logger(__name__)
 
