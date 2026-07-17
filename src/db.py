@@ -2,6 +2,7 @@
 
 import datetime
 import logging
+import os
 from typing import Dict, Any, Optional, Sequence
 from sqlalchemy import (
     create_engine,
@@ -40,6 +41,13 @@ def get_engine():
     """Get the database engine, creating it if needed."""
     global _engine
     if _engine is None:
+        if settings.DATABASE_URL.startswith("sqlite:///"):
+            db_path = settings.DATABASE_URL[len("sqlite:///"):]
+            if db_path and db_path != ":memory:":
+                db_dir = os.path.dirname(db_path)
+                if db_dir:
+                    os.makedirs(db_dir, exist_ok=True)
+
         _engine = create_engine(
             settings.DATABASE_URL,
             pool_recycle=3600,

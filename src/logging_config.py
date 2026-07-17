@@ -25,10 +25,10 @@ def configure_structlog() -> None:
 
         structlog.configure(
             processors=processors,
-            wrapper_class=structlog.make_filtering_bound_logger(logging.DEBUG),
+            wrapper_class=structlog.stdlib.BoundLogger,
             context_class=dict,
-            logger_factory=structlog.PrintLoggerFactory(),
-            cache_logger_on_first_use=False,
+            logger_factory=structlog.stdlib.LoggerFactory(),
+            cache_logger_on_first_use=True,
         )
 
         # Configure standard logging
