@@ -30,20 +30,23 @@ class TradingStrategy:
                 logger.warning(f"Insufficient data for {symbol}, only {len(bars_df)} bars")
                 return {"regime": "neutral", "confidence": 0.0}
 
-            # Calculate returns for Hurst exponent
-            bars_df = bars_df.with_columns(
-                (pl.col("close").pct_change()).alias("returns")
-            ).drop_nulls()
+            # Extract numpy arrays explicitly (Polars Series -> numpy)
+            close_arr = bars_df["close"].to_numpy()
+            high_arr = bars_df["high"].to_numpy()
+            low_arr = bars_df["low"].to_numpy()
 
-            # Calculate Hurst exponent (simplified)
-            returns = bars_df["returns"].to_numpy()
+            # Calculate returns for Hurst exponent
+            returns = np.diff(close_arr) / close_arr[:-1]
+            returns = returns[~np.isnan(returns)]
+
+            # Calculate Hurst exponent
             hurst = self._calculate_hurst(returns)
 
-            # Calculate ATR
-            atr = self._calculate_atr(bars_df)
+            # Calculate ATR (pass numpy arrays)
+            atr = self._calculate_atr(high_arr, low_arr, close_arr)
 
             # Calculate RSI
-            rsi = self._calculate_rsi(bars_df["close"].to_numpy())
+            rsi = self._calculate_rsi(close_arr)
 
             # Classify regime
             if hurst > settings.HURST_TREND_UP:
@@ -119,19 +122,17 @@ class TradingStrategy:
         # Clamp to reasonable range
         return float(np.clip(hurst, 0.0, 1.0))
 
-    def _calculate_atr(self, bars_df: pl.DataFrame) -> float:
-        """Calculate Average True Range."""
-        high = bars_df["high"]
-        low = bars_df["low"]
-        close = bars_df["close"]
+    def _calculate_atr(self, high: np.ndarray, low: np.ndarray, close: np.ndarray) -> float:
+        """Calculate Average True Range from numpy arrays."""
+        prev_close = np.roll(close, 1)
+        prev_close[0] = close[0]
 
-        tr = pl.max_horizontal(
+        tr = np.maximum.reduce([
             high - low,
-            (high - close.shift(1)).abs(),
-            (low - close.shift(1)).abs()
-        )
-
-        atr = tr.mean()
+            np.abs(high - prev_close),
+            np.abs(low - prev_close),
+        ])
+        atr = np.mean(tr)
         return float(atr)
 
     def _calculate_rsi(self, prices: np.ndarray, period: int = 14) -> float:
@@ -197,22 +198,34 @@ class TradingStrategy:
 
             # Check if we should enter a position
             if not position:
-                if regime == "trending" and rsi < settings.RSI_NEUTRAL_BUY:
-                    return {
-                        "symbol": symbol,
-                        "action": "buy",
-                        "reason": "trending_regime_buy_signal",
-                        "regime": regime,
-                        "rsi": rsi
-                    }
-                elif regime == "mean_reverting" and rsi > settings.RSI_NEUTRAL_SELL:
-                    return {
-                        "symbol": symbol,
-                        "action": "sell",
-                        "reason": "mean_reverting_regime_sell_signal",
-                        "regime": regime,
-                        "rsi": rsi
-                    }
+                if regime == "trending":
+                    # Buy on pullbacks while trend is intact (RSI not overbought)
+                    if rsi < settings.RSI_OVERBOUGHT:
+                        return {
+                            "symbol": symbol,
+                            "action": "buy",
+                            "reason": "trending_regime_buy_signal",
+                            "regime": regime,
+                            "rsi": rsi
+                        }
+                elif regime == "mean_reverting":
+                    # Buy when oversold, sell (short) when overbought
+                    if rsi < settings.RSI_OVERSOLD:
+                        return {
+                            "symbol": symbol,
+                            "action": "buy",
+                            "reason": "mean_reverting_oversold_buy",
+                            "regime": regime,
+                            "rsi": rsi
+                        }
+                    elif rsi > settings.RSI_OVERBOUGHT:
+                        return {
+                            "symbol": symbol,
+                            "action": "sell",
+                            "reason": "mean_reverting_overbought_sell",
+                            "regime": regime,
+                            "rsi": rsi
+                        }
 
             # Check if we should exit a position (regime flip OR price-based exits)
             if position:
