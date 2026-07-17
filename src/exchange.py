@@ -22,9 +22,11 @@ class AlpacaExchange:
         self.client = None
         self.data_client = None
         self.base_url = settings.ALPACA_BASE_URL
-        # Alpaca serves market data from the same host as the trading API
-        # (paper keys only work on paper-api.alpaca.markets, live on api.alpaca.markets).
-        self.data_base_url = self.base_url
+        # Crypto market data is served from the Alpaca Data API host.
+        # Paper and live keys both authenticate here; if you get 404 with a
+        # valid key, the account likely lacks the crypto data subscription
+        # (enable it in the Alpaca dashboard).
+        self.data_base_url = "https://data.alpaca.markets"
         self.api_key = settings.ALPACA_API_KEY
         self.secret_key = settings.ALPACA_SECRET_KEY
         self.headers = {
@@ -97,6 +99,16 @@ class AlpacaExchange:
         }
 
         response = await self.data_client.get("/v2/crypto/bars", params=params)
+        if response.status_code in (401, 403, 404):
+            body = response.text[:300]
+            raise RuntimeError(
+                f"Crypto market data unavailable for {symbol} "
+                f"(HTTP {response.status_code}). If using a PAPER key this usually means the "
+                f"account does not have the crypto market data subscription enabled - enable it "
+                f"in the Alpaca dashboard (https://app.alpaca.markets) under 'Your API Keys' -> "
+                f"'Subscribe to market data'. Endpoint: {self.data_base_url}/v2/crypto/bars. "
+                f"Response: {body}"
+            )
         response.raise_for_status()
 
         # Convert to Polars DataFrame for modern data processing
