@@ -46,8 +46,14 @@ async def run_trading_bot() -> None:
 
         # Initialize exchange
         ex = AlpacaExchange()
-        await ex.load()
-        logger.info("Alpaca exchange connected")
+        try:
+            await ex.load()
+            logger.info("Alpaca exchange connected")
+        except RuntimeError:
+            # Re-raise configuration and auth errors which are fatal
+            raise
+        except Exception as e:
+            logger.warning(f"Alpaca exchange connection failed on startup: {e}. Bot will start in offline/retry mode.")
 
         # Initialize trading strategy and risk manager
         strategy = TradingStrategy(ex)
