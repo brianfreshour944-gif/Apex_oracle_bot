@@ -41,4 +41,4 @@ RUN mkdir -p /app/data
 EXPOSE 8080
 
 # Set the default command
-CMD ["python", "src/main.py"]
+CMD ["python", "-m", "src.main"]
