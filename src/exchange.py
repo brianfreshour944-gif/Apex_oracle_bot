@@ -22,7 +22,9 @@ class AlpacaExchange:
         self.client = None
         self.data_client = None
         self.base_url = settings.ALPACA_BASE_URL
-        self.data_base_url = "https://data.alpaca.markets"
+        # Alpaca serves market data from the same host as the trading API
+        # (paper keys only work on paper-api.alpaca.markets, live on api.alpaca.markets).
+        self.data_base_url = self.base_url
         self.api_key = settings.ALPACA_API_KEY
         self.secret_key = settings.ALPACA_SECRET_KEY
         self.headers = {
