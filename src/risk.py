@@ -86,8 +86,8 @@ class RiskManager:
             # Calculate current exposure
             current_exposure = sum(float(p.get("market_value", 0)) for p in positions)
 
-            # Check portfolio value cap (scaled to actual equity)
-            max_portfolio_abs = settings.MAX_PORTFOLIO_VALUE / 100.0 * equity
+            # Check portfolio value cap (absolute dollar amount)
+            max_portfolio_abs = float(settings.MAX_PORTFOLIO_VALUE)
             if current_exposure > max_portfolio_abs:
                 logger.warning(f"Portfolio value cap exceeded: ${current_exposure:.2f} (cap: ${max_portfolio_abs:.2f})")
                 return {

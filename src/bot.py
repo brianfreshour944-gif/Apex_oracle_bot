@@ -75,9 +75,9 @@ async def run_trading_bot() -> None:
                     await risk_manager.liquidate_all_positions()
                     break
 
-                # Get current positions
+                # Get current positions (normalize symbols to remove slashes for matching)
                 positions = await ex.get_positions()
-                position_dict = {p["symbol"]: p for p in positions}
+                position_dict = {p["symbol"].replace("/", ""): p for p in positions}
 
                 # Analyze each symbol and generate signals
                 for symbol in settings.SYMBOLS:
@@ -90,8 +90,8 @@ async def run_trading_bot() -> None:
 
                         current_price = float(bars["close"][0])
 
-                        # Get current position for this symbol
-                        current_position = position_dict.get(symbol)
+                        # Get current position for this symbol (normalized)
+                        current_position = position_dict.get(symbol.replace("/", ""))
 
                         # Generate trading signal
                         signal = await strategy.generate_trading_signal(
