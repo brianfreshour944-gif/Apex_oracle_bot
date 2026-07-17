@@ -121,6 +121,12 @@ class AlpacaExchange:
         else:
             delta = datetime.timedelta(days=limit * 1.5)
 
+        # Enforce a minimum lookback of 1 hour so small limit requests
+        # (e.g. limit=1, 1Min) always find at least one completed bar.
+        min_delta = datetime.timedelta(hours=1)
+        if delta < min_delta:
+            delta = min_delta
+
         start_time = now - delta
 
         params = {
@@ -149,6 +155,39 @@ class AlpacaExchange:
         if not bars or symbol not in bars:
             return pl.DataFrame()
         df = pl.DataFrame(bars[symbol])
+        rename_map = {
+            "t": "timestamp",
+            "o": "open",
+            "h": "high",
+            "l": "low",
+            "c": "close",
+            "v": "volume",
+            "vw": "vwap",
+            "n": "trade_count",
+        }
+        df = df.rename({k: v for k, v in rename_map.items() if k in df.columns})
+        return df
+
+    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
+    async def get_latest_bar(self, symbol: str) -> pl.DataFrame:
+        """Get the latest bar for a crypto symbol using the dedicated latest/bars endpoint."""
+        if not self.data_client:
+            await self.load()
+
+        params = {"symbols": symbol}
+        response = await self.data_client.get("/v1beta3/crypto/us/latest/bars", params=params)
+        response.raise_for_status()
+
+        data = response.json()
+        bars = data.get("bars", {})
+        if not bars or symbol not in bars:
+            return pl.DataFrame()
+
+        bar = bars[symbol]
+        # latest/bars returns a single bar object, not a list
+        if isinstance(bar, dict):
+            bar = [bar]
+        df = pl.DataFrame(bar)
         rename_map = {
             "t": "timestamp",
             "o": "open",

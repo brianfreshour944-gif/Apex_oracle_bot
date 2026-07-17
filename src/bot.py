@@ -82,8 +82,8 @@ async def run_trading_bot() -> None:
                 # Analyze each symbol and generate signals
                 for symbol in settings.SYMBOLS:
                     try:
-                        # Get current price
-                        bars = await ex.get_bars(symbol, "1Min", 1)
+                        # Get current price using latest bar endpoint
+                        bars = await ex.get_latest_bar(symbol)
                         if len(bars) == 0:
                             logger.warning(f"No price data for {symbol}")
                             continue
