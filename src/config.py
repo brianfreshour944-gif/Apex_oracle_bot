@@ -286,6 +286,16 @@ class TradingBotSettings(BaseSettings):
             raise ValueError("RSI values must be between 0 and 100")
         return v
 
+    @field_validator("ALPACA_BASE_URL")
+    @classmethod
+    def clean_alpaca_base_url(cls, v: str) -> str:
+        """Clean the Alpaca base URL by stripping surrounding parentheses, quotes, and whitespace."""
+        if v:
+            v = v.strip("()\"' ")
+            if v and not v.startswith(("http://", "https://")):
+                v = "https://" + v
+        return v
+
     def log_config(self) -> str:
         """Generate configuration summary for logging."""
         config_lines = [
