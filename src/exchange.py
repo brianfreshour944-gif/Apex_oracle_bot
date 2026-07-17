@@ -21,7 +21,8 @@ class AlpacaExchange:
     def __init__(self):
         self.client = None
         self.data_client = None
-        self.base_url = settings.ALPACA_BASE_URL
+        # Fall back to paper trading if ALPACA_BASE_URL is unset/empty in env.
+        self.base_url = settings.ALPACA_BASE_URL or "https://paper-api.alpaca.markets"
         # Crypto market data is served from the Alpaca Data API host.
         # Paper and live keys both authenticate here; if you get 404 with a
         # valid key, the account likely lacks the crypto data subscription
