@@ -26,7 +26,7 @@ class TradingBotSettings(BaseSettings):
 
     # --- Database configuration ---
     DATABASE_URL: str = Field(
-        default_factory=lambda: f"sqlite:///{Path(__file__).parent.parent / 'data' / 'trades.db'}",
+        default="postgresql+psycopg2://postgres:postgres@localhost:5432/trading_bot",
         description="Database connection URL"
     )
 
