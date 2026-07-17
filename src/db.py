@@ -33,25 +33,35 @@ class Base(DeclarativeBase):
     """Modern SQLAlchemy 2.0 declarative base using MappedAsDataclass style."""
     pass
 
-# Create engine at module level (lazy connection)
-engine = create_engine(
-    settings.DATABASE_URL,
-    pool_recycle=3600,
-    echo=False,
-    future=True,
-    pool_size=10,
-    max_overflow=20,
-    connect_args={"connect_timeout": 5} if "postgresql" in settings.DATABASE_URL else {},
-)
+# Engine will be created lazily when first needed
+_engine = None
 
-# Database session factory
-SessionLocal = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
+def get_engine():
+    """Get the database engine, creating it if needed."""
+    global _engine
+    if _engine is None:
+        _engine = create_engine(
+            settings.DATABASE_URL,
+            pool_recycle=3600,
+            echo=False,
+            future=True,
+            pool_size=10,
+            max_overflow=20,
+            connect_args={"connect_timeout": 5} if "postgresql" in settings.DATABASE_URL else {},
+        )
+        logger.info(f"Database engine created: {settings.DATABASE_URL}")
+    return _engine
+
+# Database session factory (will use lazy engine)
+def get_session_factory():
+    """Get a session factory using the lazy engine."""
+    return sessionmaker(bind=get_engine(), autoflush=False, expire_on_commit=False)
 
 def init_db() -> None:
     """Initialize database connection."""
     try:
         # Test the connection
-        with engine.connect() as conn:
+        with get_engine().connect() as conn:
             conn.execute(text("SELECT 1"))
         logger.info(f"Database connected: {settings.DATABASE_URL}")
     except SQLAlchemyError as e:
@@ -60,4 +70,4 @@ def init_db() -> None:
 
 def get_db_session() -> Session:
     """Get a database session."""
-    return SessionLocal()
+    return get_session_factory()()
