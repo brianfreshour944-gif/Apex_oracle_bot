@@ -203,6 +203,74 @@ class TradingBotSettings(BaseSettings):
         description="Bot name for identification"
     )
 
+    # --- Position Sizing (Kelly / volatility-adjusted) ---
+    KELLY_FRACTION: float = Field(
+        default=0.25,
+        description="Fractional Kelly multiplier applied to raw Kelly size (0=flat, 1=full Kelly)",
+        ge=0,
+        le=1,
+    )
+    VOL_LOOKBACK: int = Field(
+        default=20,
+        description="Bars used to estimate realized volatility for sizing",
+        ge=5,
+    )
+    MAX_VOL_ADJUST: float = Field(
+        default=2.0,
+        description="Cap on volatility multiplier (higher vol -> smaller size)",
+        gt=0,
+    )
+
+    # --- Circuit Breaker / Fault Tolerance ---
+    CIRCUIT_FAILURE_THRESHOLD: int = Field(
+        default=5,
+        description="Consecutive exchange failures before opening the circuit breaker",
+        ge=1,
+    )
+    CIRCUIT_OPEN_SECONDS: int = Field(
+        default=300,
+        description="Seconds the circuit stays open after tripping",
+        ge=10,
+    )
+    MAX_ORDER_RETRIES: int = Field(
+        default=3,
+        description="Max attempts to place/confirm an order",
+        ge=1,
+        le=10,
+    )
+    ORDER_TIMEOUT_SEC: int = Field(
+        default=30,
+        description="Seconds to wait for an order fill confirmation before cancelling",
+        ge=5,
+    )
+
+    # --- Additional Killswitches ---
+    VOLATILITY_SPIKE_PCT: float = Field(
+        default=15.0,
+        description="Portfolio realized-vol spike (% over lookback) that trips killswitch",
+        gt=0,
+    )
+    API_DOWN_MINUTES: int = Field(
+        default=10,
+        description="Consecutive API unavailability (minutes) that trips killswitch",
+        ge=1,
+    )
+
+    # --- Observability / Alerts ---
+    ENABLE_PROMETHEUS: bool = Field(
+        default=True,
+        description="Expose Prometheus /metrics endpoint",
+    )
+    ALERT_EMAIL: str = Field(
+        default="",
+        description="Fallback email for critical alerts (smtp not configured by default)",
+    )
+    ALERT_COOLDOWN_SEC: int = Field(
+        default=300,
+        description="Minimum seconds between repeated critical alerts",
+        ge=30,
+    )
+
     # --- Validation ---
     @field_validator("HURST_TREND_UP", "HURST_MEAN_REVERT")
     def validate_hurst_thresholds(cls, v: float) -> float:

@@ -1,0 +1,1040 @@
+{"event": "[BT] BUY 1.468017 BTC/USD @ 102.18 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:28.430759Z"}
+{"event": "[BT] CLOSE BTC/USD @ 100.10 pnl=-3.05 (-2.04%) reason=stop_loss_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:28.559259Z"}
+{"event": "[BT] BUY 1.478265 BTC/USD @ 101.47 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:28.577117Z"}
+{"event": "[BT] CLOSE BTC/USD @ 105.21 pnl=5.53 (3.69%) reason=profit_target_reached", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:28.840212Z"}
+{"event": "[BT] BUY 1.424308 BTC/USD @ 105.31 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:28.858231Z"}
+{"event": "[BT] CLOSE BTC/USD @ 100.61 pnl=-6.70 (-4.47%) reason=stop_loss_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:28.910217Z"}
+{"event": "[BT] BUY 1.470201 BTC/USD @ 102.03 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:28.929107Z"}
+{"event": "[BT] CLOSE BTC/USD @ 101.67 pnl=-0.52 (-0.35%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:28.946841Z"}
+{"event": "[BT] BUY 1.486376 BTC/USD @ 100.92 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:28.964412Z"}
+{"event": "[BT] CLOSE BTC/USD @ 102.37 pnl=2.16 (1.44%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:28.982429Z"}
+{"event": "[BT] BUY 1.492655 BTC/USD @ 100.49 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:28.999955Z"}
+{"event": "[BT] CLOSE BTC/USD @ 101.29 pnl=1.19 (0.79%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:29.017654Z"}
+{"event": "[BT] BUY 1.516205 BTC/USD @ 98.93 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:29.036702Z"}
+{"event": "[BT] CLOSE BTC/USD @ 98.29 pnl=-0.97 (-0.64%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:29.054779Z"}
+{"event": "[BT] BUY 1.546064 BTC/USD @ 97.02 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:29.073216Z"}
+{"event": "[BT] CLOSE BTC/USD @ 98.87 pnl=2.86 (1.90%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:29.090679Z"}
+{"event": "[BT] BUY 1.483505 BTC/USD @ 101.11 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:29.108242Z"}
+{"event": "[BT] CLOSE BTC/USD @ 100.86 pnl=-0.37 (-0.25%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:29.125853Z"}
+{"event": "[BT] BUY 1.470116 BTC/USD @ 102.03 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:29.143522Z"}
+{"event": "[BT] CLOSE BTC/USD @ 101.97 pnl=-0.10 (-0.07%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:29.160965Z"}
+{"event": "[BT] BUY 1.458953 BTC/USD @ 102.81 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:29.178969Z"}
+{"event": "[BT] CLOSE BTC/USD @ 100.10 pnl=-3.96 (-2.64%) reason=stop_loss_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:29.213958Z"}
+{"event": "[BT] BUY 1.529296 BTC/USD @ 98.08 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:29.231632Z"}
+{"event": "[BT] CLOSE BTC/USD @ 98.68 pnl=0.91 (0.61%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:29.249484Z"}
+{"event": "[BT] BUY 1.477949 BTC/USD @ 101.49 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:29.266866Z"}
+{"event": "[BT] CLOSE BTC/USD @ 101.97 pnl=0.71 (0.47%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:29.284513Z"}
+{"event": "[BT] BUY 1.478074 BTC/USD @ 101.48 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:29.302318Z"}
+{"event": "[BT] CLOSE BTC/USD @ 104.70 pnl=4.75 (3.17%) reason=profit_target_reached", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:29.355850Z"}
+{"event": "[BT] BUY 1.426205 BTC/USD @ 105.17 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:29.373396Z"}
+{"event": "[BT] CLOSE BTC/USD @ 102.84 pnl=-3.32 (-2.22%) reason=stop_loss_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:29.602019Z"}
+{"event": "[BT] BUY 1.474899 BTC/USD @ 101.70 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:29.620367Z"}
+{"event": "[BT] CLOSE BTC/USD @ 101.49 pnl=-0.32 (-0.21%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:29.638127Z"}
+{"event": "[BT] BUY 1.496958 BTC/USD @ 100.20 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:29.655745Z"}
+{"event": "[BT] CLOSE BTC/USD @ 102.15 pnl=2.92 (1.95%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:29.673363Z"}
+{"event": "[BT] BUY 1.471149 BTC/USD @ 101.96 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:29.690969Z"}
+{"event": "[BT] CLOSE BTC/USD @ 102.25 pnl=0.42 (0.28%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:29.709340Z"}
+{"event": "[BT] BUY 1.440022 BTC/USD @ 104.17 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:29.727424Z"}
+{"event": "[BT] CLOSE BTC/USD @ 107.77 pnl=5.19 (3.46%) reason=profit_target_reached", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:29.797316Z"}
+{"event": "[BT] BUY 1.392971 BTC/USD @ 107.68 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:29.815133Z"}
+{"event": "[BT] CLOSE BTC/USD @ 111.61 pnl=5.46 (3.64%) reason=profit_target_reached", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:30.007242Z"}
+{"event": "[BT] BUY 1.333230 BTC/USD @ 112.51 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:30.025181Z"}
+{"event": "[BT] CLOSE BTC/USD @ 116.40 pnl=5.18 (3.45%) reason=profit_target_reached", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:30.129987Z"}
+{"event": "[BT] BUY 1.273524 BTC/USD @ 117.78 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:30.147877Z"}
+{"event": "[BT] CLOSE BTC/USD @ 122.51 pnl=6.02 (4.02%) reason=profit_target_reached", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:30.411274Z"}
+{"event": "[BT] BUY 1.214294 BTC/USD @ 123.53 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:30.429919Z"}
+{"event": "[BT] CLOSE BTC/USD @ 128.85 pnl=6.46 (4.31%) reason=profit_target_reached", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:30.694102Z"}
+{"event": "[BT] BUY 1.158462 BTC/USD @ 129.48 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:30.711792Z"}
+{"event": "[BT] CLOSE BTC/USD @ 126.79 pnl=-3.12 (-2.08%) reason=stop_loss_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:30.800201Z"}
+{"event": "[BT] BUY 1.207827 BTC/USD @ 124.19 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:30.819791Z"}
+{"event": "[BT] CLOSE BTC/USD @ 124.51 pnl=0.38 (0.26%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:30.837440Z"}
+{"event": "[BT] BUY 1.222519 BTC/USD @ 122.70 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:30.855482Z"}
+{"event": "[BT] CLOSE BTC/USD @ 120.01 pnl=-3.29 (-2.19%) reason=stop_loss_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:30.873074Z"}
+{"event": "[BT] BUY 1.242492 BTC/USD @ 120.73 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:30.890539Z"}
+{"event": "[BT] CLOSE BTC/USD @ 119.88 pnl=-1.05 (-0.70%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:30.908093Z"}
+{"event": "[BT] BUY 1.242034 BTC/USD @ 120.77 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:30.925780Z"}
+{"event": "[BT] CLOSE BTC/USD @ 120.18 pnl=-0.73 (-0.49%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:30.943590Z"}
+{"event": "[BT] BUY 1.263226 BTC/USD @ 118.74 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:30.961501Z"}
+{"event": "[BT] CLOSE BTC/USD @ 117.15 pnl=-2.01 (-1.34%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:30.979348Z"}
+{"event": "[BT] BUY 1.286431 BTC/USD @ 116.60 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:30.997099Z"}
+{"event": "[BT] CLOSE BTC/USD @ 116.39 pnl=-0.27 (-0.18%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:31.016277Z"}
+{"event": "[BT] BUY 1.299618 BTC/USD @ 115.42 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:31.033869Z"}
+{"event": "[BT] CLOSE BTC/USD @ 115.20 pnl=-0.28 (-0.19%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:31.052179Z"}
+{"event": "[BT] BUY 1.324485 BTC/USD @ 113.25 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:31.070195Z"}
+{"event": "[BT] CLOSE BTC/USD @ 113.44 pnl=0.25 (0.17%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:31.088097Z"}
+{"event": "[BT] BUY 1.349290 BTC/USD @ 111.17 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:31.105693Z"}
+{"event": "[BT] CLOSE BTC/USD @ 111.08 pnl=-0.12 (-0.08%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:31.123756Z"}
+{"event": "[BT] BUY 1.337211 BTC/USD @ 112.17 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:31.141730Z"}
+{"event": "[BT] CLOSE BTC/USD @ 113.81 pnl=2.19 (1.46%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:31.159556Z"}
+{"event": "[BT] BUY 1.289502 BTC/USD @ 116.32 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:31.177749Z"}
+{"event": "[BT] CLOSE BTC/USD @ 114.33 pnl=-2.58 (-1.72%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:31.195963Z"}
+{"event": "[BT] BUY 1.298269 BTC/USD @ 115.54 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:31.213602Z"}
+{"event": "[BT] CLOSE BTC/USD @ 117.38 pnl=2.40 (1.60%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:31.231290Z"}
+{"event": "[BT] BUY 1.261123 BTC/USD @ 118.94 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:31.249669Z"}
+{"event": "[BT] CLOSE BTC/USD @ 117.79 pnl=-1.45 (-0.97%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:31.267509Z"}
+{"event": "[BT] BUY 1.265264 BTC/USD @ 118.55 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:31.285392Z"}
+{"event": "[BT] CLOSE BTC/USD @ 121.38 pnl=3.57 (2.38%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:31.303301Z"}
+{"event": "[BT] BUY 1.256517 BTC/USD @ 119.38 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:31.321611Z"}
+{"event": "[BT] CLOSE BTC/USD @ 120.24 pnl=1.08 (0.72%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:31.340547Z"}
+{"event": "[BT] BUY 1.229264 BTC/USD @ 122.02 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:31.358460Z"}
+{"event": "[BT] CLOSE BTC/USD @ 121.19 pnl=-1.03 (-0.69%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:31.376721Z"}
+{"event": "[BT] BUY 1.227327 BTC/USD @ 122.22 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:31.394501Z"}
+{"event": "[BT] CLOSE BTC/USD @ 120.83 pnl=-1.70 (-1.14%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:31.413601Z"}
+{"event": "[BT] BUY 1.251740 BTC/USD @ 119.83 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:31.431917Z"}
+{"event": "[BT] CLOSE BTC/USD @ 118.84 pnl=-1.25 (-0.83%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:31.450059Z"}
+{"event": "[BT] BUY 1.257435 BTC/USD @ 119.29 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:31.467969Z"}
+{"event": "[BT] CLOSE BTC/USD @ 119.34 pnl=0.06 (0.04%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:31.487993Z"}
+{"event": "[BT] BUY 1.240853 BTC/USD @ 120.88 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:31.506249Z"}
+{"event": "[BT] CLOSE BTC/USD @ 119.70 pnl=-1.47 (-0.98%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:31.524436Z"}
+{"event": "[BT] BUY 1.253207 BTC/USD @ 119.69 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:31.543043Z"}
+{"event": "[BT] CLOSE BTC/USD @ 121.25 pnl=1.95 (1.30%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:31.561362Z"}
+{"event": "[BT] BUY 1.226987 BTC/USD @ 122.25 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:31.579309Z"}
+{"event": "[BT] CLOSE BTC/USD @ 120.49 pnl=-2.16 (-1.44%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:31.597186Z"}
+{"event": "[BT] BUY 1.233215 BTC/USD @ 121.63 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:31.615305Z"}
+{"event": "[BT] CLOSE BTC/USD @ 121.12 pnl=-0.64 (-0.42%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:31.633206Z"}
+{"event": "[BT] BUY 1.230928 BTC/USD @ 121.86 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:31.653085Z"}
+{"event": "[BT] CLOSE BTC/USD @ 122.48 pnl=0.77 (0.51%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:31.671187Z"}
+{"event": "[BT] BUY 1.205230 BTC/USD @ 124.46 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:31.689244Z"}
+{"event": "[BT] CLOSE BTC/USD @ 124.82 pnl=0.43 (0.29%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:31.707267Z"}
+{"event": "[BT] BUY 1.227205 BTC/USD @ 122.23 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:31.725471Z"}
+{"event": "[BT] CLOSE BTC/USD @ 120.40 pnl=-2.24 (-1.49%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:31.745073Z"}
+{"event": "[BT] BUY 1.233147 BTC/USD @ 121.64 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:31.763015Z"}
+{"event": "[BT] CLOSE BTC/USD @ 121.45 pnl=-0.24 (-0.16%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:31.780659Z"}
+{"event": "[BT] BUY 1.216683 BTC/USD @ 123.29 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:31.798429Z"}
+{"event": "[BT] CLOSE BTC/USD @ 123.88 pnl=0.72 (0.48%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:31.816169Z"}
+{"event": "[BT] BUY 1.220030 BTC/USD @ 122.95 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:31.834756Z"}
+{"event": "[BT] CLOSE BTC/USD @ 124.73 pnl=2.17 (1.45%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:31.852963Z"}
+{"event": "[BT] BUY 1.212535 BTC/USD @ 123.71 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:31.871136Z"}
+{"event": "[BT] CLOSE BTC/USD @ 120.85 pnl=-3.47 (-2.31%) reason=stop_loss_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:31.888948Z"}
+{"event": "[BT] BUY 1.209479 BTC/USD @ 124.02 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:31.906917Z"}
+{"event": "[BT] CLOSE BTC/USD @ 121.36 pnl=-3.21 (-2.14%) reason=stop_loss_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:31.924660Z"}
+{"event": "[BT] BUY 1.224774 BTC/USD @ 122.47 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:31.942225Z"}
+{"event": "[BT] CLOSE BTC/USD @ 124.04 pnl=1.91 (1.28%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:31.960042Z"}
+{"event": "[BT] BUY 1.205400 BTC/USD @ 124.44 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:31.977930Z"}
+{"event": "[BT] CLOSE BTC/USD @ 122.11 pnl=-2.81 (-1.87%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:31.995682Z"}
+{"event": "[BT] BUY 1.211794 BTC/USD @ 123.78 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:32.013558Z"}
+{"event": "[BT] CLOSE BTC/USD @ 121.83 pnl=-2.37 (-1.58%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:32.032030Z"}
+{"event": "[BT] BUY 1.249518 BTC/USD @ 120.05 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:32.050163Z"}
+{"event": "[BT] CLOSE BTC/USD @ 119.71 pnl=-0.43 (-0.28%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:32.068899Z"}
+{"event": "[BT] BUY 1.239489 BTC/USD @ 121.02 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:32.087151Z"}
+{"event": "[BT] CLOSE BTC/USD @ 121.63 pnl=0.77 (0.51%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:32.104827Z"}
+{"event": "[BT] BUY 1.219504 BTC/USD @ 123.00 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:32.122626Z"}
+{"event": "[BT] CLOSE BTC/USD @ 122.53 pnl=-0.57 (-0.38%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:32.141162Z"}
+{"event": "[BT] BUY 1.224879 BTC/USD @ 122.46 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:32.159048Z"}
+{"event": "[BT] CLOSE BTC/USD @ 120.97 pnl=-1.82 (-1.21%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:32.176839Z"}
+{"event": "[BT] BUY 1.242800 BTC/USD @ 120.70 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:32.195017Z"}
+{"event": "[BT] CLOSE BTC/USD @ 121.74 pnl=1.29 (0.86%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:32.212789Z"}
+{"event": "[BT] BUY 1.234772 BTC/USD @ 121.48 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:32.235772Z"}
+{"event": "[BT] CLOSE BTC/USD @ 122.36 pnl=1.08 (0.72%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:32.255953Z"}
+{"event": "[BT] BUY 1.232569 BTC/USD @ 121.70 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:32.277544Z"}
+{"event": "[BT] CLOSE BTC/USD @ 121.01 pnl=-0.84 (-0.56%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:32.297194Z"}
+{"event": "[BT] BUY 1.237084 BTC/USD @ 121.25 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:32.316044Z"}
+{"event": "[BT] CLOSE BTC/USD @ 121.15 pnl=-0.13 (-0.08%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:32.335603Z"}
+{"event": "[BT] BUY 1.227555 BTC/USD @ 122.19 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:32.354556Z"}
+{"event": "[BT] CLOSE BTC/USD @ 122.64 pnl=0.55 (0.36%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:32.373086Z"}
+{"event": "[BT] BUY 1.196324 BTC/USD @ 125.38 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:32.391306Z"}
+{"event": "[BT] CLOSE BTC/USD @ 125.24 pnl=-0.17 (-0.11%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:32.409014Z"}
+{"event": "[BT] BUY 1.199154 BTC/USD @ 125.09 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:32.428664Z"}
+{"event": "[BT] CLOSE BTC/USD @ 123.71 pnl=-1.65 (-1.10%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:32.447726Z"}
+{"event": "[BT] BUY 1.210322 BTC/USD @ 123.93 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:32.469189Z"}
+{"event": "[BT] CLOSE BTC/USD @ 125.14 pnl=1.45 (0.97%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:32.488451Z"}
+{"event": "[BT] BUY 1.207619 BTC/USD @ 124.21 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:32.506207Z"}
+{"event": "[BT] CLOSE BTC/USD @ 124.32 pnl=0.14 (0.09%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:32.525191Z"}
+{"event": "[BT] BUY 1.194437 BTC/USD @ 125.58 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:32.544769Z"}
+{"event": "[BT] CLOSE BTC/USD @ 125.58 pnl=-0.00 (-0.00%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:32.562743Z"}
+{"event": "[BT] BUY 1.200141 BTC/USD @ 124.99 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:32.581932Z"}
+{"event": "[BT] CLOSE BTC/USD @ 126.63 pnl=1.98 (1.32%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:32.602725Z"}
+{"event": "[BT] BUY 1.181385 BTC/USD @ 126.97 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:32.620649Z"}
+{"event": "[BT] CLOSE BTC/USD @ 131.73 pnl=5.62 (3.75%) reason=profit_target_reached", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:32.675952Z"}
+{"event": "[BT] BUY 1.141739 BTC/USD @ 131.38 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:32.694413Z"}
+{"event": "[BT] CLOSE BTC/USD @ 128.58 pnl=-3.20 (-2.13%) reason=stop_loss_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:32.770000Z"}
+{"event": "[BT] BUY 1.147317 BTC/USD @ 130.74 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:32.788836Z"}
+{"event": "[BT] CLOSE BTC/USD @ 130.14 pnl=-0.69 (-0.46%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:32.926932Z"}
+{"event": "[BT] BUY 1.153218 BTC/USD @ 130.07 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:32.946391Z"}
+{"event": "[BT] CLOSE BTC/USD @ 129.91 pnl=-0.19 (-0.13%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:32.965002Z"}
+{"event": "[BT] BUY 1.155507 BTC/USD @ 129.81 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:32.987394Z"}
+{"event": "[BT] CLOSE BTC/USD @ 130.69 pnl=1.01 (0.68%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:33.006055Z"}
+{"event": "[BT] BUY 1.145199 BTC/USD @ 130.98 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:33.025581Z"}
+{"event": "[BT] CLOSE BTC/USD @ 135.82 pnl=5.54 (3.69%) reason=profit_target_reached", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:33.539635Z"}
+{"event": "[BT] BUY 1.126590 BTC/USD @ 133.15 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:33.562641Z"}
+{"event": "[BT] CLOSE BTC/USD @ 137.50 pnl=4.90 (3.27%) reason=profit_target_reached", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:33.896167Z"}
+{"event": "[BT] BUY 1.089457 BTC/USD @ 137.68 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:33.941363Z"}
+{"event": "[BT] CLOSE BTC/USD @ 143.26 pnl=6.07 (4.05%) reason=profit_target_reached", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:34.086144Z"}
+{"event": "[BT] BUY 1.052681 BTC/USD @ 142.49 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:34.110417Z"}
+{"event": "[BT] CLOSE BTC/USD @ 138.26 pnl=-4.45 (-2.97%) reason=stop_loss_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:34.153001Z"}
+{"event": "[BT] BUY 1.071653 BTC/USD @ 139.97 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:34.170967Z"}
+{"event": "[BT] CLOSE BTC/USD @ 135.86 pnl=-4.41 (-2.94%) reason=stop_loss_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:34.210464Z"}
+{"event": "[BT] BUY 1.126317 BTC/USD @ 133.18 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:34.240906Z"}
+{"event": "[BT] CLOSE BTC/USD @ 133.02 pnl=-0.18 (-0.12%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:34.260427Z"}
+{"event": "[BT] BUY 1.115784 BTC/USD @ 134.43 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:34.292450Z"}
+{"event": "[BT] CLOSE BTC/USD @ 134.49 pnl=0.06 (0.04%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:34.318470Z"}
+{"event": "[BT] BUY 1.107373 BTC/USD @ 135.46 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:34.339138Z"}
+{"event": "[BT] CLOSE BTC/USD @ 133.87 pnl=-1.76 (-1.17%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:34.357969Z"}
+{"event": "[BT] BUY 1.137100 BTC/USD @ 131.91 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:34.405500Z"}
+{"event": "[BT] CLOSE BTC/USD @ 133.51 pnl=1.82 (1.21%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:34.446262Z"}
+{"event": "[BT] BUY 1.115215 BTC/USD @ 134.50 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:34.468105Z"}
+{"event": "[BT] CLOSE BTC/USD @ 134.66 pnl=0.17 (0.11%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:34.559439Z"}
+{"event": "[BT] BUY 1.095455 BTC/USD @ 136.93 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:34.601900Z"}
+{"event": "[BT] CLOSE BTC/USD @ 135.57 pnl=-1.49 (-0.99%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:34.668677Z"}
+{"event": "[BT] BUY 1.110359 BTC/USD @ 135.09 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:34.694371Z"}
+{"event": "[BT] CLOSE BTC/USD @ 136.96 pnl=2.07 (1.38%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:34.728204Z"}
+{"event": "[BT] BUY 1.070024 BTC/USD @ 140.18 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:34.754543Z"}
+{"event": "[BT] CLOSE BTC/USD @ 140.80 pnl=0.66 (0.44%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:34.878241Z"}
+{"event": "[BT] BUY 1.060434 BTC/USD @ 141.45 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:34.897819Z"}
+{"event": "[BT] CLOSE BTC/USD @ 145.91 pnl=4.73 (3.15%) reason=profit_target_reached", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:35.025291Z"}
+{"event": "[BT] BUY 1.042089 BTC/USD @ 143.94 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:35.054845Z"}
+{"event": "[BT] CLOSE BTC/USD @ 140.67 pnl=-3.41 (-2.27%) reason=stop_loss_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:35.104815Z"}
+{"event": "[BT] BUY 1.080201 BTC/USD @ 138.86 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:35.137504Z"}
+{"event": "[BT] CLOSE BTC/USD @ 141.31 pnl=2.65 (1.77%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:35.155941Z"}
+{"event": "[BT] BUY 1.055952 BTC/USD @ 142.05 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:35.182743Z"}
+{"event": "[BT] CLOSE BTC/USD @ 143.03 pnl=1.04 (0.69%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:35.316255Z"}
+{"event": "[BT] BUY 1.043322 BTC/USD @ 143.77 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:35.339178Z"}
+{"event": "[BT] CLOSE BTC/USD @ 140.61 pnl=-3.30 (-2.20%) reason=stop_loss_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:35.724399Z"}
+{"event": "[BT] BUY 1.060214 BTC/USD @ 141.48 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:35.742542Z"}
+{"event": "[BT] CLOSE BTC/USD @ 139.25 pnl=-2.37 (-1.58%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:35.776547Z"}
+{"event": "[BT] BUY 1.076895 BTC/USD @ 139.29 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:35.801056Z"}
+{"event": "[BT] CLOSE BTC/USD @ 139.27 pnl=-0.02 (-0.01%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:35.822546Z"}
+{"event": "[BT] BUY 1.052930 BTC/USD @ 142.46 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:35.842215Z"}
+{"event": "[BT] CLOSE BTC/USD @ 140.85 pnl=-1.69 (-1.13%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:35.862263Z"}
+{"event": "[BT] BUY 1.081678 BTC/USD @ 138.67 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:35.882547Z"}
+{"event": "[BT] CLOSE BTC/USD @ 137.81 pnl=-0.94 (-0.63%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:35.903011Z"}
+{"event": "[BT] BUY 1.101689 BTC/USD @ 136.15 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:35.922234Z"}
+{"event": "[BT] CLOSE BTC/USD @ 135.40 pnl=-0.84 (-0.56%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:35.942477Z"}
+{"event": "[BT] BUY 1.100659 BTC/USD @ 136.28 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:35.962037Z"}
+{"event": "[BT] CLOSE BTC/USD @ 137.75 pnl=1.61 (1.08%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:35.987150Z"}
+{"event": "[BT] BUY 1.066107 BTC/USD @ 140.70 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:36.006289Z"}
+{"event": "[BT] CLOSE BTC/USD @ 139.67 pnl=-1.10 (-0.73%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:36.025340Z"}
+{"event": "[BT] BUY 1.039518 BTC/USD @ 144.30 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:36.044386Z"}
+{"event": "[BT] CLOSE BTC/USD @ 143.96 pnl=-0.35 (-0.23%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:36.101421Z"}
+{"event": "[BT] BUY 1.041400 BTC/USD @ 144.04 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:36.121527Z"}
+{"event": "[BT] CLOSE BTC/USD @ 144.38 pnl=0.36 (0.24%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:36.140512Z"}
+{"event": "[BT] BUY 1.066771 BTC/USD @ 140.61 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:36.170629Z"}
+{"event": "[BT] CLOSE BTC/USD @ 140.95 pnl=0.36 (0.24%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:36.189499Z"}
+{"event": "[BT] BUY 1.065192 BTC/USD @ 140.82 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:36.208593Z"}
+{"event": "[BT] CLOSE BTC/USD @ 139.70 pnl=-1.19 (-0.79%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:36.227531Z"}
+{"event": "[BT] BUY 1.064107 BTC/USD @ 140.96 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:36.246660Z"}
+{"event": "[BT] CLOSE BTC/USD @ 142.88 pnl=2.03 (1.36%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:36.264948Z"}
+{"event": "[BT] BUY 1.054437 BTC/USD @ 142.26 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:36.283163Z"}
+{"event": "[BT] CLOSE BTC/USD @ 142.86 pnl=0.64 (0.43%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:36.301164Z"}
+{"event": "[BT] BUY 1.056689 BTC/USD @ 141.95 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:36.330884Z"}
+{"event": "[BT] CLOSE BTC/USD @ 140.83 pnl=-1.19 (-0.79%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:36.353550Z"}
+{"event": "[BT] BUY 1.062538 BTC/USD @ 141.17 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:36.372605Z"}
+{"event": "[BT] CLOSE BTC/USD @ 142.27 pnl=1.17 (0.78%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:36.392329Z"}
+{"event": "[BT] BUY 1.059908 BTC/USD @ 141.52 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:36.410637Z"}
+{"event": "[BT] CLOSE BTC/USD @ 137.97 pnl=-3.76 (-2.51%) reason=stop_loss_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:36.429735Z"}
+{"event": "[BT] BUY 1.077962 BTC/USD @ 139.15 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:36.451031Z"}
+{"event": "[BT] CLOSE BTC/USD @ 136.69 pnl=-2.65 (-1.77%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:36.470971Z"}
+{"event": "[BT] BUY 1.094097 BTC/USD @ 137.10 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:36.490832Z"}
+{"event": "[BT] CLOSE BTC/USD @ 140.23 pnl=3.43 (2.28%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:36.520989Z"}
+{"event": "[BT] BUY 1.068271 BTC/USD @ 140.41 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:36.540056Z"}
+{"event": "[BT] CLOSE BTC/USD @ 138.62 pnl=-1.92 (-1.28%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:36.558820Z"}
+{"event": "[BT] BUY 1.099730 BTC/USD @ 136.40 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:36.579031Z"}
+{"event": "[BT] CLOSE BTC/USD @ 138.52 pnl=2.33 (1.55%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:36.599658Z"}
+{"event": "[BT] BUY 1.081493 BTC/USD @ 138.70 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:36.619144Z"}
+{"event": "[BT] CLOSE BTC/USD @ 139.80 pnl=1.20 (0.80%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:36.641785Z"}
+{"event": "[BT] BUY 1.059568 BTC/USD @ 141.57 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:36.659964Z"}
+{"event": "[BT] CLOSE BTC/USD @ 141.70 pnl=0.14 (0.09%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:36.678391Z"}
+{"event": "[BT] BUY 1.060940 BTC/USD @ 141.38 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:36.697339Z"}
+{"event": "[BT] CLOSE BTC/USD @ 139.99 pnl=-1.48 (-0.99%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:36.715650Z"}
+{"event": "[BT] BUY 1.110941 BTC/USD @ 135.02 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:36.734217Z"}
+{"event": "[BT] CLOSE BTC/USD @ 132.76 pnl=-2.51 (-1.67%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:36.752208Z"}
+{"event": "[BT] BUY 1.129076 BTC/USD @ 132.85 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:36.770447Z"}
+{"event": "[BT] CLOSE BTC/USD @ 132.77 pnl=-0.09 (-0.06%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:36.790653Z"}
+{"event": "[BT] BUY 1.122637 BTC/USD @ 133.61 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:36.812866Z"}
+{"event": "[BT] CLOSE BTC/USD @ 133.61 pnl=-0.00 (-0.00%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:36.831179Z"}
+{"event": "[BT] BUY 1.118842 BTC/USD @ 134.07 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:36.849584Z"}
+{"event": "[BT] CLOSE BTC/USD @ 135.54 pnl=1.64 (1.10%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:36.867833Z"}
+{"event": "[BT] BUY 1.116906 BTC/USD @ 134.30 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:36.886475Z"}
+{"event": "[BT] CLOSE BTC/USD @ 134.04 pnl=-0.29 (-0.19%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:36.904763Z"}
+{"event": "[BT] BUY 1.139349 BTC/USD @ 131.65 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:36.924206Z"}
+{"event": "[BT] CLOSE BTC/USD @ 133.39 pnl=1.98 (1.32%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:36.949782Z"}
+{"event": "[BT] BUY 1.122333 BTC/USD @ 133.65 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:36.967873Z"}
+{"event": "[BT] CLOSE BTC/USD @ 134.64 pnl=1.11 (0.74%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:36.986560Z"}
+{"event": "[BT] BUY 1.092257 BTC/USD @ 137.33 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:37.004699Z"}
+{"event": "[BT] CLOSE BTC/USD @ 139.32 pnl=2.17 (1.45%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:37.022938Z"}
+============================================================
+BACKTEST RESULTS: BTC/USD
+============================================================
+Start equity:      $10,000.00
+End equity:        $10,023.59
+Total return:      0.24%
+Trades:            127
+Wins / Losses:     61 / 66
+Win rate:          48.0%
+Max drawdown:      -0.22%
+Sharpe (ann.):     0.67
+Regimes seen:      {'trending': 273, 'neutral': 127}
+============================================================
+
+{"event": "[BT] BUY 1.470176 BTC/USD @ 102.03 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:37.045179Z"}
+{"event": "[BT] CLOSE BTC/USD @ 98.52 pnl=-5.16 (-3.44%) reason=stop_loss_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:37.182011Z"}
+{"event": "[BT] BUY 1.502801 BTC/USD @ 99.81 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:37.202070Z"}
+{"event": "[BT] CLOSE BTC/USD @ 100.54 pnl=1.10 (0.73%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:37.221741Z"}
+{"event": "[BT] BUY 1.503521 BTC/USD @ 99.77 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:37.242321Z"}
+{"event": "[BT] CLOSE BTC/USD @ 99.57 pnl=-0.29 (-0.19%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:37.262743Z"}
+{"event": "[BT] BUY 1.497014 BTC/USD @ 100.20 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:37.284794Z"}
+{"event": "[BT] CLOSE BTC/USD @ 99.88 pnl=-0.48 (-0.32%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:37.309149Z"}
+{"event": "[BT] BUY 1.506164 BTC/USD @ 99.59 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:37.334027Z"}
+{"event": "[BT] CLOSE BTC/USD @ 97.87 pnl=-2.60 (-1.73%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:37.358086Z"}
+{"event": "[BT] BUY 1.520690 BTC/USD @ 98.64 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:37.380360Z"}
+{"event": "[BT] CLOSE BTC/USD @ 98.86 pnl=0.33 (0.22%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:37.400573Z"}
+{"event": "[BT] BUY 1.511446 BTC/USD @ 99.24 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:37.420263Z"}
+{"event": "[BT] CLOSE BTC/USD @ 97.45 pnl=-2.71 (-1.81%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:37.438815Z"}
+{"event": "[BT] BUY 1.506673 BTC/USD @ 99.56 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:37.458502Z"}
+{"event": "[BT] CLOSE BTC/USD @ 99.76 pnl=0.31 (0.21%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:37.481895Z"}
+{"event": "[BT] BUY 1.510396 BTC/USD @ 99.31 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:37.515420Z"}
+{"event": "[BT] CLOSE BTC/USD @ 99.81 pnl=0.76 (0.51%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:37.574697Z"}
+{"event": "[BT] BUY 1.510000 BTC/USD @ 99.34 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:37.594119Z"}
+{"event": "[BT] CLOSE BTC/USD @ 96.62 pnl=-4.10 (-2.73%) reason=stop_loss_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:37.613292Z"}
+{"event": "[BT] BUY 1.529786 BTC/USD @ 98.05 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:37.640590Z"}
+{"event": "[BT] CLOSE BTC/USD @ 97.65 pnl=-0.62 (-0.41%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:37.659700Z"}
+{"event": "[BT] BUY 1.548356 BTC/USD @ 96.88 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:37.678929Z"}
+{"event": "[BT] CLOSE BTC/USD @ 98.32 pnl=2.23 (1.49%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:37.697386Z"}
+{"event": "[BT] BUY 1.555649 BTC/USD @ 96.42 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:37.715339Z"}
+{"event": "[BT] CLOSE BTC/USD @ 97.24 pnl=1.28 (0.85%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:37.734096Z"}
+{"event": "[BT] BUY 1.580534 BTC/USD @ 94.90 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:37.756654Z"}
+{"event": "[BT] CLOSE BTC/USD @ 94.36 pnl=-0.85 (-0.57%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:37.775721Z"}
+{"event": "[BT] BUY 1.609416 BTC/USD @ 93.20 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:37.794787Z"}
+{"event": "[BT] CLOSE BTC/USD @ 95.30 pnl=3.37 (2.25%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:37.813082Z"}
+{"event": "[BT] BUY 1.536092 BTC/USD @ 97.65 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:37.831744Z"}
+{"event": "[BT] CLOSE BTC/USD @ 97.37 pnl=-0.43 (-0.28%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:37.849879Z"}
+{"event": "[BT] BUY 1.522644 BTC/USD @ 98.51 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:37.868099Z"}
+{"event": "[BT] CLOSE BTC/USD @ 98.37 pnl=-0.22 (-0.14%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:37.896727Z"}
+{"event": "[BT] BUY 1.513099 BTC/USD @ 99.13 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:37.915254Z"}
+{"event": "[BT] CLOSE BTC/USD @ 98.27 pnl=-1.30 (-0.87%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:37.933909Z"}
+{"event": "[BT] BUY 1.557463 BTC/USD @ 96.31 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:37.952156Z"}
+{"event": "[BT] CLOSE BTC/USD @ 94.33 pnl=-3.08 (-2.06%) reason=stop_loss_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:37.970451Z"}
+{"event": "[BT] BUY 1.577711 BTC/USD @ 95.07 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:37.989247Z"}
+{"event": "[BT] CLOSE BTC/USD @ 98.02 pnl=4.64 (3.10%) reason=profit_target_reached", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:38.021937Z"}
+{"event": "[BT] BUY 1.523767 BTC/USD @ 98.44 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:38.040682Z"}
+{"event": "[BT] CLOSE BTC/USD @ 97.89 pnl=-0.84 (-0.56%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:38.059308Z"}
+{"event": "[BT] BUY 1.495682 BTC/USD @ 100.29 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:38.080419Z"}
+{"event": "[BT] CLOSE BTC/USD @ 97.87 pnl=-3.61 (-2.41%) reason=stop_loss_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:38.305406Z"}
+{"event": "[BT] BUY 1.532806 BTC/USD @ 97.86 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:38.325366Z"}
+{"event": "[BT] CLOSE BTC/USD @ 100.01 pnl=3.29 (2.19%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:38.348341Z"}
+{"event": "[BT] BUY 1.506844 BTC/USD @ 99.55 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:38.368779Z"}
+{"event": "[BT] CLOSE BTC/USD @ 98.50 pnl=-1.57 (-1.05%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:38.390029Z"}
+{"event": "[BT] BUY 1.544110 BTC/USD @ 97.14 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:38.414698Z"}
+{"event": "[BT] CLOSE BTC/USD @ 96.03 pnl=-1.73 (-1.15%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:38.439986Z"}
+{"event": "[BT] BUY 1.564707 BTC/USD @ 95.86 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:38.463937Z"}
+{"event": "[BT] CLOSE BTC/USD @ 94.66 pnl=-1.89 (-1.26%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:38.485889Z"}
+{"event": "[BT] BUY 1.550872 BTC/USD @ 96.72 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:38.507272Z"}
+{"event": "[BT] CLOSE BTC/USD @ 96.54 pnl=-0.27 (-0.18%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:38.529436Z"}
+{"event": "[BT] BUY 1.548822 BTC/USD @ 96.85 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:38.548888Z"}
+{"event": "[BT] CLOSE BTC/USD @ 98.73 pnl=2.92 (1.94%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:38.568003Z"}
+{"event": "[BT] BUY 1.491073 BTC/USD @ 100.60 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:38.591120Z"}
+{"event": "[BT] CLOSE BTC/USD @ 104.19 pnl=5.35 (3.57%) reason=profit_target_reached", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:38.909277Z"}
+{"event": "[BT] BUY 1.442788 BTC/USD @ 103.97 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:38.928451Z"}
+{"event": "[BT] CLOSE BTC/USD @ 104.33 pnl=0.53 (0.35%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:39.058692Z"}
+{"event": "[BT] BUY 1.455205 BTC/USD @ 103.08 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:39.076882Z"}
+{"event": "[BT] CLOSE BTC/USD @ 103.37 pnl=0.43 (0.29%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:39.095844Z"}
+{"event": "[BT] BUY 1.446832 BTC/USD @ 103.67 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:39.113892Z"}
+{"event": "[BT] CLOSE BTC/USD @ 101.76 pnl=-2.77 (-1.85%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:39.131839Z"}
+{"event": "[BT] BUY 1.466922 BTC/USD @ 102.25 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:39.149782Z"}
+{"event": "[BT] CLOSE BTC/USD @ 101.46 pnl=-1.17 (-0.78%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:39.167739Z"}
+{"event": "[BT] BUY 1.454927 BTC/USD @ 103.10 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:39.185743Z"}
+{"event": "[BT] CLOSE BTC/USD @ 103.13 pnl=0.05 (0.03%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:39.203832Z"}
+{"event": "[BT] BUY 1.428082 BTC/USD @ 105.04 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:39.224145Z"}
+{"event": "[BT] CLOSE BTC/USD @ 102.81 pnl=-3.19 (-2.12%) reason=stop_loss_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:39.385511Z"}
+{"event": "[BT] BUY 1.472214 BTC/USD @ 101.89 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:39.403368Z"}
+{"event": "[BT] CLOSE BTC/USD @ 103.89 pnl=2.95 (1.97%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:39.421213Z"}
+{"event": "[BT] BUY 1.453106 BTC/USD @ 103.23 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:39.438904Z"}
+{"event": "[BT] CLOSE BTC/USD @ 102.05 pnl=-1.71 (-1.14%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:39.456874Z"}
+{"event": "[BT] BUY 1.460385 BTC/USD @ 102.71 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:39.474533Z"}
+{"event": "[BT] CLOSE BTC/USD @ 102.73 pnl=0.03 (0.02%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:39.493136Z"}
+{"event": "[BT] BUY 1.463327 BTC/USD @ 102.51 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:39.511334Z"}
+{"event": "[BT] CLOSE BTC/USD @ 103.32 pnl=1.19 (0.79%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:39.529213Z"}
+{"event": "[BT] BUY 1.445939 BTC/USD @ 103.74 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:39.547368Z"}
+{"event": "[BT] CLOSE BTC/USD @ 103.99 pnl=0.36 (0.24%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:39.565171Z"}
+{"event": "[BT] BUY 1.429331 BTC/USD @ 104.94 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:39.582887Z"}
+{"event": "[BT] CLOSE BTC/USD @ 102.61 pnl=-3.33 (-2.22%) reason=stop_loss_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:39.654403Z"}
+{"event": "[BT] BUY 1.460086 BTC/USD @ 102.73 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:39.671984Z"}
+{"event": "[BT] CLOSE BTC/USD @ 101.30 pnl=-2.09 (-1.39%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:39.689666Z"}
+{"event": "[BT] BUY 1.514550 BTC/USD @ 99.04 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:39.707377Z"}
+{"event": "[BT] CLOSE BTC/USD @ 99.19 pnl=0.23 (0.16%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:39.726855Z"}
+{"event": "[BT] BUY 1.536419 BTC/USD @ 97.63 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:39.744819Z"}
+{"event": "[BT] CLOSE BTC/USD @ 95.41 pnl=-3.42 (-2.28%) reason=stop_loss_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:39.762772Z"}
+{"event": "[BT] BUY 1.561142 BTC/USD @ 96.08 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:39.780336Z"}
+{"event": "[BT] CLOSE BTC/USD @ 95.43 pnl=-1.03 (-0.68%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:39.798186Z"}
+{"event": "[BT] BUY 1.558440 BTC/USD @ 96.25 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:39.816155Z"}
+{"event": "[BT] CLOSE BTC/USD @ 95.80 pnl=-0.70 (-0.47%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:39.834500Z"}
+{"event": "[BT] BUY 1.584548 BTC/USD @ 94.66 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:39.852155Z"}
+{"event": "[BT] CLOSE BTC/USD @ 93.44 pnl=-1.94 (-1.29%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:39.869603Z"}
+{"event": "[BT] BUY 1.610325 BTC/USD @ 93.15 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:39.887097Z"}
+{"event": "[BT] CLOSE BTC/USD @ 93.16 pnl=0.02 (0.02%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:39.904643Z"}
+{"event": "[BT] BUY 1.621322 BTC/USD @ 92.52 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:39.922319Z"}
+{"event": "[BT] CLOSE BTC/USD @ 92.55 pnl=0.06 (0.04%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:39.939859Z"}
+{"event": "[BT] BUY 1.646852 BTC/USD @ 91.08 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:39.957013Z"}
+{"event": "[BT] CLOSE BTC/USD @ 91.55 pnl=0.76 (0.51%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:39.975088Z"}
+{"event": "[BT] BUY 1.670073 BTC/USD @ 89.82 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:39.992481Z"}
+{"event": "[BT] CLOSE BTC/USD @ 90.09 pnl=0.46 (0.31%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:40.010181Z"}
+{"event": "[BT] BUY 1.640687 BTC/USD @ 91.43 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:40.027653Z"}
+{"event": "[BT] CLOSE BTC/USD @ 93.16 pnl=2.85 (1.90%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:40.044971Z"}
+{"event": "[BT] BUY 1.569642 BTC/USD @ 95.56 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:40.062724Z"}
+{"event": "[BT] CLOSE BTC/USD @ 93.92 pnl=-2.58 (-1.72%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:40.080538Z"}
+{"event": "[BT] BUY 1.576755 BTC/USD @ 95.13 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:40.097777Z"}
+{"event": "[BT] CLOSE BTC/USD @ 96.82 pnl=2.67 (1.78%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:40.114997Z"}
+{"event": "[BT] BUY 1.528140 BTC/USD @ 98.16 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:40.133167Z"}
+{"event": "[BT] CLOSE BTC/USD @ 97.14 pnl=-1.56 (-1.04%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:40.150592Z"}
+{"event": "[BT] BUY 1.534169 BTC/USD @ 97.77 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:40.168510Z"}
+{"event": "[BT] CLOSE BTC/USD @ 100.12 pnl=3.60 (2.40%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:40.186290Z"}
+{"event": "[BT] BUY 1.525728 BTC/USD @ 98.31 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:40.204280Z"}
+{"event": "[BT] CLOSE BTC/USD @ 98.97 pnl=1.00 (0.67%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:40.221958Z"}
+{"event": "[BT] BUY 1.494681 BTC/USD @ 100.36 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:40.239578Z"}
+{"event": "[BT] CLOSE BTC/USD @ 99.50 pnl=-1.28 (-0.85%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:40.257396Z"}
+{"event": "[BT] BUY 1.496608 BTC/USD @ 100.23 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:40.274853Z"}
+{"event": "[BT] CLOSE BTC/USD @ 98.93 pnl=-1.94 (-1.29%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:40.292802Z"}
+{"event": "[BT] BUY 1.530470 BTC/USD @ 98.01 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:40.310029Z"}
+{"event": "[BT] CLOSE BTC/USD @ 97.13 pnl=-1.35 (-0.90%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:40.327086Z"}
+{"event": "[BT] BUY 1.538422 BTC/USD @ 97.50 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:40.344784Z"}
+{"event": "[BT] CLOSE BTC/USD @ 97.52 pnl=0.02 (0.02%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:40.362227Z"}
+{"event": "[BT] BUY 1.518415 BTC/USD @ 98.79 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:40.379868Z"}
+{"event": "[BT] CLOSE BTC/USD @ 97.72 pnl=-1.62 (-1.08%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:40.397474Z"}
+{"event": "[BT] BUY 1.535689 BTC/USD @ 97.68 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:40.415255Z"}
+{"event": "[BT] CLOSE BTC/USD @ 98.95 pnl=1.95 (1.30%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:40.432413Z"}
+{"event": "[BT] BUY 1.504949 BTC/USD @ 99.67 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:40.449666Z"}
+{"event": "[BT] CLOSE BTC/USD @ 98.10 pnl=-2.37 (-1.58%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:40.467768Z"}
+{"event": "[BT] BUY 1.515283 BTC/USD @ 98.99 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:40.485148Z"}
+{"event": "[BT] CLOSE BTC/USD @ 98.47 pnl=-0.79 (-0.53%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:40.502340Z"}
+{"event": "[BT] BUY 1.515048 BTC/USD @ 99.01 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:40.519926Z"}
+{"event": "[BT] CLOSE BTC/USD @ 99.42 pnl=0.62 (0.41%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:40.537318Z"}
+{"event": "[BT] BUY 1.486479 BTC/USD @ 100.91 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:40.554794Z"}
+{"event": "[BT] CLOSE BTC/USD @ 101.00 pnl=0.14 (0.09%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:40.572129Z"}
+{"event": "[BT] BUY 1.519307 BTC/USD @ 98.73 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:40.589543Z"}
+{"event": "[BT] CLOSE BTC/USD @ 97.15 pnl=-2.40 (-1.60%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:40.606997Z"}
+{"event": "[BT] BUY 1.527979 BTC/USD @ 98.17 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:40.624965Z"}
+{"event": "[BT] CLOSE BTC/USD @ 97.95 pnl=-0.33 (-0.22%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:40.642296Z"}
+{"event": "[BT] BUY 1.508774 BTC/USD @ 99.42 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:40.659904Z"}
+{"event": "[BT] CLOSE BTC/USD @ 99.78 pnl=0.54 (0.36%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:40.677368Z"}
+{"event": "[BT] BUY 1.516867 BTC/USD @ 98.89 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:40.695382Z"}
+{"event": "[BT] CLOSE BTC/USD @ 100.24 pnl=2.05 (1.37%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:40.713134Z"}
+{"event": "[BT] BUY 1.511160 BTC/USD @ 99.26 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:40.730949Z"}
+{"event": "[BT] CLOSE BTC/USD @ 96.84 pnl=-3.67 (-2.44%) reason=stop_loss_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:40.748288Z"}
+{"event": "[BT] BUY 1.507991 BTC/USD @ 99.47 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:40.765469Z"}
+{"event": "[BT] CLOSE BTC/USD @ 97.20 pnl=-3.42 (-2.28%) reason=stop_loss_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:40.782858Z"}
+{"event": "[BT] BUY 1.528940 BTC/USD @ 98.11 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:40.800165Z"}
+{"event": "[BT] CLOSE BTC/USD @ 99.33 pnl=1.87 (1.24%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:40.817390Z"}
+{"event": "[BT] BUY 1.506955 BTC/USD @ 99.54 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:40.834710Z"}
+{"event": "[BT] CLOSE BTC/USD @ 97.54 pnl=-3.01 (-2.01%) reason=stop_loss_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:40.852205Z"}
+{"event": "[BT] BUY 1.516953 BTC/USD @ 98.88 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:40.869565Z"}
+{"event": "[BT] CLOSE BTC/USD @ 97.21 pnl=-2.54 (-1.69%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:40.886801Z"}
+{"event": "[BT] BUY 1.566814 BTC/USD @ 95.74 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:40.904354Z"}
+{"event": "[BT] CLOSE BTC/USD @ 95.51 pnl=-0.35 (-0.23%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:40.921810Z"}
+{"event": "[BT] BUY 1.551424 BTC/USD @ 96.69 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:40.939212Z"}
+{"event": "[BT] CLOSE BTC/USD @ 97.21 pnl=0.82 (0.54%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:40.956832Z"}
+{"event": "[BT] BUY 1.525575 BTC/USD @ 98.32 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:40.974134Z"}
+{"event": "[BT] CLOSE BTC/USD @ 97.88 pnl=-0.68 (-0.46%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:40.991390Z"}
+{"event": "[BT] BUY 1.534140 BTC/USD @ 97.77 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:41.009286Z"}
+{"event": "[BT] CLOSE BTC/USD @ 96.52 pnl=-1.92 (-1.28%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:41.026692Z"}
+{"event": "[BT] BUY 1.557389 BTC/USD @ 96.32 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:41.044041Z"}
+{"event": "[BT] CLOSE BTC/USD @ 97.21 pnl=1.40 (0.93%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:41.061614Z"}
+{"event": "[BT] BUY 1.546540 BTC/USD @ 96.99 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:41.079085Z"}
+{"event": "[BT] CLOSE BTC/USD @ 97.71 pnl=1.12 (0.74%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:41.096462Z"}
+{"event": "[BT] BUY 1.544191 BTC/USD @ 97.14 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:41.114011Z"}
+{"event": "[BT] CLOSE BTC/USD @ 96.57 pnl=-0.88 (-0.58%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:41.131334Z"}
+{"event": "[BT] BUY 1.549764 BTC/USD @ 96.79 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:41.148984Z"}
+{"event": "[BT] CLOSE BTC/USD @ 96.72 pnl=-0.11 (-0.08%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:41.166617Z"}
+{"event": "[BT] BUY 1.537032 BTC/USD @ 97.59 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:41.184058Z"}
+{"event": "[BT] CLOSE BTC/USD @ 97.93 pnl=0.51 (0.34%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:41.201549Z"}
+{"event": "[BT] BUY 1.498243 BTC/USD @ 100.12 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:41.219029Z"}
+{"event": "[BT] CLOSE BTC/USD @ 99.85 pnl=-0.40 (-0.27%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:41.237206Z"}
+{"event": "[BT] BUY 1.506283 BTC/USD @ 99.58 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:41.254822Z"}
+{"event": "[BT] CLOSE BTC/USD @ 98.36 pnl=-1.85 (-1.23%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:41.272335Z"}
+{"event": "[BT] BUY 1.523382 BTC/USD @ 98.47 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:41.289792Z"}
+{"event": "[BT] CLOSE BTC/USD @ 99.36 pnl=1.37 (0.91%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:41.307530Z"}
+{"event": "[BT] BUY 1.522767 BTC/USD @ 98.50 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:41.325073Z"}
+{"event": "[BT] CLOSE BTC/USD @ 98.52 pnl=0.02 (0.02%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:41.342727Z"}
+{"event": "[BT] BUY 1.508200 BTC/USD @ 99.46 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:41.360552Z"}
+{"event": "[BT] CLOSE BTC/USD @ 99.33 pnl=-0.19 (-0.13%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:41.377872Z"}
+{"event": "[BT] BUY 1.519116 BTC/USD @ 98.74 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:41.395289Z"}
+{"event": "[BT] CLOSE BTC/USD @ 99.97 pnl=1.87 (1.25%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:41.412888Z"}
+{"event": "[BT] BUY 1.498650 BTC/USD @ 100.09 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:41.430355Z"}
+{"event": "[BT] CLOSE BTC/USD @ 100.56 pnl=0.71 (0.47%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:41.448023Z"}
+{"event": "[BT] BUY 1.471467 BTC/USD @ 101.94 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:41.465187Z"}
+{"event": "[BT] CLOSE BTC/USD @ 103.22 pnl=1.88 (1.25%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:41.482837Z"}
+{"event": "[BT] BUY 1.461432 BTC/USD @ 102.64 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:41.500299Z"}
+{"event": "[BT] CLOSE BTC/USD @ 101.88 pnl=-1.11 (-0.74%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:41.517828Z"}
+{"event": "[BT] BUY 1.468804 BTC/USD @ 102.12 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:41.535429Z"}
+{"event": "[BT] CLOSE BTC/USD @ 101.86 pnl=-0.39 (-0.26%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:41.552783Z"}
+{"event": "[BT] BUY 1.507756 BTC/USD @ 99.49 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:41.570441Z"}
+{"event": "[BT] CLOSE BTC/USD @ 101.04 pnl=2.35 (1.56%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:41.588048Z"}
+{"event": "[BT] BUY 1.484959 BTC/USD @ 101.01 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:41.605452Z"}
+{"event": "[BT] CLOSE BTC/USD @ 101.85 pnl=1.24 (0.82%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:41.623635Z"}
+{"event": "[BT] BUY 1.494826 BTC/USD @ 100.35 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:41.641360Z"}
+{"event": "[BT] CLOSE BTC/USD @ 101.87 pnl=2.28 (1.52%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:41.658693Z"}
+{"event": "[BT] BUY 1.484046 BTC/USD @ 101.08 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:41.675857Z"}
+{"event": "[BT] CLOSE BTC/USD @ 100.89 pnl=-0.27 (-0.18%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:41.693285Z"}
+{"event": "[BT] BUY 1.512619 BTC/USD @ 99.17 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:41.710595Z"}
+{"event": "[BT] CLOSE BTC/USD @ 99.01 pnl=-0.24 (-0.16%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:41.728266Z"}
+{"event": "[BT] BUY 1.518511 BTC/USD @ 98.78 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:41.745690Z"}
+{"event": "[BT] CLOSE BTC/USD @ 98.62 pnl=-0.25 (-0.16%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:41.763283Z"}
+{"event": "[BT] BUY 1.511872 BTC/USD @ 99.21 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:41.781066Z"}
+{"event": "[BT] CLOSE BTC/USD @ 99.33 pnl=0.17 (0.11%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:41.798581Z"}
+{"event": "[BT] BUY 1.492076 BTC/USD @ 100.53 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:41.815898Z"}
+{"event": "[BT] CLOSE BTC/USD @ 99.94 pnl=-0.88 (-0.59%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:41.833593Z"}
+{"event": "[BT] BUY 1.518982 BTC/USD @ 98.75 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:41.850959Z"}
+{"event": "[BT] CLOSE BTC/USD @ 98.79 pnl=0.06 (0.04%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:41.868266Z"}
+{"event": "[BT] BUY 1.505957 BTC/USD @ 99.60 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:41.885890Z"}
+{"event": "[BT] CLOSE BTC/USD @ 101.12 pnl=2.28 (1.52%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:41.903500Z"}
+{"event": "[BT] BUY 1.470032 BTC/USD @ 102.04 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:41.921080Z"}
+{"event": "[BT] CLOSE BTC/USD @ 99.82 pnl=-3.26 (-2.18%) reason=stop_loss_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:41.938353Z"}
+{"event": "[BT] BUY 1.495816 BTC/USD @ 100.28 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:41.955969Z"}
+{"event": "[BT] CLOSE BTC/USD @ 102.02 pnl=2.60 (1.73%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:41.973563Z"}
+{"event": "[BT] BUY 1.470698 BTC/USD @ 101.99 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:41.991111Z"}
+{"event": "[BT] CLOSE BTC/USD @ 101.27 pnl=-1.06 (-0.70%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:42.008534Z"}
+{"event": "[BT] BUY 1.476657 BTC/USD @ 101.58 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:42.025912Z"}
+{"event": "[BT] CLOSE BTC/USD @ 100.90 pnl=-1.01 (-0.67%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:42.043557Z"}
+{"event": "[BT] BUY 1.476089 BTC/USD @ 101.62 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:42.061019Z"}
+{"event": "[BT] CLOSE BTC/USD @ 101.52 pnl=-0.14 (-0.10%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:42.078548Z"}
+{"event": "[BT] BUY 1.454633 BTC/USD @ 103.12 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:42.095913Z"}
+{"event": "[BT] CLOSE BTC/USD @ 103.56 pnl=0.65 (0.43%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:42.113194Z"}
+{"event": "[BT] BUY 1.463194 BTC/USD @ 102.52 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:42.165022Z"}
+{"event": "[BT] CLOSE BTC/USD @ 103.12 pnl=0.88 (0.59%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:42.208445Z"}
+{"event": "[BT] BUY 1.441162 BTC/USD @ 104.08 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:42.229039Z"}
+{"event": "[BT] CLOSE BTC/USD @ 103.20 pnl=-1.28 (-0.85%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:42.252018Z"}
+{"event": "[BT] BUY 1.463049 BTC/USD @ 102.53 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:42.293314Z"}
+{"event": "[BT] CLOSE BTC/USD @ 99.63 pnl=-4.23 (-2.82%) reason=stop_loss_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:42.310835Z"}
+{"event": "[BT] BUY 1.489047 BTC/USD @ 100.74 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:42.328579Z"}
+{"event": "[BT] CLOSE BTC/USD @ 99.99 pnl=-1.10 (-0.74%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:42.346665Z"}
+{"event": "[BT] BUY 1.539298 BTC/USD @ 97.45 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:42.364308Z"}
+{"event": "[BT] CLOSE BTC/USD @ 95.45 pnl=-3.07 (-2.05%) reason=stop_loss_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:42.381885Z"}
+{"event": "[BT] BUY 1.572130 BTC/USD @ 95.41 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:42.399356Z"}
+{"event": "[BT] CLOSE BTC/USD @ 96.55 pnl=1.80 (1.20%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:42.417014Z"}
+{"event": "[BT] BUY 1.552480 BTC/USD @ 96.62 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:42.434735Z"}
+{"event": "[BT] CLOSE BTC/USD @ 97.35 pnl=1.14 (0.76%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:42.451924Z"}
+{"event": "[BT] BUY 1.559816 BTC/USD @ 96.17 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:42.469095Z"}
+{"event": "[BT] CLOSE BTC/USD @ 94.75 pnl=-2.21 (-1.47%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:42.486519Z"}
+{"event": "[BT] BUY 1.561316 BTC/USD @ 96.07 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:42.503795Z"}
+{"event": "[BT] CLOSE BTC/USD @ 96.86 pnl=1.23 (0.82%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:42.521333Z"}
+{"event": "[BT] BUY 1.546709 BTC/USD @ 96.98 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:42.539139Z"}
+{"event": "[BT] CLOSE BTC/USD @ 98.67 pnl=2.61 (1.74%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:42.556686Z"}
+{"event": "[BT] BUY 1.536968 BTC/USD @ 97.59 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:42.574215Z"}
+{"event": "[BT] CLOSE BTC/USD @ 97.21 pnl=-0.59 (-0.39%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:42.591752Z"}
+{"event": "[BT] BUY 1.521579 BTC/USD @ 98.58 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:42.608938Z"}
+{"event": "[BT] CLOSE BTC/USD @ 100.86 pnl=3.46 (2.31%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:42.626339Z"}
+{"event": "[BT] BUY 1.487722 BTC/USD @ 100.83 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:42.643691Z"}
+{"event": "[BT] CLOSE BTC/USD @ 102.80 pnl=2.94 (1.96%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:42.661190Z"}
+{"event": "[BT] BUY 1.471505 BTC/USD @ 101.94 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:42.678532Z"}
+{"event": "[BT] CLOSE BTC/USD @ 102.24 pnl=0.44 (0.29%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:42.695727Z"}
+{"event": "[BT] BUY 1.471815 BTC/USD @ 101.91 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:42.713266Z"}
+{"event": "[BT] CLOSE BTC/USD @ 99.91 pnl=-2.95 (-1.96%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:42.731038Z"}
+{"event": "[BT] BUY 1.496600 BTC/USD @ 100.23 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:42.748639Z"}
+{"event": "[BT] CLOSE BTC/USD @ 101.34 pnl=1.66 (1.11%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:42.765797Z"}
+{"event": "[BT] BUY 1.483819 BTC/USD @ 101.09 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:42.783328Z"}
+{"event": "[BT] CLOSE BTC/USD @ 100.95 pnl=-0.21 (-0.14%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:42.800788Z"}
+{"event": "[BT] BUY 1.462340 BTC/USD @ 102.58 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:42.818362Z"}
+{"event": "[BT] CLOSE BTC/USD @ 100.95 pnl=-2.38 (-1.59%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:42.835933Z"}
+{"event": "[BT] BUY 1.513585 BTC/USD @ 99.10 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:42.853178Z"}
+{"event": "[BT] CLOSE BTC/USD @ 98.36 pnl=-1.12 (-0.75%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:42.870912Z"}
+{"event": "[BT] BUY 1.546257 BTC/USD @ 97.01 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:42.888082Z"}
+{"event": "[BT] CLOSE BTC/USD @ 98.77 pnl=2.73 (1.82%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:42.966353Z"}
+{"event": "[BT] BUY 1.511998 BTC/USD @ 99.21 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:42.985197Z"}
+{"event": "[BT] CLOSE BTC/USD @ 98.21 pnl=-1.51 (-1.01%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:43.009990Z"}
+{"event": "[BT] BUY 1.537493 BTC/USD @ 97.56 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:43.043895Z"}
+{"event": "[BT] CLOSE BTC/USD @ 101.12 pnl=5.47 (3.64%) reason=profit_target_reached", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:43.061637Z"}
+{"event": "[BT] BUY 1.495086 BTC/USD @ 100.33 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:43.078994Z"}
+{"event": "[BT] CLOSE BTC/USD @ 99.40 pnl=-1.39 (-0.93%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:43.096454Z"}
+{"event": "[BT] BUY 1.503110 BTC/USD @ 99.79 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:43.113964Z"}
+{"event": "[BT] CLOSE BTC/USD @ 100.57 pnl=1.17 (0.78%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:43.131112Z"}
+{"event": "[BT] BUY 1.487993 BTC/USD @ 100.81 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:43.148605Z"}
+{"event": "[BT] CLOSE BTC/USD @ 99.68 pnl=-1.68 (-1.12%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:43.165825Z"}
+{"event": "[BT] BUY 1.525920 BTC/USD @ 98.30 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:43.183256Z"}
+{"event": "[BT] CLOSE BTC/USD @ 99.10 pnl=1.22 (0.81%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:43.200512Z"}
+{"event": "[BT] BUY 1.513904 BTC/USD @ 99.08 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:43.218251Z"}
+{"event": "[BT] CLOSE BTC/USD @ 97.16 pnl=-2.91 (-1.94%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:43.235549Z"}
+{"event": "[BT] BUY 1.519679 BTC/USD @ 98.71 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:43.253279Z"}
+{"event": "[BT] CLOSE BTC/USD @ 99.70 pnl=1.51 (1.01%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:43.270759Z"}
+{"event": "[BT] BUY 1.508659 BTC/USD @ 99.43 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:43.288171Z"}
+{"event": "[BT] CLOSE BTC/USD @ 99.14 pnl=-0.43 (-0.29%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:43.305438Z"}
+{"event": "[BT] BUY 1.508097 BTC/USD @ 99.46 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:43.323006Z"}
+{"event": "[BT] CLOSE BTC/USD @ 98.67 pnl=-1.20 (-0.80%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:43.340869Z"}
+{"event": "[BT] BUY 1.544572 BTC/USD @ 97.11 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:43.358272Z"}
+{"event": "[BT] CLOSE BTC/USD @ 97.65 pnl=0.82 (0.55%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:43.375712Z"}
+{"event": "[BT] BUY 1.561908 BTC/USD @ 96.04 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:43.393298Z"}
+{"event": "[BT] CLOSE BTC/USD @ 96.70 pnl=1.04 (0.69%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:43.410640Z"}
+{"event": "[BT] BUY 1.576644 BTC/USD @ 95.14 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:43.427764Z"}
+{"event": "[BT] CLOSE BTC/USD @ 95.26 pnl=0.20 (0.13%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:43.445428Z"}
+{"event": "[BT] BUY 1.573368 BTC/USD @ 95.34 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:43.462800Z"}
+{"event": "[BT] CLOSE BTC/USD @ 97.71 pnl=3.73 (2.49%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:43.479840Z"}
+{"event": "[BT] BUY 1.553656 BTC/USD @ 96.55 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:43.497253Z"}
+{"event": "[BT] CLOSE BTC/USD @ 95.02 pnl=-2.37 (-1.58%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:43.514678Z"}
+{"event": "[BT] BUY 1.587390 BTC/USD @ 94.49 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:43.531903Z"}
+{"event": "[BT] CLOSE BTC/USD @ 93.42 pnl=-1.70 (-1.14%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:43.549364Z"}
+{"event": "[BT] BUY 1.612162 BTC/USD @ 93.04 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:43.566836Z"}
+{"event": "[BT] CLOSE BTC/USD @ 93.90 pnl=1.37 (0.92%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:43.584077Z"}
+{"event": "[BT] BUY 1.576837 BTC/USD @ 95.13 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:43.601334Z"}
+{"event": "[BT] CLOSE BTC/USD @ 97.36 pnl=3.52 (2.35%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:43.618917Z"}
+{"event": "[BT] BUY 1.552632 BTC/USD @ 96.61 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:43.636317Z"}
+{"event": "[BT] CLOSE BTC/USD @ 99.95 pnl=5.18 (3.45%) reason=profit_target_reached", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:43.653950Z"}
+{"event": "[BT] BUY 1.465885 BTC/USD @ 102.33 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:43.671523Z"}
+{"event": "[BT] CLOSE BTC/USD @ 101.97 pnl=-0.53 (-0.35%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:43.689074Z"}
+{"event": "[BT] BUY 1.513339 BTC/USD @ 99.12 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:43.706399Z"}
+{"event": "[BT] CLOSE BTC/USD @ 99.06 pnl=-0.08 (-0.06%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:43.723728Z"}
+{"event": "[BT] BUY 1.512146 BTC/USD @ 99.20 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:43.741204Z"}
+{"event": "[BT] CLOSE BTC/USD @ 96.48 pnl=-4.11 (-2.74%) reason=stop_loss_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:43.758406Z"}
+{"event": "[BT] BUY 1.550507 BTC/USD @ 96.74 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:43.775760Z"}
+{"event": "[BT] CLOSE BTC/USD @ 96.67 pnl=-0.12 (-0.08%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:43.793340Z"}
+{"event": "[BT] BUY 1.564307 BTC/USD @ 95.89 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:43.810807Z"}
+{"event": "[BT] CLOSE BTC/USD @ 96.85 pnl=1.50 (1.00%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:43.828148Z"}
+{"event": "[BT] BUY 1.527328 BTC/USD @ 98.21 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:43.845942Z"}
+{"event": "[BT] CLOSE BTC/USD @ 97.72 pnl=-0.75 (-0.50%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:43.863541Z"}
+{"event": "[BT] BUY 1.528954 BTC/USD @ 98.11 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:43.880968Z"}
+{"event": "[BT] CLOSE BTC/USD @ 97.42 pnl=-1.06 (-0.70%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:43.898465Z"}
+{"event": "[BT] BUY 1.552786 BTC/USD @ 96.60 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:43.915735Z"}
+{"event": "[BT] CLOSE BTC/USD @ 96.87 pnl=0.41 (0.27%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:43.933021Z"}
+{"event": "[BT] BUY 1.536087 BTC/USD @ 97.65 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:43.950415Z"}
+{"event": "[BT] CLOSE BTC/USD @ 97.09 pnl=-0.86 (-0.57%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:43.967740Z"}
+{"event": "[BT] BUY 1.585938 BTC/USD @ 94.58 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:43.985069Z"}
+{"event": "[BT] CLOSE BTC/USD @ 95.56 pnl=1.54 (1.03%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:44.002597Z"}
+{"event": "[BT] BUY 1.598100 BTC/USD @ 93.86 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:44.019970Z"}
+{"event": "[BT] CLOSE BTC/USD @ 94.31 pnl=0.72 (0.48%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:44.037477Z"}
+{"event": "[BT] BUY 1.550646 BTC/USD @ 96.73 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:44.055102Z"}
+{"event": "[BT] CLOSE BTC/USD @ 96.88 pnl=0.22 (0.15%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:44.072433Z"}
+{"event": "[BT] BUY 1.568948 BTC/USD @ 95.61 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:44.089861Z"}
+{"event": "[BT] CLOSE BTC/USD @ 94.07 pnl=-2.41 (-1.60%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:44.107401Z"}
+{"event": "[BT] BUY 1.566208 BTC/USD @ 95.77 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:44.124548Z"}
+{"event": "[BT] CLOSE BTC/USD @ 95.96 pnl=0.30 (0.20%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:44.142226Z"}
+{"event": "[BT] BUY 1.549375 BTC/USD @ 96.81 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:44.159646Z"}
+{"event": "[BT] CLOSE BTC/USD @ 98.08 pnl=1.97 (1.31%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:44.177061Z"}
+{"event": "[BT] BUY 1.528722 BTC/USD @ 98.12 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:44.194362Z"}
+{"event": "[BT] CLOSE BTC/USD @ 97.84 pnl=-0.42 (-0.28%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:44.211689Z"}
+{"event": "[BT] BUY 1.549335 BTC/USD @ 96.82 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:44.229140Z"}
+{"event": "[BT] CLOSE BTC/USD @ 93.28 pnl=-5.48 (-3.66%) reason=stop_loss_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:44.246330Z"}
+{"event": "[BT] BUY 1.634156 BTC/USD @ 91.79 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:44.263556Z"}
+{"event": "[BT] CLOSE BTC/USD @ 92.12 pnl=0.53 (0.36%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:44.280879Z"}
+{"event": "[BT] BUY 1.625113 BTC/USD @ 92.30 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:44.298498Z"}
+{"event": "[BT] CLOSE BTC/USD @ 93.17 pnl=1.41 (0.94%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:44.315990Z"}
+{"event": "[BT] BUY 1.606685 BTC/USD @ 93.36 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:44.333605Z"}
+{"event": "[BT] CLOSE BTC/USD @ 93.88 pnl=0.84 (0.56%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:44.351111Z"}
+{"event": "[BT] BUY 1.576717 BTC/USD @ 95.13 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:44.368780Z"}
+{"event": "[BT] CLOSE BTC/USD @ 94.32 pnl=-1.29 (-0.86%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:44.386261Z"}
+{"event": "[BT] BUY 1.591423 BTC/USD @ 94.26 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:44.404111Z"}
+{"event": "[BT] CLOSE BTC/USD @ 92.61 pnl=-2.61 (-1.74%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:44.422041Z"}
+{"event": "[BT] BUY 1.593192 BTC/USD @ 94.15 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:44.439404Z"}
+{"event": "[BT] CLOSE BTC/USD @ 94.49 pnl=0.54 (0.36%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:44.456864Z"}
+{"event": "[BT] BUY 1.573110 BTC/USD @ 95.35 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:44.474150Z"}
+{"event": "[BT] CLOSE BTC/USD @ 97.44 pnl=3.28 (2.18%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:44.491478Z"}
+{"event": "[BT] BUY 1.517305 BTC/USD @ 98.86 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:44.508878Z"}
+============================================================
+BACKTEST RESULTS: BTC/USD
+============================================================
+Start equity:      $10,000.00
+End equity:        $9,979.65
+Total return:      -0.20%
+Trades:            175
+Wins / Losses:     84 / 91
+Win rate:          48.0%
+Max drawdown:      -0.34%
+Sharpe (ann.):     -0.60
+Regimes seen:      {'trending': 226, 'neutral': 174}
+============================================================
+
+{"event": "[BT] BUY 1.404993 BTC/USD @ 106.76 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:44.529775Z"}
+{"event": "[BT] CLOSE BTC/USD @ 103.26 pnl=-4.93 (-3.28%) reason=stop_loss_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:44.598272Z"}
+{"event": "[BT] BUY 1.452589 BTC/USD @ 103.26 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:44.615674Z"}
+{"event": "[BT] CLOSE BTC/USD @ 103.26 pnl=-0.01 (-0.00%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:44.633312Z"}
+{"event": "[BT] BUY 1.562297 BTC/USD @ 96.01 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:44.650848Z"}
+{"event": "[BT] CLOSE BTC/USD @ 99.92 pnl=6.11 (4.07%) reason=profit_target_reached", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:44.668304Z"}
+{"event": "[BT] BUY 1.465976 BTC/USD @ 102.32 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:44.685822Z"}
+{"event": "[BT] CLOSE BTC/USD @ 99.76 pnl=-3.75 (-2.50%) reason=stop_loss_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:44.703043Z"}
+{"event": "[BT] BUY 1.513981 BTC/USD @ 99.08 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:44.720335Z"}
+{"event": "[BT] CLOSE BTC/USD @ 101.08 pnl=3.03 (2.02%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:44.738217Z"}
+{"event": "[BT] BUY 1.499664 BTC/USD @ 100.02 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:44.755622Z"}
+{"event": "[BT] CLOSE BTC/USD @ 99.05 pnl=-1.46 (-0.97%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:44.773332Z"}
+{"event": "[BT] BUY 1.607831 BTC/USD @ 93.29 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:44.790715Z"}
+{"event": "[BT] CLOSE BTC/USD @ 95.36 pnl=3.33 (2.22%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:44.807972Z"}
+{"event": "[BT] BUY 1.565183 BTC/USD @ 95.84 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:44.825543Z"}
+{"event": "[BT] CLOSE BTC/USD @ 96.89 pnl=1.65 (1.10%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:44.842802Z"}
+{"event": "[BT] BUY 1.648867 BTC/USD @ 90.97 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:44.860113Z"}
+{"event": "[BT] CLOSE BTC/USD @ 96.98 pnl=9.90 (6.60%) reason=profit_target_reached", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:44.877666Z"}
+{"event": "[BT] BUY 1.537249 BTC/USD @ 97.58 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:44.894841Z"}
+{"event": "[BT] CLOSE BTC/USD @ 96.07 pnl=-2.32 (-1.55%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:44.912025Z"}
+{"event": "[BT] BUY 1.444212 BTC/USD @ 103.86 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:44.929549Z"}
+{"event": "[BT] CLOSE BTC/USD @ 103.67 pnl=-0.27 (-0.18%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:44.947125Z"}
+{"event": "[BT] BUY 1.535967 BTC/USD @ 97.66 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:44.964697Z"}
+{"event": "[BT] CLOSE BTC/USD @ 96.08 pnl=-2.43 (-1.62%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:44.982346Z"}
+{"event": "[BT] BUY 1.718580 BTC/USD @ 87.28 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:44.999688Z"}
+{"event": "[BT] CLOSE BTC/USD @ 90.95 pnl=6.30 (4.20%) reason=profit_target_reached", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:45.017124Z"}
+{"event": "[BT] BUY 1.677289 BTC/USD @ 89.43 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:45.034481Z"}
+{"event": "[BT] CLOSE BTC/USD @ 86.77 pnl=-4.46 (-2.97%) reason=stop_loss_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:45.051922Z"}
+{"event": "[BT] BUY 1.657527 BTC/USD @ 90.50 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:45.069771Z"}
+{"event": "[BT] CLOSE BTC/USD @ 84.52 pnl=-9.91 (-6.60%) reason=stop_loss_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:45.087041Z"}
+{"event": "[BT] BUY 1.737523 BTC/USD @ 86.33 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:45.104279Z"}
+{"event": "[BT] CLOSE BTC/USD @ 79.20 pnl=-12.39 (-8.26%) reason=stop_loss_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:45.121650Z"}
+{"event": "[BT] BUY 1.945444 BTC/USD @ 77.10 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:45.139001Z"}
+{"event": "[BT] CLOSE BTC/USD @ 73.39 pnl=-7.23 (-4.82%) reason=stop_loss_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:45.156180Z"}
+{"event": "[BT] BUY 1.930975 BTC/USD @ 77.68 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:45.173739Z"}
+{"event": "[BT] CLOSE BTC/USD @ 83.17 pnl=10.60 (7.06%) reason=profit_target_reached", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:45.190954Z"}
+{"event": "[BT] BUY 1.827642 BTC/USD @ 82.07 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:45.208313Z"}
+{"event": "[BT] CLOSE BTC/USD @ 84.83 pnl=5.04 (3.36%) reason=profit_target_reached", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:45.225701Z"}
+{"event": "[BT] BUY 1.781001 BTC/USD @ 84.22 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:45.243201Z"}
+{"event": "[BT] CLOSE BTC/USD @ 86.14 pnl=3.41 (2.27%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:45.260537Z"}
+{"event": "[BT] BUY 1.795500 BTC/USD @ 83.54 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:45.278060Z"}
+{"event": "[BT] CLOSE BTC/USD @ 77.83 pnl=-10.25 (-6.83%) reason=stop_loss_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:45.295218Z"}
+{"event": "[BT] BUY 2.076993 BTC/USD @ 72.22 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:45.312522Z"}
+{"event": "[BT] CLOSE BTC/USD @ 73.33 pnl=2.30 (1.53%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:45.330211Z"}
+{"event": "[BT] BUY 1.876903 BTC/USD @ 79.92 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:45.347706Z"}
+{"event": "[BT] CLOSE BTC/USD @ 80.78 pnl=1.62 (1.08%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:45.364964Z"}
+{"event": "[BT] BUY 1.896693 BTC/USD @ 79.09 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:45.382498Z"}
+{"event": "[BT] CLOSE BTC/USD @ 85.13 pnl=11.47 (7.65%) reason=profit_target_reached", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:45.399697Z"}
+{"event": "[BT] BUY 1.745371 BTC/USD @ 85.94 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:45.417179Z"}
+{"event": "[BT] CLOSE BTC/USD @ 86.29 pnl=0.61 (0.41%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:45.434762Z"}
+{"event": "[BT] BUY 1.720932 BTC/USD @ 87.16 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:45.451918Z"}
+{"event": "[BT] CLOSE BTC/USD @ 86.70 pnl=-0.79 (-0.53%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:45.469897Z"}
+{"event": "[BT] BUY 1.751778 BTC/USD @ 85.63 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:45.487417Z"}
+{"event": "[BT] CLOSE BTC/USD @ 80.71 pnl=-8.61 (-5.74%) reason=stop_loss_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:45.504909Z"}
+{"event": "[BT] BUY 1.821894 BTC/USD @ 82.33 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:45.522551Z"}
+{"event": "[BT] CLOSE BTC/USD @ 82.02 pnl=-0.57 (-0.38%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:45.539704Z"}
+{"event": "[BT] BUY 1.745525 BTC/USD @ 85.93 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:45.557413Z"}
+{"event": "[BT] CLOSE BTC/USD @ 84.67 pnl=-2.21 (-1.48%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:45.574747Z"}
+{"event": "[BT] BUY 1.917912 BTC/USD @ 78.21 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:45.591994Z"}
+{"event": "[BT] CLOSE BTC/USD @ 77.90 pnl=-0.60 (-0.40%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:45.609516Z"}
+{"event": "[BT] BUY 1.803013 BTC/USD @ 83.19 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:45.626925Z"}
+{"event": "[BT] CLOSE BTC/USD @ 81.92 pnl=-2.30 (-1.53%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:45.644324Z"}
+{"event": "[BT] BUY 1.898678 BTC/USD @ 79.00 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:45.661475Z"}
+{"event": "[BT] CLOSE BTC/USD @ 75.23 pnl=-7.16 (-4.77%) reason=stop_loss_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:45.678865Z"}
+{"event": "[BT] BUY 2.081288 BTC/USD @ 72.07 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:45.696311Z"}
+{"event": "[BT] CLOSE BTC/USD @ 71.21 pnl=-1.80 (-1.20%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:45.714090Z"}
+{"event": "[BT] BUY 2.210938 BTC/USD @ 67.84 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:45.731498Z"}
+{"event": "[BT] CLOSE BTC/USD @ 71.91 pnl=8.99 (5.99%) reason=profit_target_reached", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:45.748862Z"}
+{"event": "[BT] BUY 2.109829 BTC/USD @ 71.10 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:45.766393Z"}
+{"event": "[BT] CLOSE BTC/USD @ 71.40 pnl=0.65 (0.43%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:45.783694Z"}
+{"event": "[BT] BUY 1.986422 BTC/USD @ 75.51 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:45.801102Z"}
+{"event": "[BT] CLOSE BTC/USD @ 80.05 pnl=9.02 (6.01%) reason=profit_target_reached", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:45.818387Z"}
+{"event": "[BT] BUY 1.889829 BTC/USD @ 79.37 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:45.835653Z"}
+{"event": "[BT] CLOSE BTC/USD @ 80.43 pnl=1.99 (1.33%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:45.853357Z"}
+{"event": "[BT] BUY 1.811794 BTC/USD @ 82.79 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:45.870926Z"}
+{"event": "[BT] CLOSE BTC/USD @ 82.15 pnl=-1.16 (-0.77%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:45.888076Z"}
+{"event": "[BT] BUY 1.965680 BTC/USD @ 76.31 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:45.905527Z"}
+{"event": "[BT] CLOSE BTC/USD @ 78.31 pnl=3.93 (2.62%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:45.922888Z"}
+{"event": "[BT] BUY 1.849357 BTC/USD @ 81.11 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:45.940035Z"}
+{"event": "[BT] CLOSE BTC/USD @ 82.46 pnl=2.49 (1.66%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:45.957335Z"}
+{"event": "[BT] BUY 1.888902 BTC/USD @ 79.41 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:45.974656Z"}
+{"event": "[BT] CLOSE BTC/USD @ 78.79 pnl=-1.18 (-0.78%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:45.992276Z"}
+{"event": "[BT] BUY 1.949908 BTC/USD @ 76.93 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:46.009626Z"}
+{"event": "[BT] CLOSE BTC/USD @ 76.00 pnl=-1.80 (-1.20%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:46.027026Z"}
+{"event": "[BT] BUY 1.876238 BTC/USD @ 79.95 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:46.044258Z"}
+{"event": "[BT] CLOSE BTC/USD @ 84.84 pnl=9.18 (6.12%) reason=profit_target_reached", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:46.061447Z"}
+{"event": "[BT] BUY 1.721954 BTC/USD @ 87.11 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:46.078827Z"}
+{"event": "[BT] CLOSE BTC/USD @ 89.02 pnl=3.29 (2.19%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:46.096046Z"}
+{"event": "[BT] BUY 1.640567 BTC/USD @ 91.43 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:46.113589Z"}
+{"event": "[BT] CLOSE BTC/USD @ 91.39 pnl=-0.07 (-0.05%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:46.130950Z"}
+{"event": "[BT] BUY 1.646353 BTC/USD @ 91.11 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:46.148315Z"}
+{"event": "[BT] CLOSE BTC/USD @ 88.66 pnl=-4.04 (-2.69%) reason=stop_loss_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:46.165784Z"}
+{"event": "[BT] BUY 1.695734 BTC/USD @ 88.46 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:46.183463Z"}
+{"event": "[BT] CLOSE BTC/USD @ 96.45 pnl=13.56 (9.04%) reason=profit_target_reached", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:46.200977Z"}
+{"event": "[BT] BUY 1.502908 BTC/USD @ 99.81 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:46.218440Z"}
+{"event": "[BT] CLOSE BTC/USD @ 98.44 pnl=-2.05 (-1.37%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:46.235967Z"}
+{"event": "[BT] BUY 1.553077 BTC/USD @ 96.58 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:46.253451Z"}
+{"event": "[BT] CLOSE BTC/USD @ 93.24 pnl=-5.19 (-3.46%) reason=stop_loss_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:46.270575Z"}
+{"event": "[BT] BUY 1.584971 BTC/USD @ 94.64 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:46.288120Z"}
+{"event": "[BT] CLOSE BTC/USD @ 96.12 pnl=2.35 (1.57%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:46.305773Z"}
+{"event": "[BT] BUY 1.656130 BTC/USD @ 90.57 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:46.322847Z"}
+{"event": "[BT] CLOSE BTC/USD @ 92.33 pnl=2.92 (1.95%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:46.341023Z"}
+{"event": "[BT] BUY 1.662395 BTC/USD @ 90.23 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:46.358497Z"}
+{"event": "[BT] CLOSE BTC/USD @ 95.38 pnl=8.56 (5.71%) reason=profit_target_reached", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:46.375689Z"}
+{"event": "[BT] BUY 1.562841 BTC/USD @ 95.98 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:46.393069Z"}
+{"event": "[BT] CLOSE BTC/USD @ 102.57 pnl=10.31 (6.87%) reason=profit_target_reached", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:46.410487Z"}
+{"event": "[BT] BUY 1.489662 BTC/USD @ 100.69 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:46.427938Z"}
+{"event": "[BT] CLOSE BTC/USD @ 99.53 pnl=-1.73 (-1.15%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:46.445238Z"}
+{"event": "[BT] BUY 1.489163 BTC/USD @ 100.73 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:46.462579Z"}
+{"event": "[BT] CLOSE BTC/USD @ 104.98 pnl=6.34 (4.22%) reason=profit_target_reached", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:46.479923Z"}
+{"event": "[BT] BUY 1.397187 BTC/USD @ 107.36 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:46.497518Z"}
+{"event": "[BT] CLOSE BTC/USD @ 102.06 pnl=-7.40 (-4.93%) reason=stop_loss_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:46.514997Z"}
+{"event": "[BT] BUY 1.459029 BTC/USD @ 102.81 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:46.532540Z"}
+{"event": "[BT] CLOSE BTC/USD @ 102.90 pnl=0.13 (0.09%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:46.550056Z"}
+{"event": "[BT] BUY 1.483188 BTC/USD @ 101.13 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:46.567598Z"}
+{"event": "[BT] CLOSE BTC/USD @ 98.51 pnl=-3.89 (-2.59%) reason=stop_loss_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:46.585286Z"}
+{"event": "[BT] BUY 1.423177 BTC/USD @ 105.40 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:46.602564Z"}
+{"event": "[BT] CLOSE BTC/USD @ 100.24 pnl=-7.34 (-4.89%) reason=stop_loss_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:46.637048Z"}
+{"event": "[BT] BUY 1.459199 BTC/USD @ 102.80 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:46.654305Z"}
+{"event": "[BT] CLOSE BTC/USD @ 103.33 pnl=0.78 (0.52%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:46.671476Z"}
+{"event": "[BT] BUY 1.456030 BTC/USD @ 103.02 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:46.688916Z"}
+{"event": "[BT] CLOSE BTC/USD @ 106.24 pnl=4.69 (3.13%) reason=profit_target_reached", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:46.706086Z"}
+{"event": "[BT] BUY 1.384839 BTC/USD @ 108.32 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:46.723363Z"}
+{"event": "[BT] CLOSE BTC/USD @ 114.12 pnl=8.04 (5.36%) reason=profit_target_reached", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:46.758036Z"}
+{"event": "[BT] BUY 1.299625 BTC/USD @ 115.42 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:46.775454Z"}
+{"event": "[BT] CLOSE BTC/USD @ 112.57 pnl=-3.70 (-2.47%) reason=stop_loss_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:46.792786Z"}
+{"event": "[BT] BUY 1.352101 BTC/USD @ 110.94 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:46.810295Z"}
+{"event": "[BT] CLOSE BTC/USD @ 108.63 pnl=-3.13 (-2.08%) reason=stop_loss_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:46.827658Z"}
+{"event": "[BT] BUY 1.369389 BTC/USD @ 109.54 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:46.845028Z"}
+{"event": "[BT] CLOSE BTC/USD @ 104.81 pnl=-6.47 (-4.31%) reason=stop_loss_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:46.862393Z"}
+{"event": "[BT] BUY 1.544289 BTC/USD @ 97.13 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:46.880011Z"}
+{"event": "[BT] CLOSE BTC/USD @ 97.47 pnl=0.53 (0.35%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:46.897186Z"}
+{"event": "[BT] BUY 1.625778 BTC/USD @ 92.26 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:46.914466Z"}
+{"event": "[BT] CLOSE BTC/USD @ 85.06 pnl=-11.71 (-7.81%) reason=stop_loss_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:46.932010Z"}
+{"event": "[BT] BUY 1.737521 BTC/USD @ 86.33 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:46.949306Z"}
+{"event": "[BT] CLOSE BTC/USD @ 83.87 pnl=-4.27 (-2.84%) reason=stop_loss_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:46.967145Z"}
+{"event": "[BT] BUY 1.753586 BTC/USD @ 85.54 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:46.984647Z"}
+{"event": "[BT] CLOSE BTC/USD @ 83.72 pnl=-3.19 (-2.12%) reason=stop_loss_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:47.002070Z"}
+{"event": "[BT] BUY 1.875814 BTC/USD @ 79.97 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:47.019685Z"}
+{"event": "[BT] CLOSE BTC/USD @ 75.99 pnl=-7.46 (-4.97%) reason=stop_loss_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:47.037197Z"}
+{"event": "[BT] BUY 2.015516 BTC/USD @ 74.42 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:47.054975Z"}
+{"event": "[BT] CLOSE BTC/USD @ 73.61 pnl=-1.64 (-1.09%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:47.072693Z"}
+{"event": "[BT] BUY 2.107208 BTC/USD @ 71.18 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:47.089990Z"}
+{"event": "[BT] CLOSE BTC/USD @ 70.38 pnl=-1.69 (-1.12%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:47.107331Z"}
+{"event": "[BT] BUY 2.270692 BTC/USD @ 66.06 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:47.124852Z"}
+{"event": "[BT] CLOSE BTC/USD @ 66.10 pnl=0.09 (0.06%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:47.142041Z"}
+{"event": "[BT] BUY 2.444780 BTC/USD @ 61.36 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:47.159416Z"}
+{"event": "[BT] CLOSE BTC/USD @ 60.88 pnl=-1.16 (-0.78%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:47.176914Z"}
+{"event": "[BT] BUY 2.397028 BTC/USD @ 62.58 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:47.194526Z"}
+{"event": "[BT] CLOSE BTC/USD @ 65.31 pnl=6.55 (4.37%) reason=profit_target_reached", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:47.212050Z"}
+{"event": "[BT] BUY 2.149323 BTC/USD @ 69.79 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:47.229477Z"}
+{"event": "[BT] CLOSE BTC/USD @ 65.44 pnl=-9.34 (-6.23%) reason=stop_loss_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:47.246788Z"}
+{"event": "[BT] BUY 2.224493 BTC/USD @ 67.43 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:47.264232Z"}
+{"event": "[BT] CLOSE BTC/USD @ 70.68 pnl=7.24 (4.83%) reason=profit_target_reached", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:47.281861Z"}
+{"event": "[BT] BUY 2.042007 BTC/USD @ 73.46 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:47.299764Z"}
+{"event": "[BT] CLOSE BTC/USD @ 70.73 pnl=-5.58 (-3.72%) reason=stop_loss_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:47.317407Z"}
+{"event": "[BT] BUY 2.086476 BTC/USD @ 71.89 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:47.335221Z"}
+{"event": "[BT] CLOSE BTC/USD @ 77.24 pnl=11.16 (7.44%) reason=profit_target_reached", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:47.352521Z"}
+{"event": "[BT] BUY 2.065705 BTC/USD @ 72.61 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:47.369744Z"}
+{"event": "[BT] CLOSE BTC/USD @ 74.00 pnl=2.86 (1.91%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:47.387177Z"}
+{"event": "[BT] BUY 1.940736 BTC/USD @ 77.29 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:47.404799Z"}
+{"event": "[BT] CLOSE BTC/USD @ 75.14 pnl=-4.18 (-2.79%) reason=stop_loss_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:47.422320Z"}
+{"event": "[BT] BUY 1.950870 BTC/USD @ 76.89 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:47.439694Z"}
+{"event": "[BT] CLOSE BTC/USD @ 73.60 pnl=-6.43 (-4.28%) reason=stop_loss_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:47.457189Z"}
+{"event": "[BT] BUY 2.106617 BTC/USD @ 71.20 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:47.474426Z"}
+{"event": "[BT] CLOSE BTC/USD @ 68.88 pnl=-4.90 (-3.27%) reason=stop_loss_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:47.491720Z"}
+{"event": "[BT] BUY 2.161170 BTC/USD @ 69.41 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:47.509333Z"}
+{"event": "[BT] CLOSE BTC/USD @ 69.15 pnl=-0.55 (-0.36%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:47.526640Z"}
+{"event": "[BT] BUY 2.089325 BTC/USD @ 71.79 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:47.543957Z"}
+{"event": "[BT] CLOSE BTC/USD @ 69.09 pnl=-5.64 (-3.76%) reason=stop_loss_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:47.561582Z"}
+{"event": "[BT] BUY 2.182438 BTC/USD @ 68.73 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:47.579130Z"}
+{"event": "[BT] CLOSE BTC/USD @ 71.37 pnl=5.77 (3.84%) reason=profit_target_reached", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:47.596504Z"}
+{"event": "[BT] BUY 2.055537 BTC/USD @ 72.97 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:47.614111Z"}
+{"event": "[BT] CLOSE BTC/USD @ 69.11 pnl=-7.95 (-5.30%) reason=stop_loss_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:47.631836Z"}
+{"event": "[BT] BUY 2.114287 BTC/USD @ 70.95 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:47.649755Z"}
+{"event": "[BT] CLOSE BTC/USD @ 69.59 pnl=-2.87 (-1.91%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:47.667367Z"}
+{"event": "[BT] BUY 2.122813 BTC/USD @ 70.66 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:47.684961Z"}
+{"event": "[BT] CLOSE BTC/USD @ 71.51 pnl=1.80 (1.20%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:47.702130Z"}
+{"event": "[BT] BUY 2.000038 BTC/USD @ 75.00 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:47.720079Z"}
+{"event": "[BT] CLOSE BTC/USD @ 75.35 pnl=0.70 (0.47%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:47.737713Z"}
+{"event": "[BT] BUY 2.150198 BTC/USD @ 69.76 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:47.755560Z"}
+{"event": "[BT] CLOSE BTC/USD @ 65.94 pnl=-8.22 (-5.48%) reason=stop_loss_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:47.773095Z"}
+{"event": "[BT] BUY 2.210207 BTC/USD @ 67.87 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:47.791055Z"}
+{"event": "[BT] CLOSE BTC/USD @ 67.17 pnl=-1.55 (-1.03%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:47.808573Z"}
+{"event": "[BT] BUY 2.136051 BTC/USD @ 70.22 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:47.825905Z"}
+{"event": "[BT] CLOSE BTC/USD @ 70.99 pnl=1.64 (1.09%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:47.844061Z"}
+{"event": "[BT] BUY 2.178205 BTC/USD @ 68.86 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:47.861718Z"}
+{"event": "[BT] CLOSE BTC/USD @ 71.85 pnl=6.49 (4.33%) reason=profit_target_reached", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:47.878928Z"}
+{"event": "[BT] BUY 2.157489 BTC/USD @ 69.53 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:47.896487Z"}
+{"event": "[BT] CLOSE BTC/USD @ 63.82 pnl=-12.32 (-8.21%) reason=stop_loss_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:47.913669Z"}
+{"event": "[BT] BUY 2.171236 BTC/USD @ 69.09 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:47.932285Z"}
+{"event": "[BT] CLOSE BTC/USD @ 63.80 pnl=-11.46 (-7.64%) reason=stop_loss_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:47.949777Z"}
+{"event": "[BT] BUY 2.292556 BTC/USD @ 65.43 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:47.967306Z"}
+{"event": "[BT] CLOSE BTC/USD @ 67.89 pnl=5.63 (3.76%) reason=profit_target_reached", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:47.984622Z"}
+{"event": "[BT] BUY 2.196656 BTC/USD @ 68.29 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:48.001877Z"}
+{"event": "[BT] CLOSE BTC/USD @ 63.69 pnl=-10.10 (-6.73%) reason=stop_loss_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:48.019493Z"}
+{"event": "[BT] BUY 2.263355 BTC/USD @ 66.27 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:48.037124Z"}
+{"event": "[BT] CLOSE BTC/USD @ 62.45 pnl=-8.65 (-5.77%) reason=stop_loss_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:48.054890Z"}
+{"event": "[BT] BUY 2.538269 BTC/USD @ 59.10 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:48.072022Z"}
+{"event": "[BT] CLOSE BTC/USD @ 58.24 pnl=-2.17 (-1.45%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:48.089303Z"}
+{"event": "[BT] BUY 2.496780 BTC/USD @ 60.08 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:48.107193Z"}
+{"event": "[BT] CLOSE BTC/USD @ 60.80 pnl=1.80 (1.20%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:48.124609Z"}
+{"event": "[BT] BUY 2.389664 BTC/USD @ 62.77 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:48.142284Z"}
+{"event": "[BT] CLOSE BTC/USD @ 61.66 pnl=-2.66 (-1.77%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:48.159777Z"}
+{"event": "[BT] BUY 2.449708 BTC/USD @ 61.23 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:48.177014Z"}
+{"event": "[BT] CLOSE BTC/USD @ 58.45 pnl=-6.82 (-4.55%) reason=stop_loss_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:48.194132Z"}
+{"event": "[BT] BUY 2.599391 BTC/USD @ 57.71 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:48.211394Z"}
+{"event": "[BT] CLOSE BTC/USD @ 59.07 pnl=3.56 (2.37%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:48.229080Z"}
+{"event": "[BT] BUY 2.569971 BTC/USD @ 58.37 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:48.246419Z"}
+{"event": "[BT] CLOSE BTC/USD @ 59.48 pnl=2.85 (1.90%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:48.263615Z"}
+{"event": "[BT] BUY 2.581196 BTC/USD @ 58.11 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:48.281339Z"}
+{"event": "[BT] CLOSE BTC/USD @ 56.74 pnl=-3.55 (-2.37%) reason=stop_loss_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:48.298424Z"}
+{"event": "[BT] BUY 2.639708 BTC/USD @ 56.82 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:48.316242Z"}
+{"event": "[BT] CLOSE BTC/USD @ 56.38 pnl=-1.17 (-0.78%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:48.334141Z"}
+{"event": "[BT] BUY 2.598865 BTC/USD @ 57.72 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:48.351832Z"}
+{"event": "[BT] CLOSE BTC/USD @ 58.13 pnl=1.07 (0.71%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:48.369179Z"}
+{"event": "[BT] BUY 2.412518 BTC/USD @ 62.18 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:48.386433Z"}
+{"event": "[BT] CLOSE BTC/USD @ 61.63 pnl=-1.32 (-0.88%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:48.403820Z"}
+{"event": "[BT] BUY 2.456214 BTC/USD @ 61.07 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:48.421290Z"}
+{"event": "[BT] CLOSE BTC/USD @ 58.53 pnl=-6.24 (-4.16%) reason=stop_loss_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:48.438885Z"}
+{"event": "[BT] BUY 2.560509 BTC/USD @ 58.58 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:48.456188Z"}
+{"event": "[BT] CLOSE BTC/USD @ 60.18 pnl=4.10 (2.73%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:48.473396Z"}
+{"event": "[BT] BUY 2.568490 BTC/USD @ 58.40 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:48.491020Z"}
+{"event": "[BT] CLOSE BTC/USD @ 58.28 pnl=-0.30 (-0.20%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:48.508460Z"}
+{"event": "[BT] BUY 2.501699 BTC/USD @ 59.96 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:48.525854Z"}
+{"event": "[BT] CLOSE BTC/USD @ 59.65 pnl=-0.76 (-0.51%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:48.543254Z"}
+{"event": "[BT] BUY 2.567785 BTC/USD @ 58.42 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:48.560822Z"}
+{"event": "[BT] CLOSE BTC/USD @ 60.69 pnl=5.84 (3.89%) reason=profit_target_reached", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:48.578022Z"}
+{"event": "[BT] BUY 2.462027 BTC/USD @ 60.93 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:48.595473Z"}
+{"event": "[BT] CLOSE BTC/USD @ 61.89 pnl=2.38 (1.59%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:48.612768Z"}
+{"event": "[BT] BUY 2.315107 BTC/USD @ 64.79 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:48.630171Z"}
+{"event": "[BT] CLOSE BTC/USD @ 67.76 pnl=6.87 (4.58%) reason=profit_target_reached", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:48.648587Z"}
+{"event": "[BT] BUY 2.244869 BTC/USD @ 66.82 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:48.666378Z"}
+{"event": "[BT] CLOSE BTC/USD @ 65.41 pnl=-3.15 (-2.10%) reason=stop_loss_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:48.683629Z"}
+{"event": "[BT] BUY 2.267278 BTC/USD @ 66.16 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:48.701009Z"}
+{"event": "[BT] CLOSE BTC/USD @ 65.81 pnl=-0.80 (-0.53%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:48.718513Z"}
+{"event": "[BT] BUY 2.466852 BTC/USD @ 60.81 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:48.735864Z"}
+{"event": "[BT] CLOSE BTC/USD @ 63.91 pnl=7.65 (5.10%) reason=profit_target_reached", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:48.752995Z"}
+{"event": "[BT] BUY 2.345299 BTC/USD @ 63.96 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:48.770641Z"}
+{"event": "[BT] CLOSE BTC/USD @ 65.84 pnl=4.42 (2.95%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:48.788142Z"}
+{"event": "[BT] BUY 2.390342 BTC/USD @ 62.75 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:48.805421Z"}
+{"event": "[BT] CLOSE BTC/USD @ 65.99 pnl=7.73 (5.15%) reason=profit_target_reached", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:48.822604Z"}
+{"event": "[BT] BUY 2.327986 BTC/USD @ 64.43 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:48.839833Z"}
+{"event": "[BT] CLOSE BTC/USD @ 64.16 pnl=-0.65 (-0.43%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:48.857413Z"}
+{"event": "[BT] BUY 2.476903 BTC/USD @ 60.56 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:48.874595Z"}
+{"event": "[BT] CLOSE BTC/USD @ 60.16 pnl=-1.00 (-0.67%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:48.892120Z"}
+{"event": "[BT] BUY 2.516689 BTC/USD @ 59.60 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:48.909640Z"}
+{"event": "[BT] CLOSE BTC/USD @ 59.16 pnl=-1.11 (-0.74%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:48.926923Z"}
+{"event": "[BT] BUY 2.491782 BTC/USD @ 60.20 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:48.944476Z"}
+{"event": "[BT] CLOSE BTC/USD @ 60.34 pnl=0.36 (0.24%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:48.961889Z"}
+{"event": "[BT] BUY 2.392403 BTC/USD @ 62.70 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:48.979568Z"}
+{"event": "[BT] CLOSE BTC/USD @ 61.52 pnl=-2.81 (-1.87%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:48.997075Z"}
+{"event": "[BT] BUY 2.539223 BTC/USD @ 59.07 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:49.014889Z"}
+{"event": "[BT] CLOSE BTC/USD @ 59.03 pnl=-0.11 (-0.08%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:49.032307Z"}
+{"event": "[BT] BUY 2.478860 BTC/USD @ 60.51 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:49.049448Z"}
+{"event": "[BT] CLOSE BTC/USD @ 63.52 pnl=7.47 (4.98%) reason=profit_target_reached", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:49.066865Z"}
+{"event": "[BT] BUY 2.286848 BTC/USD @ 65.59 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:49.084075Z"}
+{"event": "[BT] CLOSE BTC/USD @ 60.96 pnl=-10.59 (-7.06%) reason=stop_loss_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:49.101257Z"}
+{"event": "[BT] BUY 2.424050 BTC/USD @ 61.88 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:49.118536Z"}
+{"event": "[BT] CLOSE BTC/USD @ 65.49 pnl=8.76 (5.84%) reason=profit_target_reached", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:49.136169Z"}
+{"event": "[BT] BUY 2.284546 BTC/USD @ 65.66 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:49.153639Z"}
+{"event": "[BT] CLOSE BTC/USD @ 64.30 pnl=-3.10 (-2.06%) reason=stop_loss_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:49.171492Z"}
+{"event": "[BT] BUY 2.304203 BTC/USD @ 65.10 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:49.189107Z"}
+{"event": "[BT] CLOSE BTC/USD @ 63.79 pnl=-3.02 (-2.01%) reason=stop_loss_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:49.206778Z"}
+{"event": "[BT] BUY 2.292921 BTC/USD @ 65.42 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:49.224130Z"}
+{"event": "[BT] CLOSE BTC/USD @ 65.38 pnl=-0.08 (-0.05%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:49.241633Z"}
+{"event": "[BT] BUY 2.173032 BTC/USD @ 69.03 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:49.259150Z"}
+{"event": "[BT] CLOSE BTC/USD @ 70.41 pnl=3.00 (2.00%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:49.276376Z"}
+{"event": "[BT] BUY 2.193993 BTC/USD @ 68.37 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:49.293451Z"}
+{"event": "[BT] CLOSE BTC/USD @ 70.02 pnl=3.63 (2.42%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:49.311183Z"}
+{"event": "[BT] BUY 2.064874 BTC/USD @ 72.64 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:49.328589Z"}
+{"event": "[BT] CLOSE BTC/USD @ 70.99 pnl=-3.41 (-2.27%) reason=stop_loss_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:49.346331Z"}
+{"event": "[BT] BUY 2.149528 BTC/USD @ 69.78 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:49.363806Z"}
+{"event": "[BT] CLOSE BTC/USD @ 63.35 pnl=-13.83 (-9.22%) reason=stop_loss_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:49.381263Z"}
+{"event": "[BT] BUY 2.285281 BTC/USD @ 65.64 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:49.398481Z"}
+{"event": "[BT] CLOSE BTC/USD @ 64.09 pnl=-3.53 (-2.35%) reason=stop_loss_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:49.416062Z"}
+{"event": "[BT] BUY 2.557411 BTC/USD @ 58.65 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:49.433602Z"}
+{"event": "[BT] CLOSE BTC/USD @ 54.50 pnl=-10.61 (-7.08%) reason=stop_loss_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:49.450819Z"}
+{"event": "[BT] BUY 2.776890 BTC/USD @ 54.02 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:49.468593Z"}
+{"event": "[BT] CLOSE BTC/USD @ 55.66 pnl=4.56 (3.04%) reason=profit_target_reached", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:49.485992Z"}
+{"event": "[BT] BUY 2.704529 BTC/USD @ 55.46 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:49.503132Z"}
+{"event": "[BT] CLOSE BTC/USD @ 56.51 pnl=2.83 (1.89%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:49.520956Z"}
+{"event": "[BT] BUY 2.776782 BTC/USD @ 54.02 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:49.538511Z"}
+{"event": "[BT] CLOSE BTC/USD @ 51.12 pnl=-8.05 (-5.37%) reason=stop_loss_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:49.555920Z"}
+{"event": "[BT] BUY 2.833818 BTC/USD @ 52.93 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:49.573188Z"}
+{"event": "[BT] CLOSE BTC/USD @ 53.97 pnl=2.95 (1.97%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:49.590378Z"}
+{"event": "[BT] BUY 2.782504 BTC/USD @ 53.91 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:49.607986Z"}
+{"event": "[BT] CLOSE BTC/USD @ 56.67 pnl=7.69 (5.13%) reason=profit_target_reached", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:49.625347Z"}
+{"event": "[BT] BUY 2.751455 BTC/USD @ 54.52 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:49.642672Z"}
+{"event": "[BT] CLOSE BTC/USD @ 53.60 pnl=-2.52 (-1.68%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:49.660103Z"}
+{"event": "[BT] BUY 2.688138 BTC/USD @ 55.80 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:49.677469Z"}
+{"event": "[BT] CLOSE BTC/USD @ 59.90 pnl=11.03 (7.35%) reason=profit_target_reached", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:49.694933Z"}
+{"event": "[BT] BUY 2.503216 BTC/USD @ 59.92 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:49.712689Z"}
+{"event": "[BT] CLOSE BTC/USD @ 63.95 pnl=10.08 (6.72%) reason=profit_target_reached", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:49.730616Z"}
+{"event": "[BT] BUY 2.403562 BTC/USD @ 62.41 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:49.747962Z"}
+{"event": "[BT] CLOSE BTC/USD @ 63.23 pnl=1.98 (1.32%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:49.765254Z"}
+{"event": "[BT] BUY 2.388881 BTC/USD @ 62.79 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:49.782869Z"}
+{"event": "[BT] CLOSE BTC/USD @ 58.80 pnl=-9.53 (-6.35%) reason=stop_loss_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:49.800447Z"}
+{"event": "[BT] BUY 2.524888 BTC/USD @ 59.41 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:49.818018Z"}
+{"event": "[BT] CLOSE BTC/USD @ 61.63 pnl=5.60 (3.73%) reason=profit_target_reached", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:49.835477Z"}
+{"event": "[BT] BUY 2.448595 BTC/USD @ 61.26 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:49.853103Z"}
+{"event": "[BT] CLOSE BTC/USD @ 61.09 pnl=-0.42 (-0.28%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:49.870538Z"}
+{"event": "[BT] BUY 2.325922 BTC/USD @ 64.49 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:49.887751Z"}
+{"event": "[BT] CLOSE BTC/USD @ 61.27 pnl=-7.50 (-5.00%) reason=stop_loss_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:49.938846Z"}
+{"event": "[BT] BUY 2.604317 BTC/USD @ 57.60 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:49.964856Z"}
+{"event": "[BT] CLOSE BTC/USD @ 56.09 pnl=-3.92 (-2.62%) reason=stop_loss_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:49.989289Z"}
+{"event": "[BT] BUY 2.808719 BTC/USD @ 53.41 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:50.016059Z"}
+{"event": "[BT] CLOSE BTC/USD @ 56.28 pnl=8.08 (5.39%) reason=profit_target_reached", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:50.038584Z"}
+{"event": "[BT] BUY 2.632583 BTC/USD @ 56.98 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:50.061042Z"}
+{"event": "[BT] CLOSE BTC/USD @ 55.01 pnl=-5.18 (-3.46%) reason=stop_loss_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:50.104828Z"}
+{"event": "[BT] BUY 2.795545 BTC/USD @ 53.66 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:50.131256Z"}
+{"event": "[BT] CLOSE BTC/USD @ 59.80 pnl=17.17 (11.44%) reason=profit_target_reached", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:50.170833Z"}
+{"event": "[BT] BUY 2.571216 BTC/USD @ 58.34 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:50.195959Z"}
+{"event": "[BT] CLOSE BTC/USD @ 56.56 pnl=-4.57 (-3.05%) reason=stop_loss_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:50.238649Z"}
+{"event": "[BT] BUY 2.620159 BTC/USD @ 57.25 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:50.270828Z"}
+{"event": "[BT] CLOSE BTC/USD @ 58.71 pnl=3.83 (2.55%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:50.288456Z"}
+{"event": "[BT] BUY 2.532476 BTC/USD @ 59.23 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:50.306270Z"}
+{"event": "[BT] CLOSE BTC/USD @ 57.08 pnl=-5.45 (-3.63%) reason=stop_loss_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:50.323773Z"}
+{"event": "[BT] BUY 2.755768 BTC/USD @ 54.43 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:50.342023Z"}
+{"event": "[BT] CLOSE BTC/USD @ 55.73 pnl=3.58 (2.38%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:50.359716Z"}
+{"event": "[BT] BUY 2.697432 BTC/USD @ 55.61 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:50.377125Z"}
+{"event": "[BT] CLOSE BTC/USD @ 51.96 pnl=-9.85 (-6.57%) reason=stop_loss_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:50.394619Z"}
+{"event": "[BT] BUY 2.757808 BTC/USD @ 54.39 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:50.412400Z"}
+{"event": "[BT] CLOSE BTC/USD @ 56.08 pnl=4.65 (3.10%) reason=profit_target_reached", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:50.429860Z"}
+{"event": "[BT] BUY 2.700884 BTC/USD @ 55.54 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:50.447466Z"}
+{"event": "[BT] CLOSE BTC/USD @ 54.96 pnl=-1.56 (-1.04%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:50.464811Z"}
+{"event": "[BT] BUY 2.704261 BTC/USD @ 55.47 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:50.482069Z"}
+{"event": "[BT] CLOSE BTC/USD @ 53.94 pnl=-4.12 (-2.75%) reason=stop_loss_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:50.499647Z"}
+{"event": "[BT] BUY 2.939193 BTC/USD @ 51.03 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:50.517023Z"}
+{"event": "[BT] CLOSE BTC/USD @ 51.69 pnl=1.94 (1.29%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:50.534179Z"}
+{"event": "[BT] BUY 3.078996 BTC/USD @ 48.72 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:50.551802Z"}
+{"event": "[BT] CLOSE BTC/USD @ 49.48 pnl=2.34 (1.56%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:50.569182Z"}
+{"event": "[BT] BUY 3.217073 BTC/USD @ 46.63 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:50.586492Z"}
+{"event": "[BT] CLOSE BTC/USD @ 46.44 pnl=-0.60 (-0.40%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:50.604208Z"}
+{"event": "[BT] BUY 3.247511 BTC/USD @ 46.19 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:50.622245Z"}
+{"event": "[BT] CLOSE BTC/USD @ 49.48 pnl=10.70 (7.13%) reason=profit_target_reached", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:50.639834Z"}
+{"event": "[BT] BUY 3.166159 BTC/USD @ 47.38 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:50.657056Z"}
+{"event": "[BT] CLOSE BTC/USD @ 44.69 pnl=-8.49 (-5.66%) reason=stop_loss_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:50.674332Z"}
+{"event": "[BT] BUY 3.445155 BTC/USD @ 43.54 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:50.691842Z"}
+{"event": "[BT] CLOSE BTC/USD @ 41.58 pnl=-6.74 (-4.49%) reason=stop_loss_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:50.709263Z"}
+{"event": "[BT] BUY 3.694455 BTC/USD @ 40.60 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:50.729591Z"}
+{"event": "[BT] CLOSE BTC/USD @ 41.28 pnl=2.52 (1.68%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:50.748755Z"}
+{"event": "[BT] BUY 3.524467 BTC/USD @ 42.56 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:50.769906Z"}
+{"event": "[BT] CLOSE BTC/USD @ 45.38 pnl=9.96 (6.64%) reason=profit_target_reached", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:50.790172Z"}
+{"event": "[BT] BUY 3.405415 BTC/USD @ 44.05 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:50.809114Z"}
+{"event": "[BT] CLOSE BTC/USD @ 48.70 pnl=15.83 (10.55%) reason=profit_target_reached", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:50.864581Z"}
+{"event": "[BT] BUY 2.854026 BTC/USD @ 52.56 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:50.890446Z"}
+{"event": "[BT] CLOSE BTC/USD @ 52.13 pnl=-1.22 (-0.81%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:50.912057Z"}
+{"event": "[BT] BUY 3.167802 BTC/USD @ 47.35 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:50.938824Z"}
+{"event": "[BT] CLOSE BTC/USD @ 47.19 pnl=-0.50 (-0.33%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:50.962802Z"}
+{"event": "[BT] BUY 3.169177 BTC/USD @ 47.33 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:50.982496Z"}
+{"event": "[BT] CLOSE BTC/USD @ 42.98 pnl=-13.80 (-9.20%) reason=stop_loss_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:51.003929Z"}
+{"event": "[BT] BUY 3.479890 BTC/USD @ 43.10 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:51.030896Z"}
+{"event": "[BT] CLOSE BTC/USD @ 42.76 pnl=-1.20 (-0.80%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:51.059659Z"}
+{"event": "[BT] BUY 3.621803 BTC/USD @ 41.42 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:51.083953Z"}
+{"event": "[BT] CLOSE BTC/USD @ 42.45 pnl=3.76 (2.51%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:51.109548Z"}
+{"event": "[BT] BUY 3.396649 BTC/USD @ 44.16 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:51.131319Z"}
+{"event": "[BT] CLOSE BTC/USD @ 43.30 pnl=-2.92 (-1.94%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:51.166892Z"}
+{"event": "[BT] BUY 3.432507 BTC/USD @ 43.70 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:51.201507Z"}
+{"event": "[BT] CLOSE BTC/USD @ 42.56 pnl=-3.93 (-2.62%) reason=stop_loss_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:51.219568Z"}
+{"event": "[BT] BUY 3.639337 BTC/USD @ 41.22 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:51.237297Z"}
+{"event": "[BT] CLOSE BTC/USD @ 41.35 pnl=0.48 (0.32%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:51.254865Z"}
+{"event": "[BT] BUY 3.553404 BTC/USD @ 42.21 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:51.272530Z"}
+{"event": "[BT] CLOSE BTC/USD @ 41.26 pnl=-3.38 (-2.25%) reason=stop_loss_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:51.289968Z"}
+{"event": "[BT] BUY 3.988481 BTC/USD @ 37.61 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:51.307836Z"}
+{"event": "[BT] CLOSE BTC/USD @ 38.49 pnl=3.51 (2.34%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:51.325461Z"}
+{"event": "[BT] BUY 4.163025 BTC/USD @ 36.03 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:51.344098Z"}
+{"event": "[BT] CLOSE BTC/USD @ 36.21 pnl=0.73 (0.49%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:51.363120Z"}
+{"event": "[BT] BUY 3.867587 BTC/USD @ 38.78 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:51.382145Z"}
+{"event": "[BT] CLOSE BTC/USD @ 38.76 pnl=-0.10 (-0.07%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:51.401631Z"}
+{"event": "[BT] BUY 4.063578 BTC/USD @ 36.91 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:51.419912Z"}
+{"event": "[BT] CLOSE BTC/USD @ 34.76 pnl=-8.77 (-5.84%) reason=stop_loss_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:51.438735Z"}
+{"event": "[BT] BUY 4.122803 BTC/USD @ 36.38 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:51.461247Z"}
+{"event": "[BT] CLOSE BTC/USD @ 36.36 pnl=-0.10 (-0.07%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:51.482939Z"}
+{"event": "[BT] BUY 4.038412 BTC/USD @ 37.14 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:51.505072Z"}
+{"event": "[BT] CLOSE BTC/USD @ 38.52 pnl=5.56 (3.71%) reason=profit_target_reached", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:51.523842Z"}
+{"event": "[BT] BUY 3.901774 BTC/USD @ 38.44 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:51.546610Z"}
+{"event": "[BT] CLOSE BTC/USD @ 37.97 pnl=-1.85 (-1.23%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:51.571509Z"}
+{"event": "[BT] BUY 4.106138 BTC/USD @ 36.53 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:51.598170Z"}
+{"event": "[BT] CLOSE BTC/USD @ 32.03 pnl=-18.50 (-12.33%) reason=stop_loss_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:51.620242Z"}
+{"event": "[BT] BUY 4.986405 BTC/USD @ 30.08 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:51.638634Z"}
+{"event": "[BT] CLOSE BTC/USD @ 30.00 pnl=-0.42 (-0.28%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:51.656815Z"}
+{"event": "[BT] BUY 5.035627 BTC/USD @ 29.79 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:51.674232Z"}
+{"event": "[BT] CLOSE BTC/USD @ 30.27 pnl=2.42 (1.61%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:51.691587Z"}
+{"event": "[BT] BUY 4.980872 BTC/USD @ 30.12 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:51.709152Z"}
+{"event": "[BT] CLOSE BTC/USD @ 30.31 pnl=0.96 (0.64%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:51.727590Z"}
+{"event": "[BT] BUY 4.798125 BTC/USD @ 31.26 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:51.745366Z"}
+{"event": "[BT] CLOSE BTC/USD @ 30.16 pnl=-5.31 (-3.54%) reason=stop_loss_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:51.763230Z"}
+{"event": "[BT] BUY 5.032021 BTC/USD @ 29.81 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:51.780554Z"}
+{"event": "[BT] CLOSE BTC/USD @ 27.89 pnl=-9.64 (-6.43%) reason=stop_loss_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:51.797966Z"}
+{"event": "[BT] BUY 5.176308 BTC/USD @ 28.98 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:51.815722Z"}
+{"event": "[BT] CLOSE BTC/USD @ 29.02 pnl=0.23 (0.15%) reason=trailing_stop_hit", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:51.833989Z"}
+{"event": "[BT] BUY 5.069049 BTC/USD @ 29.59 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:51.851604Z"}
+{"event": "[BT] CLOSE BTC/USD @ 31.42 pnl=9.25 (6.17%) reason=profit_target_reached", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:51.868994Z"}
+{"event": "[BT] BUY 4.576831 BTC/USD @ 32.77 (regime=trending)", "logger": "backtest", "level": "info", "timestamp": "2026-07-17T15:16:51.886269Z"}
+============================================================
+BACKTEST RESULTS: BTC/USD
+============================================================
+Start equity:      $10,000.00
+End equity:        $9,942.38
+Total return:      -0.58%
+Trades:            198
+Wins / Losses:     87 / 111
+Win rate:          43.9%
+Max drawdown:      -1.15%
+Sharpe (ann.):     -0.53
+Regimes seen:      {'trending': 203, 'neutral': 197}
+============================================================
+

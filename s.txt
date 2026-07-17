@@ -1,0 +1,6 @@
+Traceback (most recent call last):
+  File "<string>", line 1, in <module>
+    import os; print('metrics size', os.path.getsize('src/metrics.py')); print('alerts size', os.path.getsize('src/alerts.py'))
+                                     ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+  File "<frozen genericpath>", line 86, in getsize
+FileNotFoundError: [WinError 2] The system cannot find the file specified: 'src/metrics.py'

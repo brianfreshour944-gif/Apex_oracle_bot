@@ -201,7 +201,7 @@ async def run_backtest(
 
     # Close any remaining position at the last price (mark-to-market)
     if open_pos is not None:
-        last_row = bars[-1]
+        last_row = bars.row(-1, named=True)
         last_price = float(last_row["close"])
         qty = open_pos["qty"]
         if open_pos["side"] == "long":
