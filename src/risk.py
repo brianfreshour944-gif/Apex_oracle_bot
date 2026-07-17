@@ -35,7 +35,7 @@ class RiskManager:
             if equity > self.peak_equity:
                 self.peak_equity = equity
 
-            # Calculate drawdown
+            # Calculate drawdown from peak
             drawdown_pct = ((equity - self.peak_equity) / self.peak_equity) * 100 if self.peak_equity > 0 else 0
 
             # Check if we've hit max drawdown limit
@@ -51,15 +51,21 @@ class RiskManager:
             # Reset daily PnL if new day
             now = datetime.now(timezone.utc)
             if now.day != self.last_check_time.day:
-                self.daily_pnl = 0
+                self.daily_pnl = 0.0
                 self.last_check_time = now
+                # Reset peak equity to current equity at start of new day
+                self.peak_equity = equity
 
-            # Update daily PnL
-            self.daily_pnl = equity - (self.peak_equity if self.peak_equity > 0 else equity)
+            # Update daily PnL (actual change since start of day)
+            # Track start-of-day equity separately
+            if not hasattr(self, 'start_of_day_equity'):
+                self.start_of_day_equity = equity
+            self.daily_pnl = equity - self.start_of_day_equity
 
-            # Check daily loss limit
-            if self.daily_pnl < settings.DAILY_LOSS_LIMIT * 1000:  # Convert % to absolute
-                logger.critical(f"DAILY LOSS LIMIT HIT: ${self.daily_pnl:.2f}")
+            # Check daily loss limit (scaled to actual equity)
+            daily_loss_limit_abs = settings.DAILY_LOSS_LIMIT / 100.0 * equity
+            if self.daily_pnl < daily_loss_limit_abs:
+                logger.critical(f"DAILY LOSS LIMIT HIT: ${self.daily_pnl:.2f} (limit: ${daily_loss_limit_abs:.2f})")
                 return {
                     "status": "killswitch_activated",
                     "reason": "daily_loss_limit_exceeded",
@@ -80,8 +86,10 @@ class RiskManager:
             # Calculate current exposure
             current_exposure = sum(float(p.get("market_value", 0)) for p in positions)
 
-            if current_exposure > settings.MAX_PORTFOLIO_VALUE * 1000:  # Convert % to absolute
-                logger.warning(f"Portfolio value cap exceeded: ${current_exposure:.2f}")
+            # Check portfolio value cap (scaled to actual equity)
+            max_portfolio_abs = settings.MAX_PORTFOLIO_VALUE / 100.0 * equity
+            if current_exposure > max_portfolio_abs:
+                logger.warning(f"Portfolio value cap exceeded: ${current_exposure:.2f} (cap: ${max_portfolio_abs:.2f})")
                 return {
                     "status": "exposure_limit_exceeded",
                     "reason": "max_portfolio_value_exceeded",
@@ -101,6 +109,7 @@ class RiskManager:
 
         except Exception as e:
             logger.error(f"Risk update failed: {e}")
+            # Don't treat transient errors as killswitch - return error but no liquidation
             return {
                 "status": "error",
                 "error": str(e),
@@ -138,9 +147,10 @@ class RiskManager:
             return 0.0, f"error: {e}"
 
     async def check_killswitch_conditions(self) -> bool:
-        """Check if killswitch conditions are met."""
+        """Check if killswitch conditions are met (only real risk breaches, not errors)."""
         status = await self.update_account_status()
-        return status.get("status") in ["killswitch_activated", "error"]
+        # Only activate on actual risk breaches, NOT on transient errors
+        return status.get("status") == "killswitch_activated"
 
     async def liquidate_all_positions(self) -> Dict[str, Any]:
         """Liquidate all open positions."""

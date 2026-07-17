@@ -70,15 +70,54 @@ class TradingStrategy:
             return {"regime": "neutral", "confidence": 0.0}
 
     def _calculate_hurst(self, returns: np.ndarray) -> float:
-        """Calculate Hurst exponent (simplified)."""
-        if len(returns) < 10:
+        """Calculate Hurst exponent using rescaled range (R/S) analysis."""
+        if len(returns) < 20:
             return 0.5
 
-        # Simplified Hurst calculation
-        lags = range(2, 20)
-        tau = [np.sqrt(np.std(np.subtract(returns[:lag], returns[lag:])) for lag in lags)]
-        poly = np.polyfit(np.log(lags), np.log(tau), 1)
-        return poly[0] * 2.0
+        # Use a proper R/S analysis implementation
+        lags = range(2, min(20, len(returns) // 2))
+        tau = []
+
+        for lag in lags:
+            # Calculate rescaled range for this lag
+            # Split returns into non-overlapping windows of size lag
+            n_windows = len(returns) // lag
+            if n_windows < 1:
+                continue
+
+            rs_values = []
+            for i in range(n_windows):
+                window = returns[i * lag: (i + 1) * lag]
+                if len(window) < 2:
+                    continue
+
+                # Mean-adjusted series
+                mean_adj = window - np.mean(window)
+
+                # Cumulative deviation
+                cum_dev = np.cumsum(mean_adj)
+
+                # Range
+                r = np.max(cum_dev) - np.min(cum_dev)
+
+                # Standard deviation
+                s = np.std(window)
+
+                if s > 0:
+                    rs_values.append(r / s)
+
+            if rs_values:
+                tau.append(np.mean(rs_values))
+
+        if len(tau) < 2:
+            return 0.5
+
+        # Fit line to log-log plot
+        poly = np.polyfit(np.log(list(lags)[:len(tau)]), np.log(tau), 1)
+        hurst = poly[0]
+
+        # Clamp to reasonable range
+        return float(np.clip(hurst, 0.0, 1.0))
 
     def _calculate_atr(self, bars_df: pl.DataFrame) -> float:
         """Calculate Average True Range."""
@@ -175,8 +214,9 @@ class TradingStrategy:
                         "rsi": rsi
                     }
 
-            # Check if we should exit a position
+            # Check if we should exit a position (regime flip OR price-based exits)
             if position:
+                # Regime-based exit
                 if (regime == "trending" and rsi > settings.RSI_NEUTRAL_SELL) or \
                    (regime == "mean_reverting" and rsi < settings.RSI_NEUTRAL_BUY):
                     return {
@@ -186,6 +226,11 @@ class TradingStrategy:
                         "regime": regime,
                         "rsi": rsi
                     }
+
+                # Price-based exit checks
+                exit_signal = self._check_price_based_exits(symbol, current_price, position)
+                if exit_signal:
+                    return exit_signal
 
             return {
                 "symbol": symbol,
@@ -203,3 +248,93 @@ class TradingStrategy:
                 "reason": "error",
                 "error": str(e)
             }
+
+    def _check_price_based_exits(self, symbol: str, current_price: float, position: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """Check price-based exit conditions: stop loss, profit target, trailing stop, max hold."""
+        try:
+            entry_price = float(position.get("avg_entry_price", 0))
+            qty = float(position.get("qty", 0))
+            side = "long" if qty > 0 else "short"
+
+            if entry_price <= 0:
+                return None
+
+            # Calculate P&L percentage
+            if side == "long":
+                pnl_pct = (current_price - entry_price) / entry_price * 100
+            else:
+                pnl_pct = (entry_price - current_price) / entry_price * 100
+
+            # Check profit target
+            if pnl_pct >= settings.PROFIT_TARGET_PCT * 100:
+                return {
+                    "symbol": symbol,
+                    "action": "close",
+                    "reason": "profit_target_reached",
+                    "pnl_pct": pnl_pct
+                }
+
+            # Check stop loss
+            if pnl_pct <= -settings.STOP_LOSS_PCT * 100:
+                return {
+                    "symbol": symbol,
+                    "action": "close",
+                    "reason": "stop_loss_hit",
+                    "pnl_pct": pnl_pct
+                }
+
+            # Trailing stop (if enabled)
+            if settings.TRAILING_STOP_ENABLED:
+                # Track peak price for trailing stop
+                if not hasattr(self, '_trailing_peaks'):
+                    self._trailing_peaks = {}
+
+                if symbol not in self._trailing_peaks:
+                    self._trailing_peaks[symbol] = current_price
+
+                # Update peak
+                if side == "long":
+                    self._trailing_peaks[symbol] = max(self._trailing_peaks[symbol], current_price)
+                    peak = self._trailing_peaks[symbol]
+                    # Check if price dropped from peak by trailing distance
+                    if (peak - current_price) / peak * 100 >= settings.TRAILING_DISTANCE_PCT * 100:
+                        # Only activate after profit threshold reached
+                        if (peak - entry_price) / entry_price * 100 >= settings.TRAILING_ACTIVATION_PCT * 100:
+                            return {
+                                "symbol": symbol,
+                                "action": "close",
+                                "reason": "trailing_stop_hit",
+                                "peak": peak,
+                                "pnl_pct": pnl_pct
+                            }
+                else:  # short position
+                    self._trailing_peaks[symbol] = min(self._trailing_peaks[symbol], current_price)
+                    peak = self._trailing_peaks[symbol]
+                    if (current_price - peak) / peak * 100 >= settings.TRAILING_DISTANCE_PCT * 100:
+                        if (entry_price - peak) / entry_price * 100 >= settings.TRAILING_ACTIVATION_PCT * 100:
+                            return {
+                                "symbol": symbol,
+                                "action": "close",
+                                "reason": "trailing_stop_hit",
+                                "peak": peak,
+                                "pnl_pct": pnl_pct
+                            }
+
+            # Max hold time check
+            if "created_at" in position:
+                from datetime import datetime, timezone
+                created = datetime.fromisoformat(position["created_at"].replace("Z", "+00:00"))
+                hold_hours = (datetime.now(timezone.utc) - created).total_seconds() / 3600
+                if hold_hours >= settings.MAX_HOLD_HOURS:
+                    return {
+                        "symbol": symbol,
+                        "action": "close",
+                        "reason": "max_hold_time_exceeded",
+                        "hold_hours": hold_hours
+                    }
+
+            return None
+
+        except Exception as e:
+            logger.error(f"Price-based exit check failed: {e}")
+            return None

@@ -98,6 +98,15 @@ async def run_trading_bot() -> None:
 
                         # Execute signal if not "hold" or "stand_aside"
                         if signal["action"] in ["buy", "sell"]:
+                            # Check position limit before entering
+                            risk_status = await risk_manager.update_account_status()
+                            if risk_status["status"] == "position_limit_exceeded":
+                                logger.warning(f"Skipping entry for {symbol}: position limit reached")
+                                continue
+                            if risk_status["status"] == "exposure_limit_exceeded":
+                                logger.warning(f"Skipping entry for {symbol}: exposure cap reached")
+                                continue
+
                             # Calculate position size
                             position_size, sizing_status = risk_manager.calculate_position_size(
                                 symbol,
@@ -133,7 +142,7 @@ async def run_trading_bot() -> None:
                                 type="market"
                             )
 
-                            logger.info(f"Position closed: {symbol} (was {qty})")
+                            logger.info(f"Position closed: {symbol} (was {qty}) - reason: {signal.get('reason', 'unknown')}")
                             logger.debug(f"Close order result: {order_result}")
 
                     except Exception as e:
