@@ -53,8 +53,6 @@ class RiskManager:
             if now.day != self.last_check_time.day:
                 self.daily_pnl = 0.0
                 self.last_check_time = now
-                # Reset peak equity to current equity at start of new day
-                self.peak_equity = equity
 
             # Update daily PnL (actual change since start of day)
             # Track start-of-day equity separately
