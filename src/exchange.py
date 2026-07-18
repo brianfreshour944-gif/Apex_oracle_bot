@@ -261,6 +261,8 @@ class AlpacaExchange:
                     await ws.send(json.dumps(auth_message))
                     auth_response = json.loads(await ws.recv())
                     logger.info(f"WebSocket Auth Response: {auth_response}")
+                    if isinstance(auth_response, list) and auth_response[0].get("T") == "error":
+                        raise ValueError(f"WebSocket auth failed: {auth_response[0].get('msg')}")
                     
                     # Subscribe
                     sub_message = {
@@ -270,6 +272,8 @@ class AlpacaExchange:
                     await ws.send(json.dumps(sub_message))
                     sub_response = json.loads(await ws.recv())
                     logger.info(f"WebSocket Subscription Response: {sub_response}")
+                    if isinstance(sub_response, list) and sub_response[0].get("T") == "error":
+                        logger.error(f"WebSocket subscription failed: {sub_response[0].get('msg')}")
                     
                     # Listen for messages
                     while True:

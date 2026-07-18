@@ -126,14 +126,14 @@ class TradingBotSettings(BaseSettings):
 
     # --- Regime Classification Thresholds ---
     HURST_TREND_UP: float = Field(
-        default=0.52,
-        description="Hurst exponent threshold for trending regime",
+        default=0.65,
+        description="Hurst exponent threshold for trending regime (adjusted for R/S estimator bias)",
         gt=0,
         lt=1
     )
     HURST_MEAN_REVERT: float = Field(
-        default=0.48,
-        description="Hurst exponent threshold for mean-reversion regime",
+        default=0.55,
+        description="Hurst exponent threshold for mean-reversion regime (adjusted for R/S estimator bias)",
         gt=0,
         lt=1
     )
