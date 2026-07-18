@@ -204,6 +204,7 @@ class AlpacaExchange:
         df = df.rename({k: v for k, v in rename_map.items() if k in df.columns})
         return df
 
+    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
     async def get_positions(self) -> List[Dict[str, Any]]:
         """Get open positions."""
         if not self.client:
@@ -213,6 +214,7 @@ class AlpacaExchange:
         response.raise_for_status()
         return response.json()
 
+    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
     async def create_order(
         self,
         symbol: str,
