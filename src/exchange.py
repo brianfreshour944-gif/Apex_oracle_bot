@@ -248,6 +248,10 @@ class AlpacaExchange:
                 async with websockets.connect(wss_url) as ws:
                     logger.info("Connected to Alpaca Crypto WebSocket")
                     
+                    # Wait for initial 'connected' message
+                    connected_msg = json.loads(await ws.recv())
+                    logger.debug(f"WebSocket connected: {connected_msg}")
+                    
                     # Authenticate
                     auth_message = {
                         "action": "auth",
