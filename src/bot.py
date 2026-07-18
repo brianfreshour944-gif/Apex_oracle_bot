@@ -12,6 +12,7 @@ from src.exchange import AlpacaExchange
 from src.api import start_fastapi_server_async
 from src.strategies import TradingStrategy
 from src.risk import RiskManager
+from src.telegram_alerts import send_telegram_alert
 
 logger = get_logger("bot")
 
@@ -27,6 +28,25 @@ async def process_signal_for_symbol(symbol: str, current_price: float, risk_mana
         positions = await ex.get_positions()
         position_dict = {p["symbol"].replace("/", ""): p for p in positions}
         current_position = position_dict.get(symbol.replace("/", ""))
+
+        # Trailing Stop Check
+        if current_position:
+            avg_entry_price = float(current_position.get("avg_entry_price", 0))
+            qty = float(current_position.get("qty", 0))
+            trailing_action = risk_manager.check_trailing_stop(symbol, current_price, avg_entry_price, qty)
+            
+            if trailing_action == "close":
+                side = "sell" if qty > 0 else "buy"
+                qty_abs = abs(qty)
+                order_result = await ex.create_order(
+                    symbol=symbol,
+                    qty=qty_abs,
+                    side=side,
+                    type="market"
+                )
+                logger.info(f"Trailing Stop Executed: {symbol}")
+                await send_telegram_alert(f"🚨 <b>Trailing Stop Triggered</b>\nSymbol: {symbol}\nClosed {qty} @ ${current_price:.2f}")
+                return  # Skip standard signals
 
         # Generate trading signal
         signal = await strategy.generate_trading_signal(
@@ -69,6 +89,7 @@ async def process_signal_for_symbol(symbol: str, current_price: float, risk_mana
 
             logger.info(f"Order executed: {signal['action']} {position_size} {symbol} @ ${current_price:.2f}")
             logger.debug(f"Order result: {order_result}")
+            await send_telegram_alert(f"📈 <b>Order Executed</b>\nSymbol: {symbol}\nAction: {signal['action'].upper()}\nQty: {position_size}\nPrice: ${current_price:.2f}")
 
         elif signal["action"] == "close" and current_position:
             # Close existing position
@@ -85,6 +106,7 @@ async def process_signal_for_symbol(symbol: str, current_price: float, risk_mana
 
             logger.info(f"Position closed: {symbol} (was {qty}) - reason: {signal.get('reason', 'unknown')}")
             logger.debug(f"Close order result: {order_result}")
+            await send_telegram_alert(f"📉 <b>Position Closed</b>\nSymbol: {symbol}\nReason: {signal.get('reason', 'unknown')}")
 
     except Exception as e:
         logger.error(f"Error processing {symbol}: {e}")
@@ -97,6 +119,7 @@ async def monitor_killswitch(risk_manager: RiskManager) -> None:
         try:
             if await risk_manager.check_killswitch_conditions():
                 logger.critical("KILLSWITCH ACTIVATED - Liquidating all positions")
+                await send_telegram_alert(f"💀 <b>KILLSWITCH ACTIVATED</b>\nLiquidating all positions immediately.")
                 await risk_manager.liquidate_all_positions()
                 os._exit(1)
             await asyncio.sleep(10)

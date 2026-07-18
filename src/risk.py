@@ -19,6 +19,7 @@ class RiskManager:
         self.peak_equity = 0.0
         self.daily_pnl = 0.0
         self.open_positions = []
+        self.peak_prices: Dict[str, float] = {}  # Tracks highest price seen while in position
         self.last_check_time = datetime.now(timezone.utc)
 
     async def update_account_status(self) -> Dict[str, Any]:
@@ -153,6 +154,42 @@ class RiskManager:
         except Exception as e:
             logger.error(f"Position sizing failed: {e}")
             return 0.0, f"error: {e}"
+
+    def check_trailing_stop(self, symbol: str, current_price: float, avg_entry_price: float, qty: float) -> str:
+        """
+        Check if a trailing stop should be activated or triggered.
+        Returns: 'close' if triggered, 'hold' otherwise.
+        """
+        if not settings.TRAILING_STOP_ENABLED or avg_entry_price <= 0:
+            return "hold"
+
+        # Note: This logic works best for long positions. 
+        # Short positions would track lowest price. Assuming longs for crypto default.
+        is_long = float(qty) > 0
+        if not is_long:
+            return "hold" # Simplified: only trail longs
+
+        # Calculate unrealized PnL %
+        unrealized_pct = (current_price - avg_entry_price) / avg_entry_price
+
+        # Have we reached the activation threshold?
+        if unrealized_pct >= settings.TRAILING_ACTIVATION_PCT:
+            # Track peak price
+            if symbol not in self.peak_prices or current_price > self.peak_prices[symbol]:
+                self.peak_prices[symbol] = current_price
+                
+        # If we are tracking a peak price, check if we've fallen below the distance
+        if symbol in self.peak_prices:
+            peak = self.peak_prices[symbol]
+            drawdown_from_peak = (peak - current_price) / peak
+            
+            if drawdown_from_peak >= settings.TRAILING_DISTANCE_PCT:
+                logger.info(f"Trailing stop triggered for {symbol}: Peak {peak:.2f}, Current {current_price:.2f}")
+                # Reset peak tracker
+                del self.peak_prices[symbol]
+                return "close"
+                
+        return "hold"
 
     async def check_killswitch_conditions(self) -> bool:
         """Check if killswitch conditions are met (only real risk breaches, not errors)."""
