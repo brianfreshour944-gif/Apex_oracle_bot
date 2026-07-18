@@ -3,7 +3,7 @@
 from pathlib import Path
 from typing import List, Literal
 from pydantic_settings import BaseSettings, SettingsConfigDict
-from pydantic import Field, computed_field, field_validator
+from pydantic import Field, computed_field, field_validator, model_validator
 
 class TradingBotSettings(BaseSettings):
     """Modern Pydantic Settings V2 configuration with runtime validation."""
@@ -26,7 +26,7 @@ class TradingBotSettings(BaseSettings):
 
     # --- Database configuration ---
     DATABASE_URL: str = Field(
-        default="postgresql+psycopg2://postgres:postgres@localhost:5432/trading_bot",
+        default="sqlite:///data/bot.db",
         description="Database connection URL"
     )
 
@@ -295,6 +295,17 @@ class TradingBotSettings(BaseSettings):
             if v and not v.startswith(("http://", "https://")):
                 v = "https://" + v
         return v
+
+    @model_validator(mode="after")
+    def validate_credentials(self) -> "TradingBotSettings":
+        """Ensure Alpaca credentials are provided."""
+        # Note: In a real test environment, we might bypass this, but for the bot, it's strictly required
+        if not self.ALPACA_API_KEY or not self.ALPACA_SECRET_KEY:
+            raise ValueError(
+                "ALPACA_API_KEY and ALPACA_SECRET_KEY are required to run the bot. "
+                "Please set them in your environment variables or .env file."
+            )
+        return self
 
     def log_config(self) -> str:
         """Generate configuration summary for logging."""

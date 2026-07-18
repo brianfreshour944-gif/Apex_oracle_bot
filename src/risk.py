@@ -52,12 +52,22 @@ class RiskManager:
             now = datetime.now(timezone.utc)
             if now.day != self.last_check_time.day:
                 self.daily_pnl = 0.0
+                self.start_of_day_equity = equity  # FIX: must reset here too --
+                                                     # previously only set once
+                                                     # ever via hasattr, so this
+                                                     # day-boundary check updated
+                                                     # last_check_time but never
+                                                     # actually refreshed the
+                                                     # baseline daily_pnl is
+                                                     # computed from, making the
+                                                     # "daily" limit silently
+                                                     # track cumulative loss
+                                                     # since inception instead
                 self.last_check_time = now
 
             # Update daily PnL (actual change since start of day)
-            # Track start-of-day equity separately
             if not hasattr(self, 'start_of_day_equity'):
-                self.start_of_day_equity = equity
+                self.start_of_day_equity = equity  # first-ever call only
             self.daily_pnl = equity - self.start_of_day_equity
 
             # Check daily loss limit (scaled to actual equity)
