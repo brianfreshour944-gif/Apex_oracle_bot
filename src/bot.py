@@ -65,106 +65,97 @@ async def run_trading_bot() -> None:
         logger.info("FastAPI server started")
 
         # Main trading loop
-        logger.info("Bot initialization complete. Starting trading loop.")
+        logger.info("Bot initialization complete. Starting event-driven trading loop.")
 
-        while True:
-            try:
+        last_eval_time = {s: 0.0 for s in settings.SYMBOLS}
+
+        try:
+            async for bar_msg in ex.listen_crypto_bars(settings.SYMBOLS):
+                symbol = bar_msg.get("S")
+                current_price = float(bar_msg.get("c"))
+                
+                # Throttle evaluation to LOOP_INTERVAL_SEC to avoid REST rate limits on get_bars/get_positions
+                now = time.time()
+                if now - last_eval_time.get(symbol, 0) < settings.LOOP_INTERVAL_SEC:
+                    continue
+                last_eval_time[symbol] = now
+
                 # Check killswitch conditions first
                 if await risk_manager.check_killswitch_conditions():
                     logger.critical("KILLSWITCH ACTIVATED - Liquidating all positions")
                     await risk_manager.liquidate_all_positions()
                     break
 
-                # Get current positions (normalize symbols to remove slashes for matching)
-                positions = await ex.get_positions()
-                position_dict = {p["symbol"].replace("/", ""): p for p in positions}
+                try:
+                    # Get current positions
+                    positions = await ex.get_positions()
+                    position_dict = {p["symbol"].replace("/", ""): p for p in positions}
+                    current_position = position_dict.get(symbol.replace("/", ""))
 
-                # Analyze each symbol and generate signals
-                for symbol in settings.SYMBOLS:
-                    try:
-                        # Get current price using latest bar endpoint
-                        bars = await ex.get_latest_bar(symbol)
-                        if len(bars) == 0:
-                            logger.warning(f"No price data for {symbol}")
+                    # Generate trading signal
+                    signal = await strategy.generate_trading_signal(
+                        symbol,
+                        current_price,
+                        current_position
+                    )
+
+                    logger.info(f"Signal for {symbol} @ ${current_price:.2f}: {signal['action']} (regime: {signal['regime']}, RSI: {signal['rsi']:.2f})")
+
+                    # Execute signal if not "hold" or "stand_aside"
+                    if signal["action"] in ["buy", "sell"]:
+                        # Check position limit before entering
+                        risk_status = await risk_manager.update_account_status()
+                        if risk_status["status"] == "position_limit_exceeded":
+                            logger.warning(f"Skipping entry for {symbol}: position limit reached")
+                            continue
+                        if risk_status["status"] == "exposure_limit_exceeded":
+                            logger.warning(f"Skipping entry for {symbol}: exposure cap reached")
                             continue
 
-                        current_price = float(bars["close"][0])
-
-                        # Get current position for this symbol (normalized)
-                        current_position = position_dict.get(symbol.replace("/", ""))
-
-                        # Generate trading signal
-                        signal = await strategy.generate_trading_signal(
+                        # Calculate position size
+                        position_size, sizing_status = risk_manager.calculate_position_size(
                             symbol,
                             current_price,
-                            current_position
+                            signal["regime"]
                         )
 
-                        logger.info(f"Signal for {symbol}: {signal['action']} (regime: {signal['regime']}, RSI: {signal['rsi']:.2f})")
+                        if sizing_status != "ok":
+                            logger.warning(f"Position sizing failed for {symbol}: {sizing_status}")
+                            continue
 
-                        # Execute signal if not "hold" or "stand_aside"
-                        if signal["action"] in ["buy", "sell"]:
-                            # Check position limit before entering
-                            risk_status = await risk_manager.update_account_status()
-                            if risk_status["status"] == "position_limit_exceeded":
-                                logger.warning(f"Skipping entry for {symbol}: position limit reached")
-                                continue
-                            if risk_status["status"] == "exposure_limit_exceeded":
-                                logger.warning(f"Skipping entry for {symbol}: exposure cap reached")
-                                continue
+                        # Place order
+                        order_result = await ex.create_order(
+                            symbol=symbol,
+                            qty=position_size,
+                            side=signal["action"],
+                            type="market"
+                        )
 
-                            # Calculate position size
-                            position_size, sizing_status = risk_manager.calculate_position_size(
-                                symbol,
-                                current_price,
-                                signal["regime"]
-                            )
+                        logger.info(f"Order executed: {signal['action']} {position_size} {symbol} @ ${current_price:.2f}")
+                        logger.debug(f"Order result: {order_result}")
 
-                            if sizing_status != "ok":
-                                logger.warning(f"Position sizing failed for {symbol}: {sizing_status}")
-                                continue
+                    elif signal["action"] == "close" and current_position:
+                        # Close existing position
+                        qty = float(current_position["qty"])
+                        side = "sell" if qty > 0 else "buy"
+                        qty_abs = abs(qty)
 
-                            # Place order
-                            order_result = await ex.create_order(
-                                symbol=symbol,
-                                qty=position_size,
-                                side=signal["action"],
-                                type="market"
-                            )
+                        order_result = await ex.create_order(
+                            symbol=symbol,
+                            qty=qty_abs,
+                            side=side,
+                            type="market"
+                        )
 
-                            logger.info(f"Order executed: {signal['action']} {position_size} {symbol} @ ${current_price:.2f}")
-                            logger.debug(f"Order result: {order_result}")
+                        logger.info(f"Position closed: {symbol} (was {qty}) - reason: {signal.get('reason', 'unknown')}")
+                        logger.debug(f"Close order result: {order_result}")
 
-                        elif signal["action"] == "close" and current_position:
-                            # Close existing position
-                            qty = float(current_position["qty"])
-                            side = "sell" if qty > 0 else "buy"
-                            qty_abs = abs(qty)
+                except Exception as e:
+                    logger.error(f"Error processing {symbol}: {e}")
 
-                            order_result = await ex.create_order(
-                                symbol=symbol,
-                                qty=qty_abs,
-                                side=side,
-                                type="market"
-                            )
-
-                            logger.info(f"Position closed: {symbol} (was {qty}) - reason: {signal.get('reason', 'unknown')}")
-                            logger.debug(f"Close order result: {order_result}")
-
-                    except Exception as e:
-                        logger.error(f"Error processing {symbol}: {e}")
-
-                # Check risk status
-                risk_status = await risk_manager.update_account_status()
-                if risk_status["status"] != "risk_ok":
-                    logger.warning(f"Risk status: {risk_status['status']}")
-
-                # Sleep until next cycle
-                await asyncio.sleep(settings.LOOP_INTERVAL_SEC)
-
-            except Exception as e:
-                logger.error(f"Trading loop error: {e}")
-                await asyncio.sleep(60)  # Wait before retrying
+        except Exception as e:
+            logger.error(f"WebSocket stream error: {e}")
+            await asyncio.sleep(5)  # Wait before potential restart logic (handled externally)
 
     except KeyboardInterrupt:
         logger.info("Shutdown requested. Exiting gracefully.")

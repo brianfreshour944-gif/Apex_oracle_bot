@@ -3,8 +3,11 @@
   
 from __future__ import annotations  
   
-from typing import Any, Dict, List  
-  
+from typing import Any, Dict, List, AsyncGenerator
+import json
+import asyncio
+import websockets
+
 import httpx  
 from tenacity import retry, stop_after_attempt, wait_exponential  
   
@@ -233,3 +236,47 @@ class AlpacaExchange:
         response = await self.client.post("/v2/orders", json=order_data)
         response.raise_for_status()
         return response.json()
+
+    async def listen_crypto_bars(self, symbols: List[str]) -> AsyncGenerator[Dict[str, Any], None]:
+        """Listen to real-time crypto bars using Alpaca WebSocket API."""
+        wss_url = "wss://stream.data.alpaca.markets/v1beta3/crypto/us"
+        
+        while True:
+            try:
+                async with websockets.connect(wss_url) as ws:
+                    logger.info("Connected to Alpaca Crypto WebSocket")
+                    
+                    # Authenticate
+                    auth_message = {
+                        "action": "auth",
+                        "key": self.api_key,
+                        "secret": self.secret_key
+                    }
+                    await ws.send(json.dumps(auth_message))
+                    auth_response = json.loads(await ws.recv())
+                    logger.info(f"WebSocket Auth Response: {auth_response}")
+                    
+                    # Subscribe
+                    sub_message = {
+                        "action": "subscribe",
+                        "bars": symbols
+                    }
+                    await ws.send(json.dumps(sub_message))
+                    sub_response = json.loads(await ws.recv())
+                    logger.info(f"WebSocket Subscription Response: {sub_response}")
+                    
+                    # Listen for messages
+                    while True:
+                        message = await ws.recv()
+                        data = json.loads(message)
+                        for item in data:
+                            if item.get("T") == "b":
+                                yield item
+                                
+            except websockets.exceptions.ConnectionClosed as e:
+                logger.warning(f"WebSocket connection closed: {e}. Reconnecting in 5 seconds...")
+                await asyncio.sleep(5)
+            except Exception as e:
+                logger.error(f"WebSocket error: {e}. Reconnecting in 5 seconds...")
+                await asyncio.sleep(5)
+
