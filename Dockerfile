@@ -13,9 +13,7 @@ ENV POETRY_VERSION=1.7.1
 
 # Install system dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential \
     curl \
-    libpq-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # Install uv for modern dependency management
