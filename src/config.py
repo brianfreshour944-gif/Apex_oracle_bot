@@ -69,7 +69,7 @@ class TradingBotSettings(BaseSettings):
         le=1
     )
     MAX_SINGLE_TRADE_USD: float = Field(
-        default=150.0,
+        default=2500.0,
         description="Hard cap per trade size in USD",
         gt=0
     )
@@ -103,8 +103,8 @@ class TradingBotSettings(BaseSettings):
         le=0.5
     )
     STOP_LOSS_PCT: float = Field(
-        default=0.02,
-        description="Stop loss percentage (2%)",
+        default=0.04,
+        description="Stop loss percentage (4%)",
         gt=0,
         le=0.5
     )
@@ -126,13 +126,13 @@ class TradingBotSettings(BaseSettings):
 
     # --- Regime Classification Thresholds ---
     HURST_TREND_UP: float = Field(
-        default=0.65,
+        default=0.60,
         description="Hurst exponent threshold for trending regime (adjusted for R/S estimator bias)",
         gt=0,
         lt=1
     )
     HURST_MEAN_REVERT: float = Field(
-        default=0.55,
+        default=0.58,
         description="Hurst exponent threshold for mean-reversion regime (adjusted for R/S estimator bias)",
         gt=0,
         lt=1
@@ -143,25 +143,25 @@ class TradingBotSettings(BaseSettings):
         gt=0
     )
     RSI_OVERBOUGHT: float = Field(
-        default=70.0,
+        default=80.0,
         description="RSI ceiling for buys/sell trigger",
         gt=0,
         le=100
     )
     RSI_OVERSOLD: float = Field(
-        default=30.0,
+        default=25.0,
         description="RSI floor for sells/buy trigger",
         gt=0,
         lt=100
     )
     RSI_NEUTRAL_BUY: float = Field(
-        default=35.0,
+        default=25.0,
         description="RSI buy trigger in neutral regime",
         gt=0,
         lt=100
     )
     RSI_NEUTRAL_SELL: float = Field(
-        default=65.0,
+        default=55.0,
         description="RSI sell trigger in neutral regime",
         gt=0,
         lt=100
@@ -173,16 +173,16 @@ class TradingBotSettings(BaseSettings):
         description="Enable trailing stop loss"
     )
     TRAILING_ACTIVATION_PCT: float = Field(
-        default=0.015,
-        description="Activate trailing stop once in +1.5% profit",
+        default=0.04,
+        description="Activate trailing stop once in +4.0% profit",
         gt=0,
-        le=0.1
+        le=0.2
     )
     TRAILING_DISTANCE_PCT: float = Field(
-        default=0.01,
-        description="Exit if price falls 1.0% off its peak",
+        default=0.03,
+        description="Exit if price falls 3.0% off its peak",
         gt=0,
-        le=0.1
+        le=0.2
     )
 
     # --- Loop / Server Configuration ---

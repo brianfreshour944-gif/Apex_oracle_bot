@@ -33,6 +33,7 @@ class TradingStrategy:
                     "hurst": 0.5,
                     "atr": 0.0,
                     "rsi": 50.0,
+                    "prev_rsi": 50.0,
                     "confidence": 0.0
                 }
 
@@ -52,7 +53,7 @@ class TradingStrategy:
             atr = self._calculate_atr(high_arr, low_arr, close_arr)
 
             # Calculate RSI
-            rsi = self._calculate_rsi(close_arr)
+            rsi, prev_rsi = self._calculate_rsi(close_arr)
 
             # Classify regime
             if hurst > settings.HURST_TREND_UP:
@@ -71,6 +72,7 @@ class TradingStrategy:
                 "hurst": float(hurst),
                 "atr": float(atr),
                 "rsi": float(rsi),
+                "prev_rsi": float(prev_rsi),
                 "confidence": self._calculate_regime_confidence(regime, hurst, atr, rsi)
             }
 
@@ -81,6 +83,7 @@ class TradingStrategy:
                 "hurst": 0.5,
                 "atr": 0.0,
                 "rsi": 50.0,
+                "prev_rsi": 50.0,
                 "confidence": 0.0
             }
 
@@ -147,10 +150,10 @@ class TradingStrategy:
         atr = np.mean(tr)
         return float(atr)
 
-    def _calculate_rsi(self, prices: np.ndarray, period: int = 14) -> float:
-        """Calculate Relative Strength Index."""
-        if len(prices) < period:
-            return 50.0
+    def _calculate_rsi(self, prices: np.ndarray, period: int = 14) -> Tuple[float, float]:
+        """Calculate Relative Strength Index. Returns (current_rsi, prev_rsi)."""
+        if len(prices) < period + 1:
+            return 50.0, 50.0
 
         deltas = np.diff(prices)
         seed = deltas[:period+1]
@@ -177,7 +180,9 @@ class TradingStrategy:
             rs = up / down if down != 0 else float('inf')
             rsi = np.append(rsi, 100 - (100 / (1 + rs)) if rs != float('inf') else 100.0)
 
-        return float(rsi[-1])
+        if len(rsi) >= 2:
+            return float(rsi[-1]), float(rsi[-2])
+        return float(rsi[-1]), 50.0
 
     def _calculate_regime_confidence(self, regime: str, hurst: float, atr: float, rsi: float) -> float:
         """Calculate confidence in regime classification."""
@@ -197,6 +202,7 @@ class TradingStrategy:
             regime_data = await self.analyze_market_regime(symbol)
             regime = regime_data["regime"]
             rsi = regime_data["rsi"]
+            prev_rsi = regime_data.get("prev_rsi", rsi)
 
             # Skip trading in high volatility regime
             if regime == "high_volatility":
@@ -211,22 +217,22 @@ class TradingStrategy:
             # Check if we should enter a position
             if not position:
                 if regime == "trending":
-                    # Buy on pullbacks while trend is intact (RSI not overbought)
-                    if rsi < settings.RSI_OVERBOUGHT:
+                    # Buy on deeper pullbacks while trend is intact
+                    if rsi < 55.0 and rsi > prev_rsi:
                         return {
                             "symbol": symbol,
                             "action": "buy",
-                            "reason": "trending_regime_buy_signal",
+                            "reason": "trending_pullback_bounce_buy",
                             "regime": regime,
                             "rsi": rsi
                         }
                 elif regime == "mean_reverting":
                     # Buy when oversold, sell (short) when overbought
-                    if rsi < settings.RSI_OVERSOLD:
+                    if rsi < settings.RSI_OVERSOLD and rsi > prev_rsi:
                         return {
                             "symbol": symbol,
                             "action": "buy",
-                            "reason": "mean_reverting_oversold_buy",
+                            "reason": "mean_reverting_bounce_buy",
                             "regime": regime,
                             "rsi": rsi
                         }
