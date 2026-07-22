@@ -12,23 +12,33 @@ from src.exchange import AlpacaExchange
 
 logger = get_logger(__name__)
 
+import time
+
 class TradingStrategy:
     """Modern trading strategy with regime classification and signal generation."""
 
-    def __init__(self, exchange: AlpacaExchange):
+    def __init__(self, exchange: AlpacaExchange, cache_ttl: float = 60.0):
         self.exchange = exchange
         self.current_regime = "neutral"
         self.last_analysis_time = None
+        self._regime_cache: Dict[str, Tuple[float, Dict[str, Any]]] = {}
+        self._cache_ttl = cache_ttl
 
     async def analyze_market_regime(self, symbol: str, timeframe: str = "1D", limit: int = 100) -> Dict[str, Any]:
-        """Analyze market regime using Hurst exponent, ATR, and RSI."""
+        """Analyze market regime using Hurst exponent, ATR, and RSI with TTL caching."""
+        now = time.monotonic()
+        if symbol in self._regime_cache:
+            cached_time, cached_res = self._regime_cache[symbol]
+            if now - cached_time < self._cache_ttl:
+                return cached_res
+
         try:
             # Get historical data
             bars_df = await self.exchange.get_bars(symbol, timeframe, limit)
 
             if len(bars_df) < 20:
                 logger.warning(f"Insufficient data for {symbol}, only {len(bars_df)} bars")
-                return {
+                res = {
                     "regime": "neutral",
                     "hurst": 0.5,
                     "atr": 0.0,
@@ -36,6 +46,9 @@ class TradingStrategy:
                     "prev_rsi": 50.0,
                     "confidence": 0.0
                 }
+                self._regime_cache[symbol] = (now, res)
+                return res
+
 
             # Extract numpy arrays explicitly (Polars Series -> numpy)
             close_arr = bars_df["close"].to_numpy()
@@ -55,6 +68,12 @@ class TradingStrategy:
             # Calculate RSI
             rsi, prev_rsi = self._calculate_rsi(close_arr)
 
+            # Multi-timeframe confirmation check (e.g. EMA slope on bars)
+            htf_trend = "neutral"
+            if len(close_arr) >= 20:
+                ema20 = float(bars_df["close"].ewm_mean(span=20)[-1])
+                htf_trend = "bullish" if close_arr[-1] > ema20 else "bearish"
+
             # Classify regime
             if hurst > settings.HURST_TREND_UP:
                 regime = "trending"
@@ -67,14 +86,19 @@ class TradingStrategy:
 
             self.current_regime = regime
 
-            return {
+            res = {
                 "regime": regime,
                 "hurst": float(hurst),
                 "atr": float(atr),
                 "rsi": float(rsi),
                 "prev_rsi": float(prev_rsi),
+                "htf_trend": htf_trend,
                 "confidence": self._calculate_regime_confidence(regime, hurst, atr, rsi)
             }
+            self._regime_cache[symbol] = (now, res)
+            return res
+
+
 
         except Exception as e:
             logger.error(f"Regime analysis failed: {e}")
@@ -88,17 +112,17 @@ class TradingStrategy:
             }
 
     def _calculate_hurst(self, returns: np.ndarray) -> float:
-        """Calculate Hurst exponent using rescaled range (R/S) analysis."""
+        """Calculate Hurst exponent using rescaled range (R/S) analysis with bias correction."""
         if len(returns) < 20:
             return 0.5
 
-        # Use a proper R/S analysis implementation
-        lags = range(2, min(20, len(returns) // 2))
+        # Extended lag range for multi-scale memory detection
+        max_lag = min(50, len(returns) // 2)
+        lags = list(range(2, max_lag))
         tau = []
+        valid_lags = []
 
         for lag in lags:
-            # Calculate rescaled range for this lag
-            # Split returns into non-overlapping windows of size lag
             n_windows = len(returns) // lag
             if n_windows < 1:
                 continue
@@ -109,33 +133,33 @@ class TradingStrategy:
                 if len(window) < 2:
                     continue
 
-                # Mean-adjusted series
                 mean_adj = window - np.mean(window)
-
-                # Cumulative deviation
                 cum_dev = np.cumsum(mean_adj)
-
-                # Range
                 r = np.max(cum_dev) - np.min(cum_dev)
+                s = np.std(window, ddof=1) if len(window) > 1 else np.std(window)
 
-                # Standard deviation
-                s = np.std(window)
-
-                if s > 0:
+                if s > 1e-8:
                     rs_values.append(r / s)
 
             if rs_values:
-                tau.append(np.mean(rs_values))
+                # Anis-Lloyd theoretical expectation correction factor for small n
+                # E[R/S] ~ gamma(0.5 * (lag - 1)) / (sqrt(pi) * gamma(0.5 * lag)) * sum(sqrt((lag - i) / i))
+                n_float = float(lag)
+                expected_rs = (n_float - 0.5) / n_float * np.sqrt(np.pi * n_float / 2.0) if n_float > 2 else 1.0
+                adjusted_rs = np.mean(rs_values) / expected_rs * np.sqrt(n_float ** 0.5)
+                tau.append(adjusted_rs)
+                valid_lags.append(lag)
 
-        if len(tau) < 2:
+        if len(tau) < 3:
             return 0.5
 
-        # Fit line to log-log plot
-        poly = np.polyfit(np.log(list(lags)[:len(tau)]), np.log(tau), 1)
-        hurst = poly[0]
+        try:
+            poly = np.polyfit(np.log(valid_lags), np.log(tau), 1)
+            hurst = poly[0]
+            return float(np.clip(hurst, 0.0, 1.0))
+        except Exception:
+            return 0.5
 
-        # Clamp to reasonable range
-        return float(np.clip(hurst, 0.0, 1.0))
 
     def _calculate_atr(self, high: np.ndarray, low: np.ndarray, close: np.ndarray) -> float:
         """Calculate Average True Range from numpy arrays."""
@@ -217,15 +241,17 @@ class TradingStrategy:
             # Check if we should enter a position
             if not position:
                 if regime == "trending":
-                    # Buy on deeper pullbacks while trend is intact
-                    if rsi < 55.0 and rsi > prev_rsi:
+                    # Buy on deeper pullbacks while higher timeframe trend is intact
+                    if rsi < 55.0 and rsi > prev_rsi and regime_data.get("htf_trend") != "bearish":
                         return {
                             "symbol": symbol,
                             "action": "buy",
                             "reason": "trending_pullback_bounce_buy",
                             "regime": regime,
-                            "rsi": rsi
+                            "rsi": rsi,
+                            "htf_trend": regime_data.get("htf_trend")
                         }
+
                 elif regime == "mean_reverting":
                     # Buy when oversold, sell (short) when overbought
                     if rsi < settings.RSI_OVERSOLD and rsi > prev_rsi:

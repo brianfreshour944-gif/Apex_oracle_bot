@@ -21,10 +21,11 @@ class CircuitState(str, Enum):
     HALF_OPEN = "half_open"  
   
 class CircuitBreaker:  
-    def __init__(self, name, failure_threshold=None, open_seconds=None):  
+    def __init__(self, name: str, failure_threshold: Optional[int] = None, open_seconds: Optional[float] = None):  
         self.name = name  
-        self.failure_threshold = failure_threshold or settings.CIRCUIT_FAILURE_THRESHOLD  
-        self.open_seconds = open_seconds or settings.CIRCUIT_OPEN_SECONDS  
+        self.failure_threshold = failure_threshold or getattr(settings, "CIRCUIT_FAILURE_THRESHOLD", 5)  
+        self.open_seconds = open_seconds or getattr(settings, "CIRCUIT_OPEN_SECONDS", 60.0)  
+
         self._failures = 0  
         self._state = CircuitState.CLOSED  
         self._opened_at = 0.0  

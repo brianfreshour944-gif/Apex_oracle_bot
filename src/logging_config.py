@@ -39,6 +39,9 @@ def configure_structlog() -> None:
             force=True,
         )
         print("✅ Structlog configured successfully (debug mode)", file=sys.stderr)
+
+
+
     except Exception as e:
         print(f"⚠️  Logging setup failed: {e}. Using basic fallback.", file=sys.stderr)
         logging.basicConfig(

@@ -21,6 +21,23 @@ ex: Optional[AlpacaExchange] = None
 strategy: Optional[TradingStrategy] = None
 risk_manager: Optional[RiskManager] = None
 
+import json
+
+def read_regime_flag():
+    """Read the regime flag file. Returns a dict with pause flags."""
+    default = {
+        "pause_grok": False,
+        "pause_oracle": False,
+        "grok_multiplier": 1.0,
+        "oracle_multiplier": 1.0,
+        "regime": "normal"
+    }
+    try:
+        with open(r"C:\Users\brian\OneDrive\Documents\Static-Repo-okx-bot\regime_flag.txt", "r") as f:
+            data = json.load(f)
+            return data
+    except (FileNotFoundError, json.JSONDecodeError):
+        return default
 async def process_signal_for_symbol(symbol: str, current_price: float, risk_manager: RiskManager, strategy: TradingStrategy, ex: AlpacaExchange) -> None:
     """Processes signal for a single symbol asynchronously."""
     try:
@@ -59,6 +76,14 @@ async def process_signal_for_symbol(symbol: str, current_price: float, risk_mana
 
         # Execute signal if not "hold" or "stand_aside"
         if signal["action"] in ["buy", "sell"]:
+            
+            # ── REGIME SWITCH CHECK (Only for ENTRY, not EXIT) ──
+            if signal["action"] == "buy":
+                regime_flag = read_regime_flag()
+                if regime_flag.get("pause_oracle", False):
+                    logger.info(f"⏸️ Oracle paused by Regime Switch (Quiet market). Skipping entry for {symbol}.")
+                    return
+
             # Check position limit before entering
             risk_status = await risk_manager.update_account_status()
             if risk_status["status"] == "position_limit_exceeded":
@@ -72,12 +97,22 @@ async def process_signal_for_symbol(symbol: str, current_price: float, risk_mana
             position_size, sizing_status = risk_manager.calculate_position_size(
                 symbol,
                 current_price,
-                signal["regime"]
+                signal["regime"],
+                atr=signal.get("atr"),
+                confidence=signal.get("confidence", 1.0)
             )
+
 
             if sizing_status != "ok":
                 logger.warning(f"Position sizing failed for {symbol}: {sizing_status}")
                 return
+                
+            # Apply Regime Switch Multiplier if buying
+            if signal["action"] == "buy":
+                multiplier = regime_flag.get("oracle_multiplier", 1.0)
+                position_size = position_size * multiplier
+                # Round to appropriate precision (assuming risk_manager handles base precision, but let's do a simple round)
+                position_size = round(position_size, 6)
 
             # Place order
             order_result = await ex.create_order(
@@ -173,7 +208,10 @@ async def run_trading_bot() -> None:
         logger.info("FastAPI server started")
 
         # Start Killswitch monitor
-        asyncio.create_task(monitor_killswitch(risk_manager))
+        active_tasks: set[asyncio.Task] = set()
+        ks_task = asyncio.create_task(monitor_killswitch(risk_manager))
+        active_tasks.add(ks_task)
+        ks_task.add_done_callback(active_tasks.discard)
         logger.info("Killswitch monitor started")
 
         # Main trading loop
@@ -193,21 +231,29 @@ async def run_trading_bot() -> None:
                 last_eval_time[symbol] = now
 
                 # Dispatch signal processing to a background task so it doesn't block the WebSocket stream
-                asyncio.create_task(process_signal_for_symbol(symbol, current_price, risk_manager, strategy, ex))
+                task = asyncio.create_task(process_signal_for_symbol(symbol, current_price, risk_manager, strategy, ex))
+                active_tasks.add(task)
+                task.add_done_callback(active_tasks.discard)
 
         except Exception as e:
             logger.error(f"WebSocket stream error: {e}")
-            await asyncio.sleep(5)  # Wait before potential restart logic (handled externally)
+            await asyncio.sleep(5)
 
     except KeyboardInterrupt:
         logger.info("Shutdown requested. Exiting gracefully.")
-        if ex:
-            await ex.close()
     except Exception as e:
         logger.error(f"Fatal error in bot: {e}", exc_info=True)
+        raise
+    finally:
+        logger.info("Cleaning up background tasks and closing exchange...")
+        for task in list(active_tasks):
+            task.cancel()
+        if active_tasks:
+            await asyncio.gather(*active_tasks, return_exceptions=True)
         if ex:
             await ex.close()
-        raise
+        logger.info("Shutdown complete.")
+
 
 def run_bot() -> None:
     """Synchronous wrapper for async bot."""

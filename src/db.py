@@ -65,16 +65,22 @@ def get_session_factory():
     """Get a session factory using the lazy engine."""
     return sessionmaker(bind=get_engine(), autoflush=False, expire_on_commit=False)
 
+@retry(
+    stop=stop_after_attempt(5),
+    wait=wait_exponential(multiplier=1, min=2, max=10),
+    reraise=True
+)
 def init_db() -> None:
-    """Initialize database connection."""
+    """Initialize database connection with exponential backoff retries."""
     try:
         # Test the connection
         with get_engine().connect() as conn:
             conn.execute(text("SELECT 1"))
         logger.info(f"Database connected: {settings.DATABASE_URL}")
     except SQLAlchemyError as e:
-        logger.error(f"Database connection failed: {e}")
+        logger.warning(f"Database connection attempt failed: {e}. Retrying...")
         raise
+
 
 def get_db_session() -> Session:
     """Get a database session."""

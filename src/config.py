@@ -39,6 +39,8 @@ class TradingBotSettings(BaseSettings):
     TELEGRAM_BOT_TOKEN: str = Field(default="", description="Telegram bot token")
     TELEGRAM_CHAT_ID: str = Field(default="", description="Telegram chat ID")
 
+
+
     # --- Trading Configurations ---
     TRADING_SYMBOLS: str = Field(
         default="BTC/USD,ETH/USD,SOL/USD",

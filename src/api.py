@@ -2,17 +2,17 @@
 
 import asyncio
 import uvicorn
-from fastapi import FastAPI, APIRouter, HTTPException
+from fastapi import FastAPI, APIRouter
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
-from typing import Dict, Any, Optional
+from typing import Dict, Any
 
 from src.config import settings
 from src.logging_config import get_logger
 
 logger = get_logger(__name__)
 
-# FastAPI app with lifespan
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """FastAPI lifespan management."""
@@ -20,7 +20,7 @@ async def lifespan(app: FastAPI):
     yield
     logger.info("Shutting down FastAPI server")
 
-# Create FastAPI app
+
 app = FastAPI(
     title="Apex Oracle Bot API",
     description="Modern trading bot API with FastAPI",
@@ -28,7 +28,6 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# CORS middleware
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -37,24 +36,24 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# API router
 api_router = APIRouter(prefix="/api/v1")
+
 
 @api_router.get("/health")
 async def health_check() -> Dict[str, Any]:
     """Health check endpoint."""
     return {
         "status": "healthy",
-        "bot_name": settings.BOT_NAME,
         "version": "2.0.0",
         "database": str(settings.DATABASE_URL),
+        "symbols": settings.SYMBOLS,
     }
+
 
 @api_router.get("/config")
 async def get_config() -> Dict[str, Any]:
     """Get bot configuration."""
     return {
-        "bot_name": settings.BOT_NAME,
         "symbols": settings.SYMBOLS,
         "risk_settings": {
             "base_risk_percent": settings.BASE_RISK_PERCENT,
@@ -62,8 +61,9 @@ async def get_config() -> Dict[str, Any]:
         },
     }
 
-# Include API router
+
 app.include_router(api_router)
+
 
 async def start_fastapi_server_async() -> None:
     """Start FastAPI server asynchronously."""
@@ -74,8 +74,6 @@ async def start_fastapi_server_async() -> None:
         log_level="info",
     )
     server = uvicorn.Server(config)
-
-    # Run server in background
     asyncio.create_task(server.serve())
 
     logger.info(f"FastAPI server started on port {settings.STATUS_PORT}")

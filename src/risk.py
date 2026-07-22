@@ -125,28 +125,51 @@ class RiskManager:
                 "action": "stand_aside"
             }
 
-    def calculate_position_size(self, symbol: str, current_price: float, regime: str) -> Tuple[float, str]:
-        """Calculate position size based on risk parameters and regime."""
+    def calculate_position_size(
+        self,
+        symbol: str,
+        current_price: float,
+        regime: str,
+        atr: Optional[float] = None,
+        confidence: float = 1.0,
+        returns_matrix: Optional[Dict[str, np.ndarray]] = None,
+    ) -> Tuple[float, str]:
+        """Calculate position size with ATR volatility parity, confidence weighting, and correlation check."""
         try:
-            # Base position size calculation
             risk_amount = settings.ACCOUNT_BASE * settings.BASE_RISK_PERCENT
-            position_size = risk_amount / current_price
+
+            # ATR Volatility Parity Sizing (if ATR available)
+            if atr is not None and atr > 0:
+                stop_distance = atr * getattr(settings, "ATR_STOP_MULTIPLIER", 2.0)
+                position_size = risk_amount / stop_distance
+            else:
+                position_size = risk_amount / current_price
 
             # Apply regime-specific adjustments
             if regime == "trending":
-                # More aggressive in trending markets
-                position_size = min(position_size * 1.5, settings.MAX_SINGLE_TRADE_USD / current_price)
+                position_size *= 1.5
             elif regime == "mean_reverting":
-                # More conservative in mean-reverting markets
-                position_size = min(position_size * 0.8, settings.MAX_SINGLE_TRADE_USD / current_price)
-            else:
-                # Neutral regime
-                position_size = min(position_size, settings.MAX_SINGLE_TRADE_USD / current_price)
+                position_size *= 0.8
 
-            # Apply hard cap
+            # Confidence weighting (scale between 0.5 and 1.5)
+            conf_weight = np.clip(confidence, 0.5, 1.5)
+            position_size *= conf_weight
+
+            # Cross-symbol correlation check (downscale if high correlation > 0.85)
+            if returns_matrix and len(returns_matrix) > 1:
+                keys = list(returns_matrix.keys())
+                corrs = []
+                for k in keys:
+                    if k != symbol and len(returns_matrix[k]) == len(returns_matrix.get(symbol, [])):
+                        c = np.corrcoef(returns_matrix[symbol], returns_matrix[k])[0, 1]
+                        if not np.isnan(c):
+                            corrs.append(c)
+                if corrs and np.mean(corrs) > 0.85:
+                    logger.warning(f"High portfolio correlation ({np.mean(corrs):.2f}) for {symbol}. Downscaling size by 30%.")
+                    position_size *= 0.7
+
+            # Apply hard dollar cap per trade
             position_size = min(position_size, settings.MAX_SINGLE_TRADE_USD / current_price)
-
-            # Round to reasonable precision
             position_size = round(position_size, 6)
 
             return position_size, "ok"
@@ -154,6 +177,7 @@ class RiskManager:
         except Exception as e:
             logger.error(f"Position sizing failed: {e}")
             return 0.0, f"error: {e}"
+
 
     def check_trailing_stop(self, symbol: str, current_price: float, avg_entry_price: float, qty: float) -> str:
         """

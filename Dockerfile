@@ -1,42 +1,49 @@
-# Modern Dockerfile for Apex Oracle Bot using Python 3.12
+# Modern Multi-Stage Dockerfile for Apex Oracle Bot using Astral UV
+# ------------------------------------------------------------------------------
+# Build Stage: Install dependencies with uv
+# ------------------------------------------------------------------------------
+FROM ghcr.io/astral-sh/uv:latest AS builder
 
-# Use official Python 3.12 slim image
-FROM python:3.12-slim
-
-# Set environment variables
-ENV PYTHONDONTWRITEBYTECODE 1
-ENV PYTHONUNBUFFERED 1
-ENV PIP_NO_CACHE_DIR=off
-ENV PIP_DISABLE_PIP_VERSION_CHECK=on
-ENV PIP_DEFAULT_TIMEOUT=100
-ENV POETRY_VERSION=1.7.1
-
-# Install system dependencies
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    curl \
-    && rm -rf /var/lib/apt/lists/*
-
-# Install uv for modern dependency management
-RUN curl -LsSf https://astral.sh/uv/install.sh | sh
-ENV PATH="/root/.local/bin:${PATH}"
-
-# Create and set working directory
 WORKDIR /app
 
-# Copy project files
-COPY pyproject.toml ./
-COPY requirements.txt ./
-COPY src/ ./src/
-COPY test_*.py ./
+# Enable bytecode compilation
+ENV UV_COMPILE_BYTECODE=1
 
-# Install dependencies using uv
-RUN uv pip install --system --no-cache-dir -r requirements.txt
+# Copy configuration files first for Docker layer caching
+COPY pyproject.toml requirements.txt ./
 
-# Create data directory
-RUN mkdir -p /app/data
+# Install dependencies into virtual environment
+RUN uv venv /app/.venv && \
+    uv pip install --no-cache -r requirements.txt --python /app/.venv
 
-# Expose the API port
-EXPOSE 8080
+# ------------------------------------------------------------------------------
+# Production Runner Stage
+# ------------------------------------------------------------------------------
+FROM python:3.12-slim AS runner
 
-# Set the default command
-CMD ["python", "-m", "src.main"]
+# Set environment variables
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PATH="/app/.venv/bin:$PATH"
+
+WORKDIR /app
+
+# Create non-root user and data directory
+RUN groupadd -g 10001 botuser && \
+    useradd -u 10001 -g botuser -s /bin/bash -m botuser && \
+    mkdir -p /app/data && \
+    chown -R botuser:botuser /app
+
+# Copy virtual environment and source code
+COPY --from=builder /app/.venv /app/.venv
+COPY --chown=botuser:botuser . .
+
+USER botuser
+
+EXPOSE 8000
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+  CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/v1/health')" || exit 1
+
+ENTRYPOINT ["python", "-m", "src.cli"]
+CMD ["run"]
