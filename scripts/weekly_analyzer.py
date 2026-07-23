@@ -103,6 +103,46 @@ def main():
         else:
             print("✅ All symbols performing acceptably.")
 
+        # --- Threshold Optimization (Level 5) ---
+        print("\n--- Adaptive Threshold Optimization ---")
+        optimal_thresholds = {}
+        for symbol, group in df.groupby('symbol'):
+            best_threshold = 0.60
+            best_pnl = float('-inf')
+            # Only optimize if we have at least 10 trades to avoid curve fitting small samples
+            if len(group) >= 10:
+                import numpy as np
+                for t in np.arange(0.50, 0.86, 0.01):
+                    # Simulate taking only trades with confidence >= t
+                    sim_trades = group[group['confidence'] >= t]
+                    if len(sim_trades) >= 5:
+                        sim_pnl = sim_trades['realized_pnl'].sum()
+                        if sim_pnl > best_pnl:
+                            best_pnl = sim_pnl
+                            best_threshold = t
+                
+                if best_pnl > 0:
+                    optimal_thresholds[symbol] = round(float(best_threshold), 2)
+                    print(f"🧠 {symbol}: Learned optimal confidence threshold = {best_threshold:.2f} (Simulated PnL: ${best_pnl:.2f})")
+                else:
+                    print(f"🧠 {symbol}: No profitable threshold found. Defaulting to 0.60.")
+            else:
+                print(f"🧠 {symbol}: Insufficient data ({len(group)} trades). Defaulting to 0.60.")
+
+        thresh_file = os.path.join(data_dir, 'adaptive_thresholds.json')
+        # Load existing so we don't overwrite symbols with no recent data
+        existing_thresh = {}
+        if os.path.exists(thresh_file):
+            try:
+                with open(thresh_file, 'r') as f:
+                    existing_thresh = json.load(f)
+            except:
+                pass
+        
+        existing_thresh.update(optimal_thresholds)
+        with open(thresh_file, 'w') as f:
+            json.dump(existing_thresh, f, indent=4)
+
     except Exception as e:
         print(f"Error during analysis: {e}")
 
