@@ -642,6 +642,73 @@ async def run_trading_bot() -> None:
     finally:
         logger.info("Cleaning up background tasks and closing exchange...")
         for task in list(active_tasks):
+            from src.committee.transformer_brain import transformer_brain
+            from src.committee.quant_brain import quant_brain
+            from src.committee.momentum_brain import momentum_brain
+            from src.committee.sentinel_brain import sentinel_brain
+            from src.committee.llm_brain import llm_brain
+            from src.committee.adaptive_meta import AdaptiveMetaLearner
+            from src.committee.rl_meta import RLMetaLearner
+
+            from scripts.post_mortem import analyze_losses
+
+            # Global meta-learners
+            adaptive_learner = AdaptiveMetaLearner(state_path="data/adaptive_state.json")
+            rl_learner = RLMetaLearner()
+
+            async def evaluate_committee(symbol: str, current_price: float, signal: Dict[str, Any]) -> CommitteeResult:
+                """Run all 5 brains concurrently and return a weighted consensus."""
+                # 1. Run inference for all brains concurrently
+                tasks = [
+                    transformer_brain(symbol, current_price, signal),
+                    quant_brain(symbol, current_price, signal),
+                    momentum_brain(symbol, current_price, signal),
+                    sentinel_brain(symbol, current_price, signal),
+                    llm_brain(symbol, current_price, signal),
+                ]
+                results = await asyncio.gather(*tasks, return_exceptions=True)
+
+                valid_votes = []
+                for r in results:
+                    if isinstance(r, BrainVote):
+                        valid_votes.append(r)
+                    else:
+                        logger.error(f"Brain failed with exception: {r}")
+
+                if not valid_votes:
+                    return CommitteeResult(action="stand_aside", score=0.0)
+
+                # Check for hard vetos
+                vetos = [v for v in valid_votes if v.is_veto]
+                if vetos:
+                    reasons = ", ".join(f"{v.name}: {v.reason}" for v in vetos)
+                    return CommitteeResult(action="stand_aside", score=0.0, vetoed=True, veto_reason=reasons)
+
+                regime = signal.get("regime", "default")
+                
+                # Check if RL model is loaded
+                if getattr(rl_learner, "model", None):
+                    # Use PPO RL Meta-Learner
+                    features = signal.get("features", {})
+                    features["rsi"] = signal.get("rsi", 50.0)
+                    features["atr"] = signal.get("atr", 0.0)
+                    features["macd"] = signal.get("macd", 0.0)
+                    decision = rl_learner.combine(valid_votes, regime, features)
+                    size_multiplier = getattr(decision, "pos_size_mult", 1.0)
+                else:
+                    # 2. Use mathematical AdaptiveMetaLearner
+                    decision = adaptive_learner.combine(valid_votes, regime)
+                    size_multiplier = 1.0
+
+                return CommitteeResult(
+                    action=decision.action,
+                    score=decision.confidence,
+                    size_multiplier=size_multiplier,
+                    votes=valid_votes,
+                    active_weights=decision.weights,
+                    adaptive_used=True,
+                    explanation=decision.explanation
+                )
             task.cancel()
         if active_tasks:
             await asyncio.gather(*active_tasks, return_exceptions=True)
