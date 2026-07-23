@@ -39,6 +39,10 @@ class TradingBotSettings(BaseSettings):
     TELEGRAM_BOT_TOKEN: str = Field(default="", description="Telegram bot token")
     TELEGRAM_CHAT_ID: str = Field(default="", description="Telegram chat ID")
 
+    # --- LLM API Keys ---
+    GROQ_API_KEY: str = Field(default="", description="Groq API key for Sentiment Analysis")
+    GEMINI_API_KEY: str = Field(default="", description="Gemini API key for Sentiment Analysis")
+
 
 
     # --- Trading Configurations ---

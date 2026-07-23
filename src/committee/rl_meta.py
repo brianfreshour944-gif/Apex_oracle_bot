@@ -56,7 +56,24 @@ class RLMetaLearner:
         rsi = (features.get("rsi", 50.0) - 50) / 50.0  
         atr = features.get("atr", 0.0) / 100.0 
         macd = np.clip(features.get("macd", 0.0), -1.0, 1.0)
-        feature_vec = np.array([rsi, atr, macd], dtype=np.float32)
+        
+        # On-Chain Features
+        fr = np.clip(features.get("funding_rate", 0.0) * 1000, -1.0, 1.0) # Scale funding rate
+        oi = np.clip(features.get("open_interest", 0.0) / 1e9, 0.0, 10.0) # Scale OI
+        lsr = np.clip((features.get("long_short_ratio", 1.0) - 1.0), -1.0, 1.0) # Center LSR at 0
+        imb = np.clip(features.get("bid_ask_imbalance", 0.0), -1.0, 1.0) # L2 Imbalance
+        
+        # Sentiment Features
+        sent_score = np.clip(features.get("sentiment_score", 0.0), -1.0, 1.0)
+        sent_conf = np.clip(features.get("sentiment_conf", 0.0), 0.0, 1.0)
+        
+        event_types = ["earnings", "regulation", "macro", "security", "adoption", "none"]
+        event = features.get("event_type", "none")
+        event_vec = np.zeros(len(event_types), dtype=np.float32)
+        if event in event_types:
+            event_vec[event_types.index(event)] = 1.0
+            
+        feature_vec = np.array([rsi, atr, macd, fr, oi, lsr, imb, sent_score, sent_conf], dtype=np.float32)
         
         # 3. Brain Votes
         votes = {v.name: v.action for v in brain_outputs}
@@ -68,7 +85,7 @@ class RLMetaLearner:
             elif v == "sell":
                 vote_vec[i] = -1.0
                 
-        obs = np.concatenate([regime_vec, feature_vec, vote_vec])
+        obs = np.concatenate([regime_vec, feature_vec, event_vec, vote_vec])
         return np.nan_to_num(obs, 0.0).astype(np.float32)
 
     def combine(self, brain_outputs: List[BrainVote], regime: str, features: Dict[str, Any]) -> AdaptiveDecision:

@@ -75,6 +75,10 @@ MASTER_FEATURE_COLS = [
     "atr",               # Average True Range
     "volume_spike",      # Volume anomaly
     "bollinger_width",   # Bollinger Band Width
+    "funding_rate",      # Binance Futures Funding Rate
+    "open_interest",     # Binance Futures Open Interest
+    "long_short_ratio",  # Binance Futures Global Long/Short Ratio
+    "bid_ask_imbalance", # L2 Depth Imbalance
 ]
 
 # Neutral fill values for each feature (used on empty input or edge failures).
@@ -96,6 +100,10 @@ FEATURE_DEFAULTS = {
     "atr":              0.0,
     "volume_spike":     1.0,
     "bollinger_width":  0.0,
+    "funding_rate":     0.0,
+    "open_interest":    0.0,
+    "long_short_ratio": 1.0,
+    "bid_ask_imbalance": 0.0,
 }
 
 

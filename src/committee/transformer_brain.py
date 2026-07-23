@@ -132,32 +132,59 @@ async def transformer_brain(symbol: str, price: float, signal: dict) -> BrainVot
         try:
             import asyncio
             import os
-            from src.feature_engineering import fetch_bars, add_features
-            from alpaca.data.historical import CryptoHistoricalDataClient
-
-            torch = predictor["torch"]
-            model = predictor["model"]
-            scaler = predictor["scaler"]
-            device = predictor["device"]
-            
-            def _do_inference():
-                key = os.getenv("APCA_API_KEY_ID")
-                secret = os.getenv("APCA_API_SECRET_KEY")
-                if not key or not secret:
-                    return None
-                
-                client = CryptoHistoricalDataClient(api_key=key, secret_key=secret)
-                df_raw = fetch_bars(client, symbol.replace("/", ""), days=2)
-                if df_raw is None or len(df_raw) < 32:
-                    return None
+                from src.feature_engineering import add_features
+                # fetch_bars is actually located in data_fetcher or similar, wait I will just copy the import logic
+                try:
+                    from src.data_fetcher import fetch_bars
+                except ImportError:
+                    # fallback if fetch_bars was moved
+                    from src.feature_engineering import fetch_bars
                     
-                df_feat = add_features(df_raw.copy())
+                from alpaca.data.historical import CryptoHistoricalDataClient
+
+                torch = predictor["torch"]
+                model = predictor["model"]
+                scaler = predictor["scaler"]
+                device = predictor["device"]
                 
-                if hasattr(scaler, "feature_names_in_"):
-                    cols = list(scaler.feature_names_in_)
-                else:
-                    from src.feature_engineering import get_active_features
-                    cols = get_active_features()
+                def _do_inference():
+                    key = os.getenv("APCA_API_KEY_ID")
+                    secret = os.getenv("APCA_API_SECRET_KEY")
+                    if not key or not secret:
+                        return None
+                    
+                    client = CryptoHistoricalDataClient(api_key=key, secret_key=secret)
+                    df_raw = fetch_bars(client, symbol.replace("/", ""), days=2)
+                    if df_raw is None or len(df_raw) < 32:
+                        return None
+                        
+                    # Inject On-Chain / Derivatives Data
+                    try:
+                        from src.onchain_data import fetch_derivatives_data
+                        import asyncio
+                        # We are inside to_thread but we can run an async function synchronously here
+                        loop = asyncio.new_event_loop()
+                        asyncio.set_event_loop(loop)
+                        deriv_data = loop.run_until_complete(fetch_derivatives_data(symbol))
+                        loop.close()
+                        
+                        df_raw["funding_rate"] = deriv_data.get("funding_rate", 0.0)
+                        df_raw["open_interest"] = deriv_data.get("open_interest", 0.0)
+                        df_raw["long_short_ratio"] = deriv_data.get("long_short_ratio", 1.0)
+                    except Exception as e:
+                        import logging
+                        logging.getLogger("onchain").warning(f"Failed to append onchain data: {e}")
+                        df_raw["funding_rate"] = 0.0
+                        df_raw["open_interest"] = 0.0
+                        df_raw["long_short_ratio"] = 1.0
+
+                    df_feat = add_features(df_raw.copy())
+                    
+                    if hasattr(scaler, "feature_names_in_"):
+                        cols = list(scaler.feature_names_in_)
+                    else:
+                        from src.feature_engineering import get_active_features
+                        cols = get_active_features()
                     
                 data = df_feat[cols].tail(32).values.astype(np.float32)
                 if len(data) < 32:

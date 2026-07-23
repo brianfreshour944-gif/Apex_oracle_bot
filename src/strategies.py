@@ -93,6 +93,36 @@ class TradingStrategy:
 
             self.current_regime = regime
 
+            # Fetch On-Chain Derivatives Data
+            try:
+                from src.onchain_data import fetch_derivatives_data
+                import asyncio
+                
+                deriv_data = await fetch_derivatives_data(symbol)
+                funding_rate = float(deriv_data.get("funding_rate", 0.0))
+                open_interest = float(deriv_data.get("open_interest", 0.0))
+                long_short_ratio = float(deriv_data.get("long_short_ratio", 1.0))
+                bid_ask_imbalance = float(deriv_data.get("bid_ask_imbalance", 0.0))
+            except Exception as e:
+                logger.warning(f"Failed to fetch derivatives data for {symbol}: {e}")
+                funding_rate = 0.0
+                open_interest = 0.0
+                long_short_ratio = 1.0
+                bid_ask_imbalance = 0.0
+                
+            # Fetch News Sentiment Alternative Data
+            try:
+                from src.sentiment_analyzer import extract_sentiment
+                sentiment_data = await extract_sentiment(symbol)
+                sentiment_score = float(sentiment_data.get("sentiment_score", 0.0))
+                event_type = str(sentiment_data.get("event_type", "none"))
+                sentiment_conf = float(sentiment_data.get("confidence", 0.0))
+            except Exception as e:
+                logger.warning(f"Failed to fetch sentiment data for {symbol}: {e}")
+                sentiment_score = 0.0
+                event_type = "none"
+                sentiment_conf = 0.0
+
             res = {
                 "regime": regime,
                 "hurst": float(hurst),
@@ -100,7 +130,14 @@ class TradingStrategy:
                 "rsi": float(rsi),
                 "prev_rsi": float(prev_rsi),
                 "htf_trend": htf_trend,
-                "confidence": self._calculate_regime_confidence(regime, hurst, atr, rsi)
+                "confidence": self._calculate_regime_confidence(regime, hurst, atr, rsi),
+                "funding_rate": funding_rate,
+                "open_interest": open_interest,
+                "long_short_ratio": long_short_ratio,
+                "bid_ask_imbalance": bid_ask_imbalance,
+                "sentiment_score": sentiment_score,
+                "event_type": event_type,
+                "sentiment_conf": sentiment_conf,
             }
             self._regime_cache[symbol] = (now, res)
             return res

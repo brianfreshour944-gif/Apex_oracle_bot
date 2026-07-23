@@ -14,22 +14,53 @@ async def llm_brain(symbol: str, price: float, signal: dict) -> BrainVote:
     """
     raw_action = signal.get("action", "hold")
     regime = signal.get("regime", "neutral")
-    rsi = signal.get("rsi")
+    features = signal.get("features", {})
+    
+    # Read the pre-fetched structured sentiment from features
+    sentiment_score = features.get("sentiment_score", 0.0)
+    event_type = features.get("event_type", "none")
+    sentiment_conf = features.get("sentiment_conf", 0.0)
 
-    # Basic qualitative evaluation logic
-    confidence = 0.60
-    reason = "LLM review: Market structure matches standard strategy"
+    # Base evaluation logic based on technicals + LLM sentiment
+    confidence = 0.50
+    reason = "LLM review: Neutral qualitative outlook."
+    action = "hold"
+    is_veto = False
 
-    if rsi is not None and (rsi < 20 or rsi > 80):
-        # Extreme RSI territory
-        confidence = 0.75
-        reason = f"LLM review: High conviction signal at extreme RSI ({rsi:.1f})"
+    # Security events (Hacks, Stolen funds, etc) are a HARD VETO
+    if event_type == "security":
+        action = "stand_aside"
+        confidence = 0.95
+        is_veto = True
+        reason = "LLM VETO: Major security breach or hack detected in recent news."
+    elif event_type == "regulation" and sentiment_score < -0.5:
+        # Severe regulatory crackdown
+        action = "stand_aside"
+        confidence = 0.85
+        is_veto = True
+        reason = "LLM VETO: Severe negative regulatory event detected."
+    else:
+        # Normal trading conditions, let's use the sentiment to vote
+        if sentiment_score > 0.4 and sentiment_conf > 0.5:
+            action = "buy"
+            confidence = 0.50 + (sentiment_score * 0.4) # scale up to 0.90
+            reason = f"LLM review: Positive news sentiment ({event_type}, score: {sentiment_score:.2f})"
+        elif sentiment_score < -0.4 and sentiment_conf > 0.5:
+            action = "sell"
+            confidence = 0.50 + (abs(sentiment_score) * 0.4)
+            reason = f"LLM review: Negative news sentiment ({event_type}, score: {sentiment_score:.2f})"
+        else:
+            # If no strong news, defer to technical strategy action but low confidence
+            action = raw_action if raw_action in ["buy", "sell", "hold"] else "hold"
+            confidence = 0.40
+            reason = f"LLM review: Deferring to technicals (Weak/No news, score: {sentiment_score:.2f})"
 
     return BrainVote(
         name="llm",
-        action=raw_action if raw_action in ["buy", "sell", "hold"] else "hold",
+        action=action,
         confidence=confidence,
         weight=0.10,
         regime=regime,
-        reason=reason
+        reason=reason,
+        is_veto=is_veto
     )

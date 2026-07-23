@@ -247,14 +247,49 @@ async def run_committee(symbol: str, price: float, signal: Dict[str, Any]) -> Co
     else:
         baseline_winner, baseline_score = "stand_aside", 0.0
 
-    # ── Adaptive meta-learner (shadow by default; drives decision only when
-    #    enabled AND it has seen enough realized outcomes). Fully fail-safe:
-    #    any error keeps the classic decision. Vetoes above already returned. ──
+    # ── Adaptive meta-learner / RL Meta-Learner (shadow by default) ──
     adaptive_used = False
     adaptive_weights: Dict[str, float] = {}
     explanation: Optional[str] = None
     winner, score = baseline_winner, baseline_score
 
+    from .rl_meta import RLMetaLearner
+    rl_learner = RLMetaLearner()
+    
+    # Attempt to use PPO RL Model first
+    if getattr(rl_learner, "model", None) and settings.ADAPTIVE_ML_ENABLED:
+        try:
+            # We need to construct the features dict for the RL agent
+            features = signal.get("features", {})
+            features["rsi"] = signal.get("rsi", 50.0)
+            features["atr"] = signal.get("atr", 0.0)
+            features["macd"] = signal.get("macd", 0.0)
+            
+            decision = rl_learner.combine(raw_votes, regime, features)
+            adaptive_weights = decision.weights
+            explanation = decision.explanation
+            adaptive_used = True
+            winner, score = decision.action, decision.confidence
+            
+            # The RL Meta-Learner dynamically controls position size
+            size_mult = getattr(decision, "pos_size_mult", 1.0)
+            
+            return CommitteeResult(
+                action=winner,
+                score=score,
+                size_multiplier=size_mult,
+                entropy=entropy,
+                votes=votes,
+                active_weights=weights,
+                decision_id=decision_id,
+                adaptive_used=adaptive_used,
+                adaptive_weights=adaptive_weights,
+                explanation=explanation,
+            )
+        except Exception as e:
+            logger.warning(f"RL Meta-Learner combine failed, falling back to Adaptive: {e}")
+            
+    # Fallback to Mathematical Adaptive Meta-Learner
     learner = get_meta_learner()
     if learner is not None:
         try:
