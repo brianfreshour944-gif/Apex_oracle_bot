@@ -101,60 +101,61 @@ async def process_signal_for_symbol(symbol: str, current_price: float, risk_mana
         signal["action"] = committee_result.action
         signal["confidence"] = committee_result.score
 
-        # ── REGIME SWITCH CHECK (Only for ENTRY, not EXIT) ──
-        if signal["action"] == "buy":
-            regime_flag = read_regime_flag()
-            if regime_flag.get("pause_oracle", False):
-                logger.info(f"⏸️ Oracle paused by Regime Switch (Quiet market). Skipping entry for {symbol}.")
+        if signal["action"] in ["buy", "sell"]:
+            # ── REGIME SWITCH CHECK (Only for ENTRY, not EXIT) ──
+            if signal["action"] == "buy":
+                regime_flag = read_regime_flag()
+                if regime_flag.get("pause_oracle", False):
+                    logger.info(f"⏸️ Oracle paused by Regime Switch (Quiet market). Skipping entry for {symbol}.")
+                    return
+
+            # Check position limit before entering
+            risk_status = await risk_manager.update_account_status()
+            if risk_status["status"] == "position_limit_exceeded":
+                logger.warning(f"Skipping entry for {symbol}: position limit reached")
+                return
+            if risk_status["status"] == "exposure_limit_exceeded":
+                logger.warning(f"Skipping entry for {symbol}: exposure cap reached")
                 return
 
-        # Check position limit before entering
-        risk_status = await risk_manager.update_account_status()
-        if risk_status["status"] == "position_limit_exceeded":
-            logger.warning(f"Skipping entry for {symbol}: position limit reached")
-            return
-        if risk_status["status"] == "exposure_limit_exceeded":
-            logger.warning(f"Skipping entry for {symbol}: exposure cap reached")
-            return
+            # Calculate position size
+            position_size, sizing_status = risk_manager.calculate_position_size(
+                symbol,
+                current_price,
+                signal["regime"],
+                atr=signal.get("atr"),
+                confidence=signal.get("confidence", 1.0)
+            )
 
-        # Calculate position size
-        position_size, sizing_status = risk_manager.calculate_position_size(
-            symbol,
-            current_price,
-            signal["regime"],
-            atr=signal.get("atr"),
-            confidence=signal.get("confidence", 1.0)
-        )
+            if sizing_status != "ok":
+                logger.warning(f"Position sizing failed for {symbol}: {sizing_status}")
+                return
+                
+            # Apply Regime Switch Multiplier if buying
+            if signal["action"] == "buy":
+                multiplier = regime_flag.get("oracle_multiplier", 1.0)
+                position_size = position_size * multiplier
 
-        if sizing_status != "ok":
-            logger.warning(f"Position sizing failed for {symbol}: {sizing_status}")
-            return
-            
-        # Apply Regime Switch Multiplier if buying
-        if signal["action"] == "buy":
-            multiplier = regime_flag.get("oracle_multiplier", 1.0)
-            position_size = position_size * multiplier
+            # Apply Committee Confidence Sizing Multiplier (Higher confidence = Larger trade size)
+            committee_mult = getattr(committee_result, "size_multiplier", 1.0)
+            position_size = position_size * committee_mult
+            position_size = round(position_size, 6)
+            logger.info(f"📊 Applied Committee Sizing Multiplier ({committee_mult:.2f}x based on score {committee_result.score:.2f}) → Final Qty: {position_size}")
 
-        # Apply Committee Confidence Sizing Multiplier (Higher confidence = Larger trade size)
-        committee_mult = getattr(committee_result, "size_multiplier", 1.0)
-        position_size = position_size * committee_mult
-        position_size = round(position_size, 6)
-        logger.info(f"📊 Applied Committee Sizing Multiplier ({committee_mult:.2f}x based on score {committee_result.score:.2f}) → Final Qty: {position_size}")
+            # Place order
+            order_result = await ex.create_order(
+                symbol=symbol,
+                qty=position_size,
+                side=signal["action"],
+                type="market"
+            )
 
-        # Place order
-        order_result = await ex.create_order(
-            symbol=symbol,
-            qty=position_size,
-            side=signal["action"],
-            type="market"
-        )
-
-        logger.info(f"Order executed: {signal['action']} {position_size} {symbol} @ ${current_price:.2f}")
-        logger.debug(f"Order result: {order_result}")
-        await send_telegram_alert(f"📈 <b>Order Executed</b>\nSymbol: {symbol}\nAction: {signal['action'].upper()}\nQty: {position_size}\nPrice: ${current_price:.2f}")
-
+            logger.info(f"Order executed: {signal['action']} {position_size} {symbol} @ ${current_price:.2f}")
+            logger.debug(f"Order result: {order_result}")
+            await send_telegram_alert(f"📈 <b>Order Executed</b>\nSymbol: {symbol}\nAction: {signal['action'].upper()}\nQty: {position_size}\nPrice: ${current_price:.2f}")
 
         elif signal["action"] == "close" and current_position:
+
             # Close existing position
             qty = float(current_position["qty"])
             side = "sell" if qty > 0 else "buy"
