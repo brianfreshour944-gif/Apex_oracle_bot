@@ -86,6 +86,19 @@ def get_candidates():
         
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     
+    import joblib
+    import numpy as np
+    scaler_path = os.path.join(candidates_dir, "feature_scaler.pkl")
+    if not os.path.exists(scaler_path):
+        return {}
+    scaler = joblib.load(scaler_path)
+    
+    if hasattr(scaler, "feature_names_in_"):
+        cols = list(scaler.feature_names_in_)
+    else:
+        from src.feature_engineering import get_active_features
+        cols = get_active_features()
+    
     for f in os.listdir(candidates_dir):
         if f.endswith("_config.json"):
             name = f.replace("_config.json", "")
@@ -95,7 +108,7 @@ def get_candidates():
                     config = json.load(json_f)
                 
                 model = GrokGQA_Transformer(
-                    input_dim=11, # from scaler
+                    input_dim=len(cols),
                     seq_len=32,
                     embed_dim=config.get("embed", 128),
                     num_layers=config.get("layers", 4),
@@ -108,13 +121,16 @@ def get_candidates():
                 _candidates_cache[name] = {
                     "model": model,
                     "config": config,
-                    "device": device
+                    "device": device,
+                    "scaler": scaler,
+                    "cols": cols
                 }
     
     return _candidates_cache
 
-def evaluate_candidates(symbol: str, current_price: float, data_scaled: Any) -> None:
-    """Evaluates all candidate models using the pre-scaled input data and processes their signals."""
+def evaluate_candidates(symbol: str, current_price: float, df_feat: Any) -> None:
+    """Evaluates all candidate models using the raw input DataFrame."""
+    import numpy as np
     candidates = get_candidates()
     if not candidates:
         return
@@ -124,6 +140,17 @@ def evaluate_candidates(symbol: str, current_price: float, data_scaled: Any) -> 
             model = c_info["model"]
             device = c_info["device"]
             config = c_info["config"]
+            scaler = c_info["scaler"]
+            cols = c_info["cols"]
+            
+            data = df_feat[cols].tail(32).values.astype(np.float32)
+            if len(data) < 32:
+                continue
+                
+            data = np.nan_to_num(data, nan=0.0, posinf=0.0, neginf=0.0)
+            data = np.clip(data, -1e6, 1e6)
+            data_scaled = scaler.transform(data).astype(np.float32)
+            data_scaled = np.nan_to_num(data_scaled, nan=0.0, posinf=0.0, neginf=0.0)
             
             x = torch.tensor(data_scaled).unsqueeze(0).to(device)
             with torch.no_grad():

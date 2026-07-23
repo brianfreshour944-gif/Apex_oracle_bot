@@ -30,10 +30,12 @@ from alpaca.data.timeframe import TimeFrame, TimeFrameUnit
 # Ensure we can import from src
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from src.feature_engineering import add_features, FEATURE_COLS
+from src.feature_engineering import add_features, MASTER_FEATURE_COLS, get_active_features
 from src.committee.transformer_brain import GrokGQA_Transformer
 from src.telegram_alerts import send_telegram_alert
 import asyncio
+
+ACTIVE_FEATURES = get_active_features()
 
 # ── Hyperparameters ─────────────────────────────────────────────────────────────
 SEQ_LEN        = 32
@@ -93,7 +95,7 @@ def build_arrays(client, symbols: list[str], days: int, seq_len: int, horizon: i
         shared_idx = df_feat.index.intersection(df_raw.index)
         df_feat = df_feat.loc[shared_idx]
         close_arr = df_raw.loc[shared_idx, "close"].values.astype(np.float64)
-        feat_arr  = df_feat[FEATURE_COLS].values.astype(np.float32)
+        feat_arr  = df_feat[ACTIVE_FEATURES].values.astype(np.float32)
         n = len(feat_arr)
         for idx in range(n - seq_len - horizon + 1):
             x_window = feat_arr[idx : idx + seq_len]
@@ -241,6 +243,43 @@ def main():
         if acc > best_acc:
             best_acc = acc
             best_name = name
+
+    # ── Feature Evolution (Permutation Importance) ────────────────────────
+    log.info("Calculating Permutation Importance on validation set...")
+    if best_name and best_name in trained_models:
+        eval_model = trained_models[best_name]
+        baseline_loss, baseline_acc = evaluate_model(eval_model, holdout_loader, device, criterion)
+        
+        importances = {}
+        for i, feat_name in enumerate(ACTIVE_FEATURES):
+            X_ho_shuffled = X_ho.copy()
+            np.random.shuffle(X_ho_shuffled[:, :, i])
+            shuffled_loader = DataLoader(SequenceDataset(X_ho_shuffled, y_ho), batch_size=BATCH_SIZE, shuffle=False)
+            
+            _, shuff_acc = evaluate_model(eval_model, shuffled_loader, device, criterion)
+            importance = baseline_acc - shuff_acc
+            importances[feat_name] = importance
+            log.info(f"  Feature {feat_name}: {importance:+.2f}%")
+            
+        msg_lines.append("\n🔬 <b>Feature Importance:</b>")
+        for k, v in sorted(importances.items(), key=lambda x: x[1], reverse=True):
+            msg_lines.append(f"  {k}: {v:+.2f}%")
+            
+        worst_feat = min(importances, key=importances.get)
+        if importances[worst_feat] <= 0.05 and len(ACTIVE_FEATURES) > 5:
+            log.info(f"Culling worst feature: {worst_feat}")
+            ACTIVE_FEATURES.remove(worst_feat)
+            msg_lines.append(f"\n🗑️ <b>Culled:</b> {worst_feat}")
+            
+            inactive_pool = [f for f in MASTER_FEATURE_COLS if f not in ACTIVE_FEATURES]
+            if inactive_pool:
+                new_feat = np.random.choice(inactive_pool)
+                ACTIVE_FEATURES.append(new_feat)
+                log.info(f"Mutating in new feature: {new_feat}")
+                msg_lines.append(f"🧬 <b>Mutated In:</b> {new_feat}")
+                
+            with open(os.path.join(DATA_DIR, "active_features.json"), "w") as f:
+                json.dump(ACTIVE_FEATURES, f)
             
     msg_lines.append(f"\nCandidates are now live in the Shadow Arena.")
     msg = "\n".join(msg_lines)

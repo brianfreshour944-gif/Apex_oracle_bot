@@ -37,11 +37,28 @@
 import pandas as pd
 import numpy as np
 
+import json
+import os
+
+def get_active_features():
+    path = os.path.join(os.path.dirname(__file__), '..', 'data', 'active_features.json')
+    if os.path.exists(path):
+        try:
+            with open(path, 'r') as f:
+                return json.load(f)
+        except Exception:
+            pass
+    # default to the original 11
+    return [
+        "z_return", "parkinson_vol", "garman_klass_vol", "kyle_lambda",
+        "signed_flow", "vwap_z", "vol_of_vol", "amihud_z",
+        "trade_size_proxy", "roll_autocorr", "range_position_z"
+    ]
+
 # ── Feature columns ───────────────────────────────────────────────────────────
-# NOTE: This list is exactly 11 features — input_dim=11 in ml_predictor.py and
-# train_transformer.py is unchanged.  Update this list only if you also retrain
-# the model from scratch (changing input_dim breaks saved weights).
-FEATURE_COLS = [
+# NOTE: This list contains the master pool of ALL available features.
+# The active list used for training is dynamically pulled via get_active_features().
+MASTER_FEATURE_COLS = [
     "z_return",          # Vol-normalized log return — regime-invariant momentum
     "parkinson_vol",     # Parkinson (1980) range-based vol — 5x more efficient than std
     "garman_klass_vol",  # Garman-Klass (1980) OHLC vol — most efficient open-market estimator
@@ -53,6 +70,11 @@ FEATURE_COLS = [
     "trade_size_proxy",  # Avg trade size (vol/trade_count), Z-scored — inst. vs retail flow
     "roll_autocorr",     # Rolling lag-1 return autocorrelation — trend vs mean-reversion
     "range_position_z",  # Z-scored close position within 20-bar H/L range — breakout signal
+    "rsi",               # Relative Strength Index
+    "macd",              # MACD
+    "atr",               # Average True Range
+    "volume_spike",      # Volume anomaly
+    "bollinger_width",   # Bollinger Band Width
 ]
 
 # Neutral fill values for each feature (used on empty input or edge failures).
@@ -69,6 +91,11 @@ FEATURE_DEFAULTS = {
     "trade_size_proxy": 0.0,
     "roll_autocorr":    0.0,
     "range_position_z": 0.0,
+    "rsi":              50.0,
+    "macd":             0.0,
+    "atr":              0.0,
+    "volume_spike":     1.0,
+    "bollinger_width":  0.0,
 }
 
 
@@ -126,7 +153,7 @@ def add_features(df: pd.DataFrame) -> pd.DataFrame:
     if df is None or df.empty:
         idx = df.index if df is not None else None
         return pd.DataFrame(
-            {col: pd.Series(dtype="float64") for col in FEATURE_COLS},
+            {col: pd.Series(dtype="float64") for col in MASTER_FEATURE_COLS},
             index=idx,
         )
 
@@ -254,10 +281,44 @@ def add_features(df: pd.DataFrame) -> pd.DataFrame:
     range_pos_raw = _sanitize((close - roll_low_20) / roll_range_20, fill=0.5)
     d["range_position_z"] = _z_score(range_pos_raw, window=20, fill=0.0)
 
-    # ── Step 3: Final guard — all FEATURE_COLS present, correct dtype ─────────
-    for col in FEATURE_COLS:
+    # ── Feature 12: rsi ───────────────────────────────────────────────────────
+    diff = close.diff()
+    gain = _sanitize(diff.clip(lower=0.0), fill=0.0)
+    loss = _sanitize(-diff.clip(upper=0.0), fill=0.0)
+    avg_gain = gain.rolling(14, min_periods=2).mean()
+    avg_loss = loss.rolling(14, min_periods=2).mean().replace(0.0, np.nan)
+    rs = avg_gain / avg_loss
+    d["rsi"] = _sanitize(100.0 - (100.0 / (1.0 + rs)), fill=50.0)
+
+    # ── Feature 13: macd ──────────────────────────────────────────────────────
+    ema12 = close.ewm(span=12, adjust=False).mean()
+    ema26 = close.ewm(span=26, adjust=False).mean()
+    macd_raw = ema12 - ema26
+    d["macd"] = _z_score(macd_raw, window=20, fill=0.0)
+
+    # ── Feature 14: atr ───────────────────────────────────────────────────────
+    tr1 = high - low
+    tr2 = (high - safe_prev_close).abs()
+    tr3 = (low - safe_prev_close).abs()
+    tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+    atr_raw = tr.rolling(14, min_periods=2).mean()
+    d["atr"] = _z_score(atr_raw, window=20, fill=0.0)
+
+    # ── Feature 15: volume_spike ──────────────────────────────────────────────
+    vol_mean = volume.rolling(20, min_periods=2).mean().replace(0.0, np.nan)
+    vol_spike_raw = volume / vol_mean
+    d["volume_spike"] = _sanitize(vol_spike_raw, fill=1.0)
+
+    # ── Feature 16: bollinger_width ───────────────────────────────────────────
+    roll_std_20 = close.rolling(20, min_periods=2).std()
+    roll_mean_20 = close.rolling(20, min_periods=2).mean().replace(0.0, np.nan)
+    bw_raw = (roll_std_20 * 2) / roll_mean_20
+    d["bollinger_width"] = _z_score(bw_raw, window=20, fill=0.0)
+
+    # ── Step 3: Final guard — all MASTER_FEATURE_COLS present, correct dtype ──
+    for col in MASTER_FEATURE_COLS:
         if col not in d.columns:
             d[col] = FEATURE_DEFAULTS.get(col, 0.0)
         d[col] = _sanitize(d[col], fill=FEATURE_DEFAULTS.get(col, 0.0))
 
-    return d[FEATURE_COLS]
+    return d[MASTER_FEATURE_COLS]

@@ -152,10 +152,14 @@ async def transformer_brain(symbol: str, price: float, signal: dict) -> BrainVot
                     return None
                     
                 df_feat = add_features(df_raw.copy())
-                # ensure we only use columns the scaler was fitted on
-                # feature_engineering.FEATURE_COLS should match
-                from src.feature_engineering import FEATURE_COLS
-                data = df_feat[FEATURE_COLS].tail(32).values.astype(np.float32)
+                
+                if hasattr(scaler, "feature_names_in_"):
+                    cols = list(scaler.feature_names_in_)
+                else:
+                    from src.feature_engineering import get_active_features
+                    cols = get_active_features()
+                    
+                data = df_feat[cols].tail(32).values.astype(np.float32)
                 if len(data) < 32:
                     return None
                     
@@ -164,10 +168,10 @@ async def transformer_brain(symbol: str, price: float, signal: dict) -> BrainVot
                 data_scaled = scaler.transform(data).astype(np.float32)
                 data_scaled = np.nan_to_num(data_scaled, nan=0.0, posinf=0.0, neginf=0.0)
                 
-                # Let the shadow arena candidates process this same data
+                # Let the shadow arena candidates process the raw dataframe using their own scaler
                 try:
                     from src.shadow_arena import evaluate_candidates
-                    evaluate_candidates(symbol, price, data_scaled)
+                    evaluate_candidates(symbol, price, df_feat)
                 except Exception as shadow_e:
                     import logging
                     logging.getLogger("shadow_arena").error(f"Shadow evaluation failed: {shadow_e}")
