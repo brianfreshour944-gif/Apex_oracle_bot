@@ -195,11 +195,12 @@ class TradingBotSettings(BaseSettings):
         le=300
     )
     STATUS_PORT: int = Field(
-        default=8080,
+        default=8000,
         description="Port for HTTP status server",
         ge=1024,
         le=65535
     )
+
     BOT_NAME: str = Field(
         default="apex_oracle_bot",
         description="Bot name for identification"

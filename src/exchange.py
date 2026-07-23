@@ -331,7 +331,12 @@ class AlpacaExchange:
                     auth_response = json.loads(await ws.recv())
                     logger.info(f"WebSocket Auth Response: {auth_response}")
                     if isinstance(auth_response, list) and auth_response[0].get("T") == "error":
-                        raise ValueError(f"WebSocket auth failed: {auth_response[0].get('msg')}")
+                        err_msg = auth_response[0].get("msg", "")
+                        if "connection limit" in err_msg.lower():
+                            logger.warning("⚠️ Alpaca WebSocket connection limit exceeded (another bot instance is using the API key). Backing off 15s...")
+                            await asyncio.sleep(15.0)
+                        raise ValueError(f"WebSocket auth failed: {err_msg}")
+
 
                     sub_message = {
                         "action": "subscribe",
