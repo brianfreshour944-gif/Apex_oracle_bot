@@ -74,8 +74,33 @@ async def process_signal_for_symbol(symbol: str, current_price: float, risk_mana
 
         logger.info(f"Signal for {symbol} @ ${current_price:.2f}: {signal['action']} (regime: {signal['regime']}, RSI: {signal['rsi']:.2f})")
 
-        # Execute signal if not "hold" or "stand_aside"
-        if signal["action"] in ["buy", "sell"]:
+        # ── 5-BRAIN ENSEMBLE COMMITTEE EVALUATION ──
+        from src.committee.committee import run_committee
+        committee_result = await run_committee(symbol, current_price, signal)
+
+        # Log committee votes breakdown
+        logger.info(f"🗳️ Committee evaluation for {symbol}:")
+        for v in committee_result.votes:
+            logger.info(
+                f"   [{v.name:<11}] {v.action.upper():<11} "
+                f"conf={v.confidence:.3f} (weight={v.weight*100:.0f}%) "
+                f"| {v.reason}"
+            )
+
+        if committee_result.vetoed:
+            logger.info(f"🛑 {symbol} trade VETOED by Committee: {committee_result.veto_reason}")
+            return
+
+        logger.info(f"   Winner: {committee_result.action.upper()} score={committee_result.score:.3f} (threshold >= 0.60)")
+
+        if committee_result.action in ["stand_aside", "skip", "hold"]:
+            logger.info(f"⏭️ {symbol}: Committee action is {committee_result.action.upper()} (score={committee_result.score:.3f}). Skipping trade entry.")
+            return
+
+        # Override original signal action & confidence with committee's consensus decision
+        signal["action"] = committee_result.action
+        signal["confidence"] = committee_result.score
+
             
             # ── REGIME SWITCH CHECK (Only for ENTRY, not EXIT) ──
             if signal["action"] == "buy":
@@ -111,8 +136,13 @@ async def process_signal_for_symbol(symbol: str, current_price: float, risk_mana
             if signal["action"] == "buy":
                 multiplier = regime_flag.get("oracle_multiplier", 1.0)
                 position_size = position_size * multiplier
-                # Round to appropriate precision (assuming risk_manager handles base precision, but let's do a simple round)
-                position_size = round(position_size, 6)
+
+            # Apply Committee Confidence Sizing Multiplier (Higher confidence = Larger trade size)
+            committee_mult = getattr(committee_result, "size_multiplier", 1.0)
+            position_size = position_size * committee_mult
+            position_size = round(position_size, 6)
+            logger.info(f"📊 Applied Committee Sizing Multiplier ({committee_mult:.2f}x based on score {committee_result.score:.2f}) → Final Qty: {position_size}")
+
 
             # Place order
             order_result = await ex.create_order(
