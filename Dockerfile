@@ -15,8 +15,11 @@ ENV UV_COMPILE_BYTECODE=1
 # Copy configuration files first for Docker layer caching
 COPY pyproject.toml requirements.txt ./
 
-# Install dependencies into virtual environment
+# Install dependencies into virtual environment.
+# We explicitly install the CPU-only version of PyTorch to prevent Docker OOM
+# and save 2.5GB of useless CUDA libraries on GPU-less Oracle servers.
 RUN uv venv /app/.venv && \
+    uv pip install --no-cache torch --index-url https://download.pytorch.org/whl/cpu --python /app/.venv && \
     uv pip install --no-cache -r requirements.txt --python /app/.venv
 
 # ------------------------------------------------------------------------------
