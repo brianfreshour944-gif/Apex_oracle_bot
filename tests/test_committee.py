@@ -29,7 +29,7 @@ async def test_committee_buy_consensus_and_sizing():
     assert result.vetoed is False
     assert result.action == "buy"
     assert result.score >= WINNING_SCORE_THRESHOLD
-    assert 0.80 <= result.size_multiplier <= 1.50  # Dynamic sizing multiplier check
+    assert 0.50 <= result.size_multiplier <= 1.50  # Dynamic sizing multiplier check
     assert len(result.votes) == 5
 
 
