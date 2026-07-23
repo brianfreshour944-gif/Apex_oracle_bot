@@ -57,6 +57,7 @@ class DecisionSnapshot(Base):
     qty: Mapped[float] = mapped_column(Float, default=0.0)
     votes_json: Mapped[str] = mapped_column(Text, default="{}")  # {brain: action}
     feature_snapshot_json: Mapped[str] = mapped_column(Text, default="{}")
+    causal_reasoning_json: Mapped[str] = mapped_column(Text, default="{}") # {feature: contribution}
     status: Mapped[str] = mapped_column(String(16), default="open")  # open|closed
     exit_reason: Mapped[Optional[str]] = mapped_column(String(48), nullable=True, default=None)
     max_favorable_pct: Mapped[float] = mapped_column(Float, default=0.0)
@@ -210,6 +211,7 @@ def save_decision_snapshot(
     qty: float,
     brain_votes: Dict[str, str],
     feature_snapshot_json: str = "{}",
+    causal_reasoning_json: str = "{}"
 ) -> bool:
     """Persist a committee decision at entry. Returns True on success."""
     try:
@@ -226,6 +228,7 @@ def save_decision_snapshot(
                 qty=float(qty),
                 votes_json=json.dumps(brain_votes or {}),
                 feature_snapshot_json=feature_snapshot_json,
+                causal_reasoning_json=causal_reasoning_json,
                 status="open",
             )
             session.merge(snap)

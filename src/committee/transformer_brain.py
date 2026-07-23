@@ -177,14 +177,34 @@ async def transformer_brain(symbol: str, price: float, signal: dict) -> BrainVot
                     logging.getLogger("shadow_arena").error(f"Shadow evaluation failed: {shadow_e}")
                 
                 x = torch.tensor(data_scaled).unsqueeze(0).to(device)
+                
+                # Causal Reasoning: Approximate SHAP via Gradients * Input
+                x.requires_grad = True
+                
+                raw_logit = model(x).squeeze(1)
+                raw_logit.backward()
+                
+                # Gradients w.r.t the last timestep's features
+                grads = x.grad[0, -1, :].cpu().numpy()
+                feats = data_scaled[-1, :]
+                
+                # Simple Feature Importance (Gradient * Input)
+                contributions = grads * feats
+                
+                # Map contributions to feature names
+                causal_reasoning = {}
+                for i, col in enumerate(cols):
+                    causal_reasoning[col] = float(contributions[i])
+                
                 with torch.no_grad():
-                    raw_logit = model(x).squeeze(1).item()
-                    out_prob = float(torch.sigmoid(torch.tensor(raw_logit)).item())
-                    return out_prob, raw_logit
+                    out_prob = float(torch.sigmoid(torch.tensor(raw_logit.item())).item())
+                    
+                return out_prob, raw_logit.item(), causal_reasoning
                     
             res = await asyncio.to_thread(_do_inference)
+            causal_reasoning_dict = None
             if res is not None:
-                prob, logit = res
+                prob, logit, causal_reasoning_dict = res
                 reason = f"Grok PyTorch Inference prob={prob:.3f} (logit={logit:.2f})"
         except Exception as e:
             import logging
@@ -204,5 +224,6 @@ async def transformer_brain(symbol: str, price: float, signal: dict) -> BrainVot
         confidence=prob,
         weight=0.35,
         regime=regime,
-        reason=reason
+        reason=reason,
+        causal_reasoning=causal_reasoning_dict
     )

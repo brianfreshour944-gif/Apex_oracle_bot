@@ -12,6 +12,7 @@ class BrainVote:
     regime: str
     reason: str
     is_veto: bool = False
+    causal_reasoning: Optional[Dict[str, float]] = None
 
 @dataclass
 class CommitteeResult:

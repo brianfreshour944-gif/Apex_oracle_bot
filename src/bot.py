@@ -280,12 +280,18 @@ async def process_signal_for_symbol(symbol: str, current_price: float, risk_mana
                     qty=position_size,
                     brain_votes={v.name: v.action for v in committee_result.votes},
                     feature_snapshot_json=json.dumps({
-                        **signal.get("features", {}),
-                        "selected_strategy": signal.get("selected_strategy")
+                        "atr": signal.get("atr"),
+                        "rsi": signal.get("rsi"),
+                        "macd": signal.get("macd"),
+                        "selected_strategy": signal.get("selected_strategy"),
                     }),
+                    causal_reasoning_json=json.dumps({
+                        v.name: getattr(v, "causal_reasoning", None) 
+                        for v in committee_result.votes if getattr(v, "causal_reasoning", None)
+                    })
                 )
-            except Exception as e:
-                logger.warning(f"Decision snapshot persist failed for {symbol} (non-fatal): {e}")
+            except Exception as db_e:
+                logger.warning(f"Decision snapshot persist failed for {symbol} (non-fatal): {db_e}")
 
         elif signal["action"] == "close" and current_position:
 

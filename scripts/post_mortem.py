@@ -48,6 +48,8 @@ def analyze_losses():
     total_atr = 0.0
     feature_counts = 0
     strategy_counter = Counter()
+    causal_aggregate = Counter()
+    causal_counts = Counter()
     
     for t in losing_trades:
         try:
@@ -58,7 +60,16 @@ def analyze_losses():
             strategy_counter[strategy] += 1
             feature_counts += 1
         except Exception:
-            continue
+            pass
+            
+        try:
+            causal = json.loads(t.causal_reasoning_json)
+            if "transformer" in causal and causal["transformer"]:
+                for feat, val in causal["transformer"].items():
+                    causal_aggregate[feat] += val
+                    causal_counts[feat] += 1
+        except Exception:
+            pass
             
     avg_rsi = total_rsi / feature_counts if feature_counts else 50.0
     avg_atr = total_atr / feature_counts if feature_counts else 0.0
@@ -89,6 +100,16 @@ def analyze_losses():
         f.write("Average technical conditions during a loss:\n")
         f.write(f"- **Average RSI:** {avg_rsi:.2f}\n")
         f.write(f"- **Average ATR (Volatility):** {avg_atr:.4f}\n\n")
+        
+        if causal_counts:
+            f.write("## 4. Causal Reasoning (Transformer SHAP)\n")
+            f.write("Which features did the Transformer incorrectly weight the highest during these losses?\n")
+            for feat, count in causal_counts.most_common():
+                avg_val = causal_aggregate[feat] / count
+                if abs(avg_val) > 0.01:
+                    direction = "Positive" if avg_val > 0 else "Negative"
+                    f.write(f"- **{feat}**: Average {direction} contribution of {avg_val:+.4f}\n")
+            f.write("\n")
         
         f.write("## AI Recommendations\n")
         

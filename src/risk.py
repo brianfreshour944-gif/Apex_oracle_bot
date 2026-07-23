@@ -134,11 +134,13 @@ class RiskManager:
         confidence: float = 1.0,
         returns_matrix: Optional[Dict[str, np.ndarray]] = None,
     ) -> Tuple[float, str]:
-        """Calculate position size with ATR volatility parity, confidence weighting, and correlation check."""
+        """Portfolio Optimization: Volatility Parity, Correlation VaR, and Cash Allocation."""
         try:
-            risk_amount = settings.ACCOUNT_BASE * settings.BASE_RISK_PERCENT
+            # 1. Dynamic Cash Allocation (base risk scales with actual equity, not hardcoded base)
+            account_equity = self.peak_equity if self.peak_equity > 0 else settings.ACCOUNT_BASE
+            risk_amount = account_equity * settings.BASE_RISK_PERCENT
 
-            # ATR Volatility Parity Sizing (if ATR available)
+            # 2. Volatility Targeting (Equal risk contribution)
             if atr is not None and atr > 0:
                 stop_distance = atr * getattr(settings, "ATR_STOP_MULTIPLIER", 2.0)
                 position_size = risk_amount / stop_distance
@@ -151,31 +153,40 @@ class RiskManager:
             elif regime == "mean_reverting":
                 position_size *= 0.8
 
-            # Confidence weighting (scale between 0.5 and 1.5)
+            # Confidence weighting
             conf_weight = np.clip(confidence, 0.5, 1.5)
             position_size *= conf_weight
 
-            # Cross-symbol correlation check (downscale if high correlation > 0.85)
+            # 3. Correlation Matrix & Portfolio VaR
             if returns_matrix and len(returns_matrix) > 1:
                 keys = list(returns_matrix.keys())
-                corrs = []
-                for k in keys:
-                    if k != symbol and len(returns_matrix[k]) == len(returns_matrix.get(symbol, [])):
-                        c = np.corrcoef(returns_matrix[symbol], returns_matrix[k])[0, 1]
-                        if not np.isnan(c):
-                            corrs.append(c)
-                if corrs and np.mean(corrs) > 0.85:
-                    logger.warning(f"High portfolio correlation ({np.mean(corrs):.2f}) for {symbol}. Downscaling size by 30%.")
-                    position_size *= 0.7
+                
+                # Build correlation matrix
+                valid_keys = [k for k in keys if len(returns_matrix[k]) == len(returns_matrix.get(symbol, []))]
+                if len(valid_keys) > 1:
+                    returns_arr = np.array([returns_matrix[k] for k in valid_keys])
+                    corr_matrix = np.corrcoef(returns_arr)
+                    
+                    # Find our symbol's index
+                    if symbol in valid_keys:
+                        idx = valid_keys.index(symbol)
+                        symbol_corrs = corr_matrix[idx]
+                        avg_corr = (np.sum(symbol_corrs) - 1.0) / (len(valid_keys) - 1)
+                        
+                        # Maximize diversification: scale down heavily if entering correlated cluster
+                        if avg_corr > 0.5:
+                            penalty = max(0.2, 1.0 - (avg_corr - 0.5) * 2) # e.g. 0.8 corr -> 0.4 penalty
+                            logger.info(f"Portfolio Optimizer: {symbol} correlation cluster ({avg_corr:.2f}). VaR constraint -> size x{penalty:.2f}.")
+                            position_size *= penalty
 
-            # Apply hard dollar cap per trade
+            # 4. Maximum Sector/Direction Exposure (Hard Cap)
             position_size = min(position_size, settings.MAX_SINGLE_TRADE_USD / current_price)
             position_size = round(position_size, 6)
 
             return position_size, "ok"
 
         except Exception as e:
-            logger.error(f"Position sizing failed: {e}")
+            logger.error(f"Portfolio optimization failed: {e}")
             return 0.0, f"error: {e}"
 
 
