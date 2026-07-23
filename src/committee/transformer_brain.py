@@ -5,7 +5,6 @@ Performs live model inference if PyTorch & model weights exist, with graceful fa
 """
 
 import os
-import joblib
 import numpy as np
 from typing import Optional
 from .models import BrainVote
@@ -26,8 +25,10 @@ def get_ml_predictor():
     _predictor_initialized = True
     if os.path.exists(MODEL_PATH) and os.path.exists(SCALER_PATH):
         try:
+            import joblib
             import torch
             import torch.nn as nn
+
             import torch.nn.functional as F
 
             class GQA_TransformerBlock(nn.Module):
