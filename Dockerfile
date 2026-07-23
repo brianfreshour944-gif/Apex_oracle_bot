@@ -2,7 +2,10 @@
 # ------------------------------------------------------------------------------
 # Build Stage: Install dependencies with uv
 # ------------------------------------------------------------------------------
-FROM ghcr.io/astral-sh/uv:latest AS builder
+FROM python:3.12-slim AS builder
+
+# Copy uv binary from official Astral image
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 
 WORKDIR /app
 
