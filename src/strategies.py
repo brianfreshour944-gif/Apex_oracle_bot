@@ -75,12 +75,19 @@ class TradingStrategy:
                 htf_trend = "bullish" if close_arr[-1] > ema20 else "bearish"
 
             # Classify regime
-            if hurst > settings.HURST_TREND_UP:
-                regime = "trending"
-            elif hurst < settings.HURST_MEAN_REVERT:
-                regime = "mean_reverting"
-            elif atr > settings.HIGH_VOLATILITY_PCT:
+            if atr > settings.HIGH_VOLATILITY_PCT:
                 regime = "high_volatility"
+            elif atr < settings.HIGH_VOLATILITY_PCT * 0.25:
+                regime = "low_volatility"
+            elif hurst > settings.HURST_TREND_UP:
+                if htf_trend == "bullish":
+                    regime = "bull"
+                elif htf_trend == "bearish":
+                    regime = "bear"
+                else:
+                    regime = "trending"
+            elif hurst < settings.HURST_MEAN_REVERT:
+                regime = "sideways"
             else:
                 regime = "neutral"
 
@@ -210,12 +217,14 @@ class TradingStrategy:
 
     def _calculate_regime_confidence(self, regime: str, hurst: float, atr: float, rsi: float) -> float:
         """Calculate confidence in regime classification."""
-        if regime == "trending":
+        if regime in ["bull", "bear", "trending"]:
             return min(1.0, (hurst - settings.HURST_TREND_UP) * 2.0)
-        elif regime == "mean_reverting":
+        elif regime == "sideways":
             return min(1.0, (settings.HURST_MEAN_REVERT - hurst) * 2.0)
         elif regime == "high_volatility":
             return min(1.0, (atr - settings.HIGH_VOLATILITY_PCT) / settings.HIGH_VOLATILITY_PCT)
+        elif regime == "low_volatility":
+            return min(1.0, (settings.HIGH_VOLATILITY_PCT * 0.25 - atr) / (settings.HIGH_VOLATILITY_PCT * 0.25))
         else:
             return 1.0 - abs(0.5 - hurst) * 2.0
 
@@ -241,7 +250,7 @@ class TradingStrategy:
 
             # Check if we should enter a position
             if not position:
-                if regime == "trending":
+                if regime in ["bull", "trending"]:
                     # Buy on deeper pullbacks while higher timeframe trend is intact
                     if rsi < 55.0 and rsi > prev_rsi and regime_data.get("htf_trend") != "bearish":
                         return {
@@ -254,7 +263,7 @@ class TradingStrategy:
                             "features": regime_data
                         }
 
-                elif regime == "mean_reverting":
+                elif regime == "sideways":
                     # Buy when oversold, sell (short) when overbought
                     if rsi < settings.RSI_OVERSOLD and rsi > prev_rsi:
                         return {
@@ -278,8 +287,8 @@ class TradingStrategy:
             # Check if we should exit a position (regime flip OR price-based exits)
             if position:
                 # Regime-based exit
-                if (regime == "trending" and rsi > settings.RSI_NEUTRAL_SELL) or \
-                   (regime == "mean_reverting" and rsi < settings.RSI_NEUTRAL_BUY):
+                if (regime in ["bull", "bear", "trending"] and rsi > settings.RSI_NEUTRAL_SELL) or \
+                   (regime == "sideways" and rsi < settings.RSI_NEUTRAL_BUY):
                     return {
                         "symbol": symbol,
                         "action": "close",

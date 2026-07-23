@@ -9,17 +9,17 @@ async def momentum_brain(symbol: str, price: float, signal: dict) -> BrainVote:
     """Evaluates market regime transitions and trend momentum."""
     regime = signal.get("regime", "neutral")
 
-    if regime == "dump_to_accumulation":
-        return BrainVote("momentum", "buy", 0.90, 0.20, regime, "Regime DUMP→ACCUM bottom reversal")
-    elif regime == "uptrend_to_distribution":
-        return BrainVote("momentum", "sell", 0.92, 0.20, regime, "Regime UPTREND→DIST top exhaustion")
-    elif regime in ["dump", "crash"]:
-        return BrainVote("momentum", "stand_aside", 0.85, 0.20, regime, "Avoid falling knife / market crash")
-    elif regime == "uptrend":
-        return BrainVote("momentum", "buy", 0.75, 0.20, regime, "Uptrend continuation")
-    elif regime == "downtrend":
-        return BrainVote("momentum", "sell", 0.75, 0.20, regime, "Downtrend continuation")
-    elif regime == "quiet":
+    if regime == "bull":
+        return BrainVote("momentum", "buy", 0.85, 0.20, regime, "Bull market continuation")
+    elif regime == "bear":
+        return BrainVote("momentum", "sell", 0.85, 0.20, regime, "Bear market continuation")
+    elif regime == "trending":
+        return BrainVote("momentum", "buy", 0.75, 0.20, regime, "Directional trend continuation")
+    elif regime == "high_volatility":
+        return BrainVote("momentum", "stand_aside", 0.85, 0.20, regime, "Avoid high volatility chop")
+    elif regime == "low_volatility":
         return BrainVote("momentum", "stand_aside", 0.60, 0.20, regime, "Low liquidity / quiet market")
+    elif regime == "sideways":
+        return BrainVote("momentum", "stand_aside", 0.50, 0.20, regime, "Sideways mean-reverting market")
 
     return BrainVote("momentum", "stand_aside", 0.50, 0.20, regime, f"Neutral regime ({regime})")

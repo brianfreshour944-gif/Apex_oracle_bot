@@ -85,60 +85,53 @@ def reset_meta_learner() -> None:
 
 # Dynamic Weight Matrix based on Market Regime
 REGIME_WEIGHT_MATRIX = {
-    "uptrend": {
+    "bull": {
         "transformer": 0.40,
         "quant": 0.20,
         "momentum": 0.30,
         "sentinel": 0.05,
         "llm": 0.05
     },
-    "downtrend": {
+    "bear": {
         "transformer": 0.40,
         "quant": 0.20,
         "momentum": 0.30,
         "sentinel": 0.05,
         "llm": 0.05
     },
-    "dump_to_accumulation": {
-        "transformer": 0.30,
-        "quant": 0.30,
+    "trending": {
+        "transformer": 0.40,
+        "quant": 0.20,
         "momentum": 0.30,
         "sentinel": 0.05,
         "llm": 0.05
     },
-    "uptrend_to_distribution": {
-        "transformer": 0.30,
-        "quant": 0.30,
-        "momentum": 0.30,
-        "sentinel": 0.05,
-        "llm": 0.05
-    },
-    "quiet": {
+    "sideways": {
         "transformer": 0.20,
         "quant": 0.45,
         "momentum": 0.10,
         "sentinel": 0.10,
         "llm": 0.15
     },
-    "ranging": {
-        "transformer": 0.20,
-        "quant": 0.45,
-        "momentum": 0.10,
-        "sentinel": 0.10,
-        "llm": 0.15
-    },
-    "dump": {
+    "high_volatility": {
         "transformer": 0.15,
         "quant": 0.15,
         "momentum": 0.20,
         "sentinel": 0.40,
         "llm": 0.10
     },
-    "crash": {
-        "transformer": 0.10,
-        "quant": 0.10,
+    "low_volatility": {
+        "transformer": 0.30,
+        "quant": 0.30,
+        "momentum": 0.10,
+        "sentinel": 0.05,
+        "llm": 0.25
+    },
+    "neutral": {
+        "transformer": 0.35,
+        "quant": 0.25,
         "momentum": 0.20,
-        "sentinel": 0.50,
+        "sentinel": 0.10,
         "llm": 0.10
     },
     "default": {

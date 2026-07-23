@@ -279,7 +279,7 @@ class TradingBotSettings(BaseSettings):
     # realized outcomes. risk.py stays authoritative — this never bypasses the
     # drawdown/daily-loss killswitch, order sizing, or stop-loss logic.
     ADAPTIVE_ML_ENABLED: bool = Field(
-        default=False,
+        default=True,
         description="Let the meta-learner drive the committee decision. "
                     "Default False = paper-only shadow mode (computed, logged, but not acted on).",
     )
@@ -306,7 +306,7 @@ class TradingBotSettings(BaseSettings):
         le=1,
     )
     ADAPTIVE_MIN_TRADES_BEFORE_LIVE: int = Field(
-        default=50,
+        default=10,
         description="Realized outcomes required before adaptive weights drive live decisions "
                     "(below this the learner runs in shadow mode even when enabled)",
         ge=0,
