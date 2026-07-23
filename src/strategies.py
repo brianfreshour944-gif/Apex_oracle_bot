@@ -235,7 +235,8 @@ class TradingStrategy:
                     "action": "stand_aside",
                     "reason": "high_volatility_regime",
                     "regime": regime,
-                    "rsi": rsi
+                    "rsi": rsi,
+                    "features": regime_data
                 }
 
             # Check if we should enter a position
@@ -249,7 +250,8 @@ class TradingStrategy:
                             "reason": "trending_pullback_bounce_buy",
                             "regime": regime,
                             "rsi": rsi,
-                            "htf_trend": regime_data.get("htf_trend")
+                            "htf_trend": regime_data.get("htf_trend"),
+                            "features": regime_data
                         }
 
                 elif regime == "mean_reverting":
@@ -260,7 +262,8 @@ class TradingStrategy:
                             "action": "buy",
                             "reason": "mean_reverting_bounce_buy",
                             "regime": regime,
-                            "rsi": rsi
+                            "rsi": rsi,
+                            "features": regime_data
                         }
                     elif rsi > settings.RSI_OVERBOUGHT:
                         return {
@@ -268,7 +271,8 @@ class TradingStrategy:
                             "action": "sell",
                             "reason": "mean_reverting_overbought_sell",
                             "regime": regime,
-                            "rsi": rsi
+                            "rsi": rsi,
+                            "features": regime_data
                         }
 
             # Check if we should exit a position (regime flip OR price-based exits)
@@ -281,7 +285,8 @@ class TradingStrategy:
                         "action": "close",
                         "reason": "regime_change_exit_signal",
                         "regime": regime,
-                        "rsi": rsi
+                        "rsi": rsi,
+                        "features": regime_data
                     }
 
                 # Price-based exit checks
@@ -289,6 +294,7 @@ class TradingStrategy:
                 if exit_signal:
                     exit_signal["regime"] = regime
                     exit_signal["rsi"] = rsi
+                    exit_signal["features"] = regime_data
                     return exit_signal
 
             return {
@@ -296,7 +302,8 @@ class TradingStrategy:
                 "action": "hold",
                 "reason": "no_signal",
                 "regime": regime,
-                "rsi": rsi
+                "rsi": rsi,
+                "features": regime_data
             }
 
         except Exception as e:
@@ -307,7 +314,8 @@ class TradingStrategy:
                 "reason": "error",
                 "error": str(e),
                 "regime": "neutral",
-                "rsi": 50.0
+                "rsi": 50.0,
+                "features": {}
             }
 
     def _check_price_based_exits(self, symbol: str, current_price: float, position: Dict[str, Any]) -> Optional[Dict[str, Any]]:

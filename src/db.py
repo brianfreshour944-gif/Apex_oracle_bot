@@ -56,7 +56,11 @@ class DecisionSnapshot(Base):
     entry_price: Mapped[float] = mapped_column(Float, default=0.0)
     qty: Mapped[float] = mapped_column(Float, default=0.0)
     votes_json: Mapped[str] = mapped_column(Text, default="{}")  # {brain: action}
+    feature_snapshot_json: Mapped[str] = mapped_column(Text, default="{}")
     status: Mapped[str] = mapped_column(String(16), default="open")  # open|closed
+    exit_reason: Mapped[Optional[str]] = mapped_column(String(48), nullable=True, default=None)
+    max_favorable_pct: Mapped[float] = mapped_column(Float, default=0.0)
+    max_adverse_pct: Mapped[float] = mapped_column(Float, default=0.0)
     realized_pnl: Mapped[float] = mapped_column(Float, default=0.0)
     return_pct: Mapped[float] = mapped_column(Float, default=0.0)
     holding_period_sec: Mapped[float] = mapped_column(Float, default=0.0)
@@ -138,6 +142,7 @@ def save_decision_snapshot(
     entry_price: float,
     qty: float,
     brain_votes: Dict[str, str],
+    feature_snapshot_json: str = "{}",
 ) -> bool:
     """Persist a committee decision at entry. Returns True on success."""
     try:
@@ -153,6 +158,7 @@ def save_decision_snapshot(
                 entry_price=float(entry_price),
                 qty=float(qty),
                 votes_json=json.dumps(brain_votes or {}),
+                feature_snapshot_json=feature_snapshot_json,
                 status="open",
             )
             session.merge(snap)
@@ -198,6 +204,9 @@ def close_decision_snapshot(
     realized_pnl: float,
     return_pct: float = 0.0,
     holding_period_sec: float = 0.0,
+    exit_reason: Optional[str] = None,
+    max_favorable_pct: float = 0.0,
+    max_adverse_pct: float = 0.0,
 ) -> bool:
     """Mark a snapshot closed and record its realized outcome."""
     try:
@@ -209,6 +218,10 @@ def close_decision_snapshot(
             row.realized_pnl = float(realized_pnl)
             row.return_pct = float(return_pct)
             row.holding_period_sec = float(holding_period_sec)
+            if exit_reason is not None:
+                row.exit_reason = exit_reason
+            row.max_favorable_pct = float(max_favorable_pct)
+            row.max_adverse_pct = float(max_adverse_pct)
             row.closed_at = datetime.datetime.now(datetime.timezone.utc)
             session.commit()
         return True

@@ -130,26 +130,50 @@ async def transformer_brain(symbol: str, price: float, signal: dict) -> BrainVot
 
     if predictor is not None:
         try:
+            import asyncio
+            import os
+            from src.feature_engineering import fetch_bars, add_features
+            from alpaca.data.historical import CryptoHistoricalDataClient
+
             torch = predictor["torch"]
             model = predictor["model"]
             scaler = predictor["scaler"]
             device = predictor["device"]
-
-            # Construct input features if provided in signal data
-            features = signal.get("features")
-            if features is not None and len(features) > 0:
-                feat_scaled = scaler.transform([features])
-                # Repeat over 32 sequence length if 2D
-                if len(feat_scaled.shape) == 2:
-                    feat_seq = np.tile(feat_scaled, (1, 32, 1))
-                else:
-                    feat_seq = feat_scaled
-
-                tensor_in = torch.tensor(feat_seq, dtype=torch.float32).to(device)
+            
+            def _do_inference():
+                key = os.getenv("APCA_API_KEY_ID")
+                secret = os.getenv("APCA_API_SECRET_KEY")
+                if not key or not secret:
+                    return None
+                
+                client = CryptoHistoricalDataClient(api_key=key, secret_key=secret)
+                df_raw = fetch_bars(client, symbol.replace("/", ""), days=2)
+                if df_raw is None or len(df_raw) < 32:
+                    return None
+                    
+                df_feat = add_features(df_raw.copy())
+                # ensure we only use columns the scaler was fitted on
+                # feature_engineering.FEATURE_COLS should match
+                from src.feature_engineering import FEATURE_COLS
+                data = df_feat[FEATURE_COLS].tail(32).values.astype(np.float32)
+                if len(data) < 32:
+                    return None
+                    
+                data = np.nan_to_num(data, nan=0.0, posinf=0.0, neginf=0.0)
+                data = np.clip(data, -1e6, 1e6)
+                data_scaled = scaler.transform(data).astype(np.float32)
+                data_scaled = np.nan_to_num(data_scaled, nan=0.0, posinf=0.0, neginf=0.0)
+                
+                x = torch.tensor(data_scaled).unsqueeze(0).to(device)
                 with torch.no_grad():
-                    logit = model(tensor_in).item()
-                    prob = 1.0 / (1.0 + np.exp(-logit))  # Sigmoid output
-                    reason = f"Grok PyTorch Inference prob={prob:.3f} (logit={logit:.2f})"
+                    raw_logit = model(x).squeeze(1).item()
+                    out_prob = float(torch.sigmoid(torch.tensor(raw_logit)).item())
+                    return out_prob, raw_logit
+                    
+            res = await asyncio.to_thread(_do_inference)
+            if res is not None:
+                prob, logit = res
+                reason = f"Grok PyTorch Inference prob={prob:.3f} (logit={logit:.2f})"
         except Exception as e:
             import logging
             logging.getLogger("committee").error(f"Transformer inference error: {e}")
