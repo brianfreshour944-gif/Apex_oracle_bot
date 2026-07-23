@@ -74,15 +74,20 @@ class TradingStrategy:
                 ema20 = float(bars_df["close"].ewm_mean(span=20)[-1])
                 htf_trend = "bullish" if close_arr[-1] > ema20 else "bearish"
 
-            # Classify regime
+            # Normalize ATR as percentage of price for threshold comparison
+            current_price = close_arr[-1]
+            atr_pct = (atr / current_price) * 100
+
+            # Classify regime mapped to committee names
             if hurst > settings.HURST_TREND_UP:
-                regime = "trending"
+                regime = "uptrend" if htf_trend == "bullish" else "downtrend"
             elif hurst < settings.HURST_MEAN_REVERT:
-                regime = "mean_reverting"
-            elif atr > settings.HIGH_VOLATILITY_PCT:
-                regime = "high_volatility"
+                regime = "ranging"
+            elif atr_pct > settings.HIGH_VOLATILITY_PCT:
+                drawdown = (np.max(close_arr) - current_price) / np.max(close_arr)
+                regime = "crash" if drawdown > 0.15 else "dump"
             else:
-                regime = "neutral"
+                regime = "quiet"
 
             self.current_regime = regime
 
@@ -185,8 +190,9 @@ class TradingStrategy:
         up = seed[seed >= 0].sum() / period
         down = -seed[seed < 0].sum() / period
 
-        rs = up / down
-        rsi = np.where(down == 0, 100, 100 - (100 / (1 + rs)))
+        rs = up / down if down != 0 else float('inf')
+        rsi_val = 100.0 if down == 0 else 100.0 - (100.0 / (1.0 + rs))
+        rsi = np.array([rsi_val])
 
         for i in range(period+1, len(prices)):
             delta = deltas[i-1]
@@ -210,12 +216,12 @@ class TradingStrategy:
 
     def _calculate_regime_confidence(self, regime: str, hurst: float, atr: float, rsi: float) -> float:
         """Calculate confidence in regime classification."""
-        if regime == "trending":
+        if regime in ["uptrend", "downtrend"]:
             return min(1.0, (hurst - settings.HURST_TREND_UP) * 2.0)
-        elif regime == "mean_reverting":
+        elif regime == "ranging":
             return min(1.0, (settings.HURST_MEAN_REVERT - hurst) * 2.0)
-        elif regime == "high_volatility":
-            return min(1.0, (atr - settings.HIGH_VOLATILITY_PCT) / settings.HIGH_VOLATILITY_PCT)
+        elif regime in ["crash", "dump"]:
+            return 0.85
         else:
             return 1.0 - abs(0.5 - hurst) * 2.0
 
@@ -229,7 +235,7 @@ class TradingStrategy:
             prev_rsi = regime_data.get("prev_rsi", rsi)
 
             # Skip trading in high volatility regime
-            if regime == "high_volatility":
+            if regime in ["crash", "dump", "high_volatility"]:
                 return {
                     "symbol": symbol,
                     "action": "stand_aside",
@@ -240,7 +246,7 @@ class TradingStrategy:
 
             # Check if we should enter a position
             if not position:
-                if regime == "trending":
+                if regime in ["uptrend", "downtrend"]:
                     # Buy on deeper pullbacks while higher timeframe trend is intact
                     if rsi < 55.0 and rsi > prev_rsi and regime_data.get("htf_trend") != "bearish":
                         return {
@@ -252,7 +258,7 @@ class TradingStrategy:
                             "htf_trend": regime_data.get("htf_trend")
                         }
 
-                elif regime == "mean_reverting":
+                elif regime == "ranging":
                     # Buy when oversold, sell (short) when overbought
                     if rsi < settings.RSI_OVERSOLD and rsi > prev_rsi:
                         return {
@@ -273,9 +279,9 @@ class TradingStrategy:
 
             # Check if we should exit a position (regime flip OR price-based exits)
             if position:
-                # Regime-based exit
-                if (regime == "trending" and rsi > settings.RSI_NEUTRAL_SELL) or \
-                   (regime == "mean_reverting" and rsi < settings.RSI_NEUTRAL_BUY):
+                # Regime-based exit (Fix inverted logic)
+                if (regime in ["uptrend", "downtrend"] and rsi > 75) or \
+                   (regime == "ranging" and rsi > 55):
                     return {
                         "symbol": symbol,
                         "action": "close",

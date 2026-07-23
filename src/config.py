@@ -71,7 +71,7 @@ class TradingBotSettings(BaseSettings):
         le=1
     )
     MAX_SINGLE_TRADE_USD: float = Field(
-        default=2500.0,
+        default=250.0,
         description="Hard cap per trade size in USD",
         gt=0
     )

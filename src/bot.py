@@ -20,6 +20,7 @@ logger = get_logger("bot")
 ex: Optional[AlpacaExchange] = None
 strategy: Optional[TradingStrategy] = None
 risk_manager: Optional[RiskManager] = None
+_symbol_locks: Dict[str, asyncio.Lock] = {}
 
 import json
 
@@ -38,7 +39,7 @@ def read_regime_flag():
             return data
     except (FileNotFoundError, json.JSONDecodeError):
         return default
-async def process_signal_for_symbol(symbol: str, current_price: float, risk_manager: RiskManager, strategy: TradingStrategy, ex: AlpacaExchange) -> None:
+async def _process_signal_internal(symbol: str, current_price: float, risk_manager: RiskManager, strategy: TradingStrategy, ex: AlpacaExchange) -> None:
     """Processes signal for a single symbol asynchronously."""
     try:
         # Get current positions
@@ -111,6 +112,9 @@ async def process_signal_for_symbol(symbol: str, current_price: float, risk_mana
 
             # Check position limit before entering
             risk_status = await risk_manager.update_account_status()
+            if risk_status.get("status") == "error":
+                logger.warning(f"Skipping entry for {symbol}: risk check failed ({risk_status.get('error')})")
+                return
             if risk_status["status"] == "position_limit_exceeded":
                 logger.warning(f"Skipping entry for {symbol}: position limit reached")
                 return
@@ -124,7 +128,8 @@ async def process_signal_for_symbol(symbol: str, current_price: float, risk_mana
                 current_price,
                 signal["regime"],
                 atr=signal.get("atr"),
-                confidence=signal.get("confidence", 1.0)
+                confidence=signal.get("confidence", 1.0),
+                equity=risk_status.get("equity", settings.ACCOUNT_BASE)
             )
 
             if sizing_status != "ok":
@@ -150,6 +155,10 @@ async def process_signal_for_symbol(symbol: str, current_price: float, risk_mana
                 type="market"
             )
 
+            if order_result and order_result.get("status") in ["rejected", "canceled", "expired"]:
+                logger.warning(f"Order failed for {symbol}: {order_result.get('status')} - {order_result}")
+                return
+
             logger.info(f"Order executed: {signal['action']} {position_size} {symbol} @ ${current_price:.2f}")
             logger.debug(f"Order result: {order_result}")
             await send_telegram_alert(f"📈 <b>Order Executed</b>\nSymbol: {symbol}\nAction: {signal['action'].upper()}\nQty: {position_size}\nPrice: ${current_price:.2f}")
@@ -174,6 +183,16 @@ async def process_signal_for_symbol(symbol: str, current_price: float, risk_mana
 
     except Exception as e:
         logger.error(f"Error processing {symbol}: {e}")
+
+async def process_signal_for_symbol(symbol: str, current_price: float, risk_manager: RiskManager, strategy: TradingStrategy, ex: AlpacaExchange) -> None:
+    if symbol not in _symbol_locks:
+        _symbol_locks[symbol] = asyncio.Lock()
+        
+    if _symbol_locks[symbol].locked():
+        return
+        
+    async with _symbol_locks[symbol]:
+        await _process_signal_internal(symbol, current_price, risk_manager, strategy, ex)
 
 
 async def monitor_killswitch(risk_manager: RiskManager) -> None:

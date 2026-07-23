@@ -115,10 +115,17 @@ def get_ml_predictor():
 async def transformer_brain(symbol: str, price: float, signal: dict) -> BrainVote:
     """Evaluates Grok GQA PyTorch Transformer model prediction with graceful fallback."""
     predictor = get_ml_predictor()
-    prob = signal.get("confidence", 0.5)
     raw_action = signal.get("action", "hold")
     regime = signal.get("regime", "unknown")
-    reason = "Signal fallback confidence"
+    reason = "Signal fallback logic (ML unavailable)"
+
+    # Fallback prob derived from strategy action to eliminate silent sell bias
+    if raw_action == "buy":
+        prob = 0.65
+    elif raw_action == "sell":
+        prob = 0.35
+    else:
+        prob = 0.50
 
     if predictor is not None:
         try:
@@ -142,8 +149,9 @@ async def transformer_brain(symbol: str, price: float, signal: dict) -> BrainVot
                     logit = model(tensor_in).item()
                     prob = 1.0 / (1.0 + np.exp(-logit))  # Sigmoid output
                     reason = f"Grok PyTorch Inference prob={prob:.3f} (logit={logit:.2f})"
-        except Exception:
-            pass
+        except Exception as e:
+            import logging
+            logging.getLogger("bot").error(f"Transformer inference error: {e}")
 
     # Threshold probability decision logic
     if prob > 0.58:
