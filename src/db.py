@@ -1,9 +1,10 @@
 """Modern database layer using SQLAlchemy 2.0 with MappedAsDataclass style."""
 
 import datetime
+import json
 import logging
 import os
-from typing import Dict, Any, Optional, Sequence
+from typing import Dict, Any, Optional, Sequence, List
 from sqlalchemy import (
     create_engine,
     text,
@@ -11,6 +12,7 @@ from sqlalchemy import (
     Float,
     DateTime,
     Integer,
+    Text,
     select,
     func,
 )
@@ -33,6 +35,37 @@ logger = get_logger(__name__)
 class Base(DeclarativeBase):
     """Modern SQLAlchemy 2.0 declarative base using MappedAsDataclass style."""
     pass
+
+
+class DecisionSnapshot(Base):
+    """A committee decision recorded at trade entry, closed out at exit.
+
+    Correlates the brains' votes + regime + final action taken at entry with the
+    realized PnL known only at exit, so the adaptive meta-learner can be updated
+    on a completed round-trip. Purely observational: it never gates trading.
+    """
+
+    __tablename__ = "decision_snapshots"
+
+    decision_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    symbol: Mapped[str] = mapped_column(String(32))
+    regime: Mapped[str] = mapped_column(String(48), default="default")
+    final_action: Mapped[str] = mapped_column(String(16), default="hold")
+    confidence: Mapped[float] = mapped_column(Float, default=0.0)
+    size_multiplier: Mapped[float] = mapped_column(Float, default=1.0)
+    entry_price: Mapped[float] = mapped_column(Float, default=0.0)
+    qty: Mapped[float] = mapped_column(Float, default=0.0)
+    votes_json: Mapped[str] = mapped_column(Text, default="{}")  # {brain: action}
+    status: Mapped[str] = mapped_column(String(16), default="open")  # open|closed
+    realized_pnl: Mapped[float] = mapped_column(Float, default=0.0)
+    return_pct: Mapped[float] = mapped_column(Float, default=0.0)
+    holding_period_sec: Mapped[float] = mapped_column(Float, default=0.0)
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.datetime.now(datetime.timezone.utc)
+    )
+    closed_at: Mapped[Optional[datetime.datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True, default=None
+    )
 
 # Engine will be created lazily when first needed
 _engine = None
@@ -76,6 +109,8 @@ def init_db() -> None:
         # Test the connection
         with get_engine().connect() as conn:
             conn.execute(text("SELECT 1"))
+        # Create ORM tables if they do not exist (safe/idempotent).
+        Base.metadata.create_all(get_engine())
         logger.info(f"Database connected: {settings.DATABASE_URL}")
     except SQLAlchemyError as e:
         logger.warning(f"Database connection attempt failed: {e}. Retrying...")
@@ -85,3 +120,98 @@ def init_db() -> None:
 def get_db_session() -> Session:
     """Get a database session."""
     return get_session_factory()()
+
+
+# ---------------------------------------------------------------------------
+# Adaptive meta-learner decision-snapshot persistence (all fail-safe: any DB
+# error is logged and swallowed so trading is never blocked by logging).
+# ---------------------------------------------------------------------------
+
+def save_decision_snapshot(
+    *,
+    decision_id: str,
+    symbol: str,
+    regime: str,
+    final_action: str,
+    confidence: float,
+    size_multiplier: float,
+    entry_price: float,
+    qty: float,
+    brain_votes: Dict[str, str],
+) -> bool:
+    """Persist a committee decision at entry. Returns True on success."""
+    try:
+        Base.metadata.create_all(get_engine())
+        with get_db_session() as session:
+            snap = DecisionSnapshot(
+                decision_id=decision_id,
+                symbol=symbol,
+                regime=regime,
+                final_action=final_action,
+                confidence=float(confidence),
+                size_multiplier=float(size_multiplier),
+                entry_price=float(entry_price),
+                qty=float(qty),
+                votes_json=json.dumps(brain_votes or {}),
+                status="open",
+            )
+            session.merge(snap)
+            session.commit()
+        return True
+    except Exception as e:
+        logger.warning(f"save_decision_snapshot failed (non-fatal): {e}")
+        return False
+
+
+def get_open_snapshot(symbol: str) -> Optional[Dict[str, Any]]:
+    """Return the most recent open decision snapshot for a symbol, as a dict."""
+    try:
+        with get_db_session() as session:
+            stmt = (
+                select(DecisionSnapshot)
+                .where(DecisionSnapshot.symbol == symbol, DecisionSnapshot.status == "open")
+                .order_by(DecisionSnapshot.created_at.desc())
+                .limit(1)
+            )
+            row = session.execute(stmt).scalars().first()
+            if row is None:
+                return None
+            return {
+                "decision_id": row.decision_id,
+                "symbol": row.symbol,
+                "regime": row.regime,
+                "final_action": row.final_action,
+                "confidence": row.confidence,
+                "entry_price": row.entry_price,
+                "qty": row.qty,
+                "brain_votes": json.loads(row.votes_json or "{}"),
+                "created_at": row.created_at.isoformat() if row.created_at else None,
+            }
+    except Exception as e:
+        logger.warning(f"get_open_snapshot failed (non-fatal): {e}")
+        return None
+
+
+def close_decision_snapshot(
+    decision_id: str,
+    *,
+    realized_pnl: float,
+    return_pct: float = 0.0,
+    holding_period_sec: float = 0.0,
+) -> bool:
+    """Mark a snapshot closed and record its realized outcome."""
+    try:
+        with get_db_session() as session:
+            row = session.get(DecisionSnapshot, decision_id)
+            if row is None:
+                return False
+            row.status = "closed"
+            row.realized_pnl = float(realized_pnl)
+            row.return_pct = float(return_pct)
+            row.holding_period_sec = float(holding_period_sec)
+            row.closed_at = datetime.datetime.now(datetime.timezone.utc)
+            session.commit()
+        return True
+    except Exception as e:
+        logger.warning(f"close_decision_snapshot failed (non-fatal): {e}")
+        return False

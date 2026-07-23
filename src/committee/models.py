@@ -23,3 +23,8 @@ class CommitteeResult:
     active_weights: Dict[str, float] = field(default_factory=dict)
     vetoed: bool = False
     veto_reason: Optional[str] = None
+    # --- Adaptive meta-learner audit fields (populated when the learner runs) ---
+    decision_id: Optional[str] = None          # Correlates entry snapshot -> exit outcome
+    adaptive_used: bool = False                # True if learned weights drove this decision
+    adaptive_weights: Dict[str, float] = field(default_factory=dict)  # per-brain weights used
+    explanation: Optional[str] = None          # Human-readable weighting rationale

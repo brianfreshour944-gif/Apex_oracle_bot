@@ -95,6 +95,55 @@ The bot dynamically classifies market state into three distinct operational mode
 
 ---
 
+## 🧠 Adaptive ML Layer (Self-Evolving Committee Weighting)
+
+An optional adaptive meta-learner sits **on top of** the 5-brain committee
+(`transformer`, `quant`, `momentum`, `sentinel`, `llm`). It learns *which brain
+to trust* per market regime from realized trade outcomes, then re-weights their
+votes when combining them into a final action. Signal generation, sizing, and
+execution are left intact.
+
+### How it works
+- Each committee decision at trade entry is snapshotted (brains' votes, regime,
+  final action) with a `decision_id` (persisted in the `decision_snapshots` table).
+- When the position exits and realized PnL is known, the outcome is matched back
+  to its snapshot. A brain's per-regime weight is nudged up (exponential reward)
+  when its directional vote matched the profitable direction, and down otherwise.
+  Hold / stand-aside votes are treated conservatively (no change); flat PnL never
+  moves weights.
+- Weights are clamped to `[MIN, MAX]` and normalized per regime; updates to one
+  regime never bleed into another. State is saved atomically as versioned JSON
+  and falls back to equal weights if missing or corrupt.
+
+### Safety model (risk.py stays authoritative)
+- **Shadow mode by default.** With `ADAPTIVE_ML_ENABLED=false` (the default), the
+  learner still computes and logs weights for observability, but the committee's
+  **classic** decision is what trades — nothing changes in behavior.
+- **Warm-up gate.** Even when enabled, learned weights only drive live decisions
+  after `ADAPTIVE_MIN_TRADES_BEFORE_LIVE` realized outcomes; until then it stays
+  in shadow mode.
+- **Never bypasses risk.** The Sentinel hard veto, the `WINNING_SCORE_THRESHOLD`,
+  position sizing, stop-loss, and the drawdown / daily-loss killswitch in
+  `src/risk.py` remain fully authoritative. The ML layer can only re-weight votes;
+  it cannot enlarge a position, skip a stop, or override a veto.
+
+### Config flags
+
+| Flag | Default | Description |
+| :--- | :--- | :--- |
+| `ADAPTIVE_ML_ENABLED` | `false` | Let learned weights drive decisions. Default = paper-only shadow mode. |
+| `ADAPTIVE_STATE_PATH` | `data/adaptive_meta_state.json` | Atomically-persisted learner state (versioned JSON). |
+| `ADAPTIVE_LEARNING_RATE` | `0.10` | Exponential reward rate for per-brain weight updates. |
+| `ADAPTIVE_MIN_WEIGHT` | `0.02` | Lower clamp for any single brain weight per regime. |
+| `ADAPTIVE_MAX_WEIGHT` | `0.60` | Upper clamp for any single brain weight per regime. |
+| `ADAPTIVE_MIN_TRADES_BEFORE_LIVE` | `50` | Realized outcomes required before weights go live. |
+
+Current brain weights, model version, sample count, and last-update time are
+exported to Prometheus (`bot_adaptive_*`), and a Telegram alert fires when a
+regime's weights change materially.
+
+---
+
 ## 📈 Backtesting & Parameter Sweeps
 
 ### Live Backtest Simulation

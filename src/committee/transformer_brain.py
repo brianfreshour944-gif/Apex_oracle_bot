@@ -8,10 +8,11 @@ import os
 import numpy as np
 from typing import Optional
 from .models import BrainVote
+from src.config import settings
 
 # Path to PyTorch model & feature scaler
-MODEL_PATH = r"C:\Users\brian\OneDrive\Documents\Grok_alpaca_Apex_v8\grok_gqa_v9_best.pth"
-SCALER_PATH = r"C:\Users\brian\OneDrive\Documents\Grok_alpaca_Apex_v8\feature_scaler.pkl"
+MODEL_PATH = settings.TRANSFORMER_MODEL_PATH
+SCALER_PATH = settings.TRANSFORMER_SCALER_PATH
 
 _predictor_instance = None
 _predictor_initialized = False
@@ -117,8 +118,8 @@ async def transformer_brain(symbol: str, price: float, signal: dict) -> BrainVot
     predictor = get_ml_predictor()
     raw_action = signal.get("action", "hold")
     regime = signal.get("regime", "unknown")
-    reason = "Signal fallback logic (ML unavailable)"
-
+    reason = "Signal fallback confidence"
+    
     # Fallback prob derived from strategy action to eliminate silent sell bias
     if raw_action == "buy":
         prob = 0.65
@@ -151,7 +152,7 @@ async def transformer_brain(symbol: str, price: float, signal: dict) -> BrainVot
                     reason = f"Grok PyTorch Inference prob={prob:.3f} (logit={logit:.2f})"
         except Exception as e:
             import logging
-            logging.getLogger("bot").error(f"Transformer inference error: {e}")
+            logging.getLogger("committee").error(f"Transformer inference error: {e}")
 
     # Threshold probability decision logic
     if prob > 0.58:

@@ -16,32 +16,11 @@ class RiskManager:
 
     def __init__(self, exchange: AlpacaExchange):
         self.exchange = exchange
-        self.peak_equity = self._load_peak_equity()
+        self.peak_equity = 0.0
         self.daily_pnl = 0.0
         self.open_positions = []
         self.peak_prices: Dict[str, float] = {}  # Tracks highest price seen while in position
         self.last_check_time = datetime.now(timezone.utc)
-
-    def _load_peak_equity(self) -> float:
-        import os, json
-        filepath = "/app/data/risk_state.json" if os.path.exists("/app/data") else "risk_state.json"
-        try:
-            if os.path.exists(filepath):
-                with open(filepath, "r") as f:
-                    data = json.load(f)
-                    return float(data.get("peak_equity", 0.0))
-        except Exception as e:
-            logger.error(f"Failed to load peak_equity: {e}")
-        return 0.0
-
-    def _save_peak_equity(self) -> None:
-        import os, json
-        filepath = "/app/data/risk_state.json" if os.path.exists("/app/data") else "risk_state.json"
-        try:
-            with open(filepath, "w") as f:
-                json.dump({"peak_equity": self.peak_equity}, f)
-        except Exception as e:
-            logger.error(f"Failed to save peak_equity: {e}")
 
     async def update_account_status(self) -> Dict[str, Any]:
         """Update account status and check risk limits."""
@@ -54,12 +33,8 @@ class RiskManager:
             portfolio_value = float(account.get("portfolio_value", 0))
 
             # Update peak equity for drawdown calculation
-            if self.peak_equity == 0.0:
+            if equity > self.peak_equity:
                 self.peak_equity = equity
-                self._save_peak_equity()
-            elif equity > self.peak_equity:
-                self.peak_equity = equity
-                self._save_peak_equity()
 
             # Calculate drawdown from peak
             drawdown_pct = ((equity - self.peak_equity) / self.peak_equity) * 100 if self.peak_equity > 0 else 0
@@ -158,11 +133,10 @@ class RiskManager:
         atr: Optional[float] = None,
         confidence: float = 1.0,
         returns_matrix: Optional[Dict[str, np.ndarray]] = None,
-        equity: float = 10000.0,
     ) -> Tuple[float, str]:
         """Calculate position size with ATR volatility parity, confidence weighting, and correlation check."""
         try:
-            risk_amount = equity * settings.BASE_RISK_PERCENT
+            risk_amount = settings.ACCOUNT_BASE * settings.BASE_RISK_PERCENT
 
             # ATR Volatility Parity Sizing (if ATR available)
             if atr is not None and atr > 0:

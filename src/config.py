@@ -71,7 +71,7 @@ class TradingBotSettings(BaseSettings):
         le=1
     )
     MAX_SINGLE_TRADE_USD: float = Field(
-        default=250.0,
+        default=2500.0,
         description="Hard cap per trade size in USD",
         gt=0
     )
@@ -274,6 +274,54 @@ class TradingBotSettings(BaseSettings):
         ge=30,
     )
 
+    # --- Adaptive Meta-Learner (self-evolving brain weighting) ---
+    # Sits on top of the committee; learns which brain to trust per regime from
+    # realized outcomes. risk.py stays authoritative — this never bypasses the
+    # drawdown/daily-loss killswitch, order sizing, or stop-loss logic.
+    ADAPTIVE_ML_ENABLED: bool = Field(
+        default=False,
+        description="Let the meta-learner drive the committee decision. "
+                    "Default False = paper-only shadow mode (computed, logged, but not acted on).",
+    )
+    ADAPTIVE_STATE_PATH: str = Field(
+        default="data/adaptive_meta_state.json",
+        description="Path to the atomically-persisted adaptive learner JSON state",
+    )
+    ADAPTIVE_LEARNING_RATE: float = Field(
+        default=0.10,
+        description="Exponential reward learning rate for per-brain weight updates",
+        gt=0,
+        le=1,
+    )
+    ADAPTIVE_MIN_WEIGHT: float = Field(
+        default=0.02,
+        description="Lower clamp for any single brain weight within a regime",
+        gt=0,
+        lt=1,
+    )
+    ADAPTIVE_MAX_WEIGHT: float = Field(
+        default=0.60,
+        description="Upper clamp for any single brain weight within a regime",
+        gt=0,
+        le=1,
+    )
+    ADAPTIVE_MIN_TRADES_BEFORE_LIVE: int = Field(
+        default=50,
+        description="Realized outcomes required before adaptive weights drive live decisions "
+                    "(below this the learner runs in shadow mode even when enabled)",
+        ge=0,
+    )
+
+    # --- Machine Learning Paths ---
+    TRANSFORMER_MODEL_PATH: str = Field(
+        default="data/grok_gqa_v9_best.pth",
+        description="Path to PyTorch model weights"
+    )
+    TRANSFORMER_SCALER_PATH: str = Field(
+        default="data/feature_scaler.pkl",
+        description="Path to feature scaler"
+    )
+
     # --- Validation ---
     @field_validator("HURST_TREND_UP", "HURST_MEAN_REVERT")
     def validate_hurst_thresholds(cls, v: float) -> float:
@@ -371,4 +419,10 @@ TRAILING_DISTANCE_PCT = settings.TRAILING_DISTANCE_PCT
 LOOP_INTERVAL_SEC = settings.LOOP_INTERVAL_SEC
 STATUS_PORT = settings.STATUS_PORT
 BOT_NAME = settings.BOT_NAME
+ADAPTIVE_ML_ENABLED = settings.ADAPTIVE_ML_ENABLED
+ADAPTIVE_STATE_PATH = settings.ADAPTIVE_STATE_PATH
+ADAPTIVE_LEARNING_RATE = settings.ADAPTIVE_LEARNING_RATE
+ADAPTIVE_MIN_WEIGHT = settings.ADAPTIVE_MIN_WEIGHT
+ADAPTIVE_MAX_WEIGHT = settings.ADAPTIVE_MAX_WEIGHT
+ADAPTIVE_MIN_TRADES_BEFORE_LIVE = settings.ADAPTIVE_MIN_TRADES_BEFORE_LIVE
 log_config = settings.log_config

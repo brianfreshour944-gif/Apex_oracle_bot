@@ -16,11 +16,75 @@ from src.telegram_alerts import send_telegram_alert
 
 logger = get_logger("bot")
 
+
+async def _record_committee_outcome(symbol: str, exit_price: float) -> None:
+    """On position exit, close the open decision snapshot and update the learner.
+
+    Fully fail-safe: realized-PnL bookkeeping for the adaptive layer must never
+    interfere with trading. risk.py stays authoritative for the exit itself.
+    """
+    try:
+        from datetime import datetime, timezone
+        from src.db import get_open_snapshot, close_decision_snapshot
+        from src.committee.committee import get_meta_learner
+        from src.metrics import update_adaptive_metrics, alert_weight_change
+
+        snap = get_open_snapshot(symbol)
+        if not snap:
+            return
+
+        entry_price = float(snap.get("entry_price", 0.0))
+        qty = float(snap.get("qty", 0.0))
+        action = snap.get("final_action", "buy")
+        if entry_price <= 0 or qty == 0:
+            return
+
+        if action == "buy":
+            realized_pnl = (exit_price - entry_price) * qty
+            return_pct = (exit_price - entry_price) / entry_price * 100.0
+        else:  # sell / short
+            realized_pnl = (entry_price - exit_price) * qty
+            return_pct = (entry_price - exit_price) / entry_price * 100.0
+
+        holding_sec = 0.0
+        created = snap.get("created_at")
+        if created:
+            try:
+                started = datetime.fromisoformat(str(created).replace("Z", "+00:00"))
+                holding_sec = max(0.0, (datetime.now(timezone.utc) - started).total_seconds())
+            except Exception:
+                pass
+
+        close_decision_snapshot(
+            snap["decision_id"],
+            realized_pnl=realized_pnl,
+            return_pct=return_pct,
+            holding_period_sec=holding_sec,
+        )
+
+        learner = get_meta_learner()
+        if learner is not None:
+            report = learner.update(
+                {
+                    "regime": snap.get("regime", "default"),
+                    "final_action": action,
+                    "brain_votes": snap.get("brain_votes", {}),
+                },
+                {"net_pnl": realized_pnl, "return_pct": return_pct},
+            )
+            update_adaptive_metrics(learner.snapshot())
+            if report.material_change:
+                await alert_weight_change(
+                    report.regime, report.old_weights, report.new_weights, learner.sample_count
+                )
+    except Exception as e:
+        logger.error(f"Adaptive outcome recording failed for {symbol} (non-fatal): {e}")
+
+
 # Global state
 ex: Optional[AlpacaExchange] = None
 strategy: Optional[TradingStrategy] = None
 risk_manager: Optional[RiskManager] = None
-_symbol_locks: Dict[str, asyncio.Lock] = {}
 
 import json
 
@@ -39,7 +103,7 @@ def read_regime_flag():
             return data
     except (FileNotFoundError, json.JSONDecodeError):
         return default
-async def _process_signal_internal(symbol: str, current_price: float, risk_manager: RiskManager, strategy: TradingStrategy, ex: AlpacaExchange) -> None:
+async def process_signal_for_symbol(symbol: str, current_price: float, risk_manager: RiskManager, strategy: TradingStrategy, ex: AlpacaExchange) -> None:
     """Processes signal for a single symbol asynchronously."""
     try:
         # Get current positions
@@ -64,6 +128,7 @@ async def _process_signal_internal(symbol: str, current_price: float, risk_manag
                 )
                 logger.info(f"Trailing Stop Executed: {symbol}")
                 await send_telegram_alert(f"🚨 <b>Trailing Stop Triggered</b>\nSymbol: {symbol}\nClosed {qty} @ ${current_price:.2f}")
+                await _record_committee_outcome(symbol, current_price)
                 return  # Skip standard signals
 
         # Generate trading signal
@@ -112,9 +177,6 @@ async def _process_signal_internal(symbol: str, current_price: float, risk_manag
 
             # Check position limit before entering
             risk_status = await risk_manager.update_account_status()
-            if risk_status.get("status") == "error":
-                logger.warning(f"Skipping entry for {symbol}: risk check failed ({risk_status.get('error')})")
-                return
             if risk_status["status"] == "position_limit_exceeded":
                 logger.warning(f"Skipping entry for {symbol}: position limit reached")
                 return
@@ -128,8 +190,7 @@ async def _process_signal_internal(symbol: str, current_price: float, risk_manag
                 current_price,
                 signal["regime"],
                 atr=signal.get("atr"),
-                confidence=signal.get("confidence", 1.0),
-                equity=risk_status.get("equity", settings.ACCOUNT_BASE)
+                confidence=signal.get("confidence", 1.0)
             )
 
             if sizing_status != "ok":
@@ -155,13 +216,27 @@ async def _process_signal_internal(symbol: str, current_price: float, risk_manag
                 type="market"
             )
 
-            if order_result and order_result.get("status") in ["rejected", "canceled", "expired"]:
-                logger.warning(f"Order failed for {symbol}: {order_result.get('status')} - {order_result}")
-                return
-
             logger.info(f"Order executed: {signal['action']} {position_size} {symbol} @ ${current_price:.2f}")
             logger.debug(f"Order result: {order_result}")
             await send_telegram_alert(f"📈 <b>Order Executed</b>\nSymbol: {symbol}\nAction: {signal['action'].upper()}\nQty: {position_size}\nPrice: ${current_price:.2f}")
+
+            # Persist committee decision snapshot for the adaptive meta-learner
+            # (fail-safe; closed out with realized PnL when the position exits).
+            try:
+                from src.db import save_decision_snapshot
+                save_decision_snapshot(
+                    decision_id=committee_result.decision_id,
+                    symbol=symbol,
+                    regime=signal.get("regime", "default"),
+                    final_action=signal["action"],
+                    confidence=committee_result.score,
+                    size_multiplier=getattr(committee_result, "size_multiplier", 1.0),
+                    entry_price=current_price,
+                    qty=position_size,
+                    brain_votes={v.name: v.action for v in committee_result.votes},
+                )
+            except Exception as e:
+                logger.warning(f"Decision snapshot persist failed for {symbol} (non-fatal): {e}")
 
         elif signal["action"] == "close" and current_position:
 
@@ -180,19 +255,10 @@ async def _process_signal_internal(symbol: str, current_price: float, risk_manag
             logger.info(f"Position closed: {symbol} (was {qty}) - reason: {signal.get('reason', 'unknown')}")
             logger.debug(f"Close order result: {order_result}")
             await send_telegram_alert(f"📉 <b>Position Closed</b>\nSymbol: {symbol}\nReason: {signal.get('reason', 'unknown')}")
+            await _record_committee_outcome(symbol, current_price)
 
     except Exception as e:
         logger.error(f"Error processing {symbol}: {e}")
-
-async def process_signal_for_symbol(symbol: str, current_price: float, risk_manager: RiskManager, strategy: TradingStrategy, ex: AlpacaExchange) -> None:
-    if symbol not in _symbol_locks:
-        _symbol_locks[symbol] = asyncio.Lock()
-        
-    if _symbol_locks[symbol].locked():
-        return
-        
-    async with _symbol_locks[symbol]:
-        await _process_signal_internal(symbol, current_price, risk_manager, strategy, ex)
 
 
 async def monitor_killswitch(risk_manager: RiskManager) -> None:

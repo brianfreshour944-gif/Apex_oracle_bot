@@ -8,17 +8,54 @@ Features:
 """
 
 import math
+import uuid
 from collections import defaultdict
-from typing import Dict, Any
+from typing import Dict, Any, Optional
+
+from src.config import settings
+from src.logging_config import get_logger
 
 from .models import CommitteeResult, BrainVote
+from .adaptive_meta import AdaptiveMetaLearner
 from .transformer_brain import transformer_brain
 from .quant_brain import quant_brain
 from .momentum_brain import momentum_brain
 from .sentinel_brain import sentinel_brain
 from .llm_brain import llm_brain
 
+logger = get_logger("committee")
+
 WINNING_SCORE_THRESHOLD = 0.60
+
+# Process-wide adaptive meta-learner singleton. Loaded lazily and fail-safe:
+# any construction/load error leaves the committee on its classic behavior.
+_META_LEARNER: Optional[AdaptiveMetaLearner] = None
+
+
+def get_meta_learner() -> Optional[AdaptiveMetaLearner]:
+    """Return the cached adaptive learner, constructing it lazily (fail-safe)."""
+    global _META_LEARNER
+    if _META_LEARNER is None:
+        try:
+            _META_LEARNER = AdaptiveMetaLearner(
+                state_path=settings.ADAPTIVE_STATE_PATH,
+                learning_rate=settings.ADAPTIVE_LEARNING_RATE,
+                min_weight=settings.ADAPTIVE_MIN_WEIGHT,
+                max_weight=settings.ADAPTIVE_MAX_WEIGHT,
+            )
+        except Exception as e:  # pragma: no cover - defensive
+            logger.warning(f"Adaptive meta-learner unavailable, using classic committee: {e}")
+            _META_LEARNER = None
+    return _META_LEARNER
+
+
+def reset_meta_learner() -> None:
+    """Drop the cached learner so the next call reloads from current settings/state.
+
+    Primarily used by tests and after out-of-band state updates.
+    """
+    global _META_LEARNER
+    _META_LEARNER = None
 
 # Dynamic Weight Matrix based on Market Regime
 REGIME_WEIGHT_MATRIX = {
@@ -173,27 +210,58 @@ async def run_committee(symbol: str, price: float, signal: Dict[str, Any]) -> Co
                 veto_reason=v.reason
             )
 
-    # Compute weighted score per action
+    entropy = calculate_vote_entropy(votes)
+    decision_id = uuid.uuid4().hex
+
+    # ── Classic (baseline) weighted score per action ──
     scores = defaultdict(float)
     for v in votes:
         if v.action not in ["stand_aside", "skip"]:
             scores[v.action] += v.confidence * v.weight
 
-    if not scores:
+    if scores:
+        baseline_winner = max(scores, key=scores.get)
+        baseline_score = scores[baseline_winner]
+    else:
+        baseline_winner, baseline_score = "stand_aside", 0.0
+
+    # ── Adaptive meta-learner (shadow by default; drives decision only when
+    #    enabled AND it has seen enough realized outcomes). Fully fail-safe:
+    #    any error keeps the classic decision. Vetoes above already returned. ──
+    adaptive_used = False
+    adaptive_weights: Dict[str, float] = {}
+    explanation: Optional[str] = None
+    winner, score = baseline_winner, baseline_score
+
+    learner = get_meta_learner()
+    if learner is not None:
+        try:
+            decision = learner.combine(raw_votes, regime)
+            adaptive_weights = decision.weights
+            explanation = decision.explanation
+            live_ready = learner.sample_count >= settings.ADAPTIVE_MIN_TRADES_BEFORE_LIVE
+            if settings.ADAPTIVE_ML_ENABLED and live_ready:
+                adaptive_used = True
+                winner, score = decision.action, decision.confidence
+        except Exception as e:  # pragma: no cover - defensive
+            logger.warning(f"Adaptive combine failed, using classic committee: {e}")
+
+    # Threshold + confidence sizing apply identically regardless of source.
+    if not scores and not adaptive_used:
         return CommitteeResult(
             action="stand_aside",
             score=0.0,
             size_multiplier=0.0,
-            entropy=0.0,
+            entropy=entropy,
             votes=votes,
-            active_weights=weights
+            active_weights=weights,
+            decision_id=decision_id,
+            adaptive_used=adaptive_used,
+            adaptive_weights=adaptive_weights,
+            explanation=explanation,
         )
 
-    winner = max(scores, key=scores.get)
-    score = scores[winner]
-    entropy = calculate_vote_entropy(votes)
-
-    if score < WINNING_SCORE_THRESHOLD:
+    if score < WINNING_SCORE_THRESHOLD or winner in ["stand_aside", "skip"]:
         final_action = "stand_aside"
         size_mult = 0.0
     else:
@@ -206,5 +274,9 @@ async def run_committee(symbol: str, price: float, signal: Dict[str, Any]) -> Co
         size_multiplier=size_mult,
         entropy=entropy,
         votes=votes,
-        active_weights=weights
+        active_weights=weights,
+        decision_id=decision_id,
+        adaptive_used=adaptive_used,
+        adaptive_weights=adaptive_weights,
+        explanation=explanation,
     )
