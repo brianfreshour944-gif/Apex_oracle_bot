@@ -380,6 +380,49 @@ async def run_periodic_automl() -> None:
             logger.error(f"Error running AutoML pipeline: {e}")
             await asyncio.sleep(3600)
 
+async def run_periodic_cull() -> None:
+    """Background task to run the Evolution Cull on the 1st of every month."""
+    import sys
+    import os
+    from datetime import datetime
+    
+    script_path = os.path.join(os.path.dirname(__file__), '..', 'scripts', 'evolution_cull.py')
+    
+    while True:
+        try:
+            now = datetime.now()
+            # Calculate time until 1st of next month at 4 AM
+            if now.month == 12:
+                target_month = 1
+                target_year = now.year + 1
+            else:
+                target_month = now.month + 1
+                target_year = now.year
+                
+            target_time = datetime(target_year, target_month, 1, 4, 0, 0)
+            
+            sleep_seconds = (target_time - now).total_seconds()
+            logger.info(f"Evolution Cull scheduled for {target_time} (in {sleep_seconds/86400:.1f} days)")
+            
+            await asyncio.sleep(sleep_seconds)
+            
+            logger.info("Running Evolution Cull pipeline...")
+            process = await asyncio.create_subprocess_exec(
+                sys.executable, script_path,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+            stdout, stderr = await process.communicate()
+            
+            if process.returncode == 0:
+                logger.info(f"Evolution Cull completed successfully:\n{stdout.decode().strip()}")
+            else:
+                logger.error(f"Evolution Cull failed with code {process.returncode}:\n{stderr.decode().strip()}")
+                
+        except Exception as e:
+            logger.error(f"Error running Evolution Cull: {e}")
+            await asyncio.sleep(86400)
+
 async def run_trading_bot() -> None:
     """Main trading bot loop."""
     global ex
@@ -442,6 +485,12 @@ async def run_trading_bot() -> None:
         active_tasks.add(automl_task)
         automl_task.add_done_callback(active_tasks.discard)
         logger.info("Periodic AutoML pipeline task started")
+
+        # Start periodic Evolution Cull
+        cull_task = asyncio.create_task(run_periodic_cull())
+        active_tasks.add(cull_task)
+        cull_task.add_done_callback(active_tasks.discard)
+        logger.info("Periodic Evolution Cull task started")
 
         # Main trading loop
         logger.info("Bot initialization complete. Starting event-driven trading loop.")

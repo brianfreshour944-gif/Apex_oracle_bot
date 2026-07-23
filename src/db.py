@@ -71,6 +71,26 @@ class DecisionSnapshot(Base):
         DateTime(timezone=True), nullable=True, default=None
     )
 
+class ShadowTrade(Base):
+    """Tracks virtual positions taken by candidate models in the Evolution Tournament."""
+    __tablename__ = "shadow_trades"
+
+    trade_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    candidate_name: Mapped[str] = mapped_column(String(64))
+    symbol: Mapped[str] = mapped_column(String(32))
+    side: Mapped[str] = mapped_column(String(16))  # buy or short
+    qty: Mapped[float] = mapped_column(Float, default=0.0)
+    entry_price: Mapped[float] = mapped_column(Float, default=0.0)
+    exit_price: Mapped[Optional[float]] = mapped_column(Float, nullable=True, default=None)
+    status: Mapped[str] = mapped_column(String(16), default="open")  # open|closed
+    realized_pnl: Mapped[float] = mapped_column(Float, default=0.0)
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.datetime.now(datetime.timezone.utc)
+    )
+    closed_at: Mapped[Optional[datetime.datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True, default=None
+    )
+
 # Engine will be created lazily when first needed
 _engine = None
 

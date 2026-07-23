@@ -198,13 +198,25 @@ def main():
     criterion = nn.BCEWithLogitsLoss()
     
     candidates = {
-        "Candidate A (Heavy)": {"layers": 4, "embed": 128, "lr": 3e-4, "dropout": 0.1},
-        "Candidate B (Light)": {"layers": 2, "embed": 128, "lr": 5e-4, "dropout": 0.2},
+        "Bot_A_Light": {"layers": 2, "embed": 128, "lr": 5e-4, "dropout": 0.2, "stop_loss": 0.015, "profit_target": 0.03, "threshold": 0.55},
+        "Bot_B_Standard": {"layers": 4, "embed": 128, "lr": 3e-4, "dropout": 0.1, "stop_loss": 0.02, "profit_target": 0.04, "threshold": 0.58},
+        "Bot_C_Heavy": {"layers": 6, "embed": 256, "lr": 1e-4, "dropout": 0.3, "stop_loss": 0.03, "profit_target": 0.06, "threshold": 0.60},
     }
+    
+    import json
+    CANDIDATES_DIR = os.path.join(DATA_DIR, "candidates")
+    os.makedirs(CANDIDATES_DIR, exist_ok=True)
     
     trained_models = {}
     for name, config in candidates.items():
         trained_models[name] = train_candidate(name, config, X_tr, y_tr, X_va, y_va, n_feat, device)
+        # Save candidate for shadow arena
+        torch.save(trained_models[name].state_dict(), os.path.join(CANDIDATES_DIR, f"{name}.pth"))
+        with open(os.path.join(CANDIDATES_DIR, f"{name}_config.json"), "w") as f:
+            json.dump(config, f)
+    
+    # Save the common scaler
+    joblib.dump(scaler, os.path.join(CANDIDATES_DIR, "feature_scaler.pkl"))
         
     # Evaluate Production Model
     prod_acc = 0.0
@@ -217,27 +229,22 @@ def main():
         except Exception as e:
             log.warning(f"Failed to load production model: {e}")
             
-    log.info("\n=== TOURNAMENT RESULTS (Holdout Set) ===")
-    log.info(f"Production Model: {prod_acc:.2f}%")
+    log.info("\n=== TOURNAMENT CANDIDATE GENERATION COMPLETE ===")
+    log.info(f"Production Model Holdout Acc: {prod_acc:.2f}%")
     best_acc = 0.0
     best_name = None
+    msg_lines = ["🧬 <b>Evolution Tournament: New Generation Spawned</b>", f"Prod Acc: {prod_acc:.2f}%", "Candidates:"]
     for name, model in trained_models.items():
         _, acc = evaluate_model(model, holdout_loader, device, criterion)
         log.info(f"{name}: {acc:.2f}%")
+        msg_lines.append(f"- {name}: {acc:.2f}%")
         if acc > best_acc:
             best_acc = acc
             best_name = name
             
-    if best_acc > prod_acc + 0.5: # Needs to beat production by 0.5%
-        log.info(f"🏆 {best_name} wins! Promoting to Production.")
-        os.makedirs(DATA_DIR, exist_ok=True)
-        torch.save(trained_models[best_name].state_dict(), PROD_MODEL_OUT)
-        joblib.dump(scaler, PROD_SCALER_OUT)
-        msg = f"🏆 <b>AutoML Tournament Winner</b>\nNew model ({best_name}) promoted!\nHoldout Acc: {best_acc:.2f}% (vs Prod {prod_acc:.2f}%)"
-    else:
-        log.info("🛡️ Production model defended its title (or candidates didn't beat margin). No promotion.")
-        msg = f"🛡️ <b>AutoML Tournament</b>\nProduction model defended its title.\nProd Acc: {prod_acc:.2f}%\nBest Challenger: {best_acc:.2f}%"
-        
+    msg_lines.append(f"\nCandidates are now live in the Shadow Arena.")
+    msg = "\n".join(msg_lines)
+    
     try:
         asyncio.run(send_telegram_alert(msg))
     except Exception as e:

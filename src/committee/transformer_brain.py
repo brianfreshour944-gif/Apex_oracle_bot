@@ -164,6 +164,14 @@ async def transformer_brain(symbol: str, price: float, signal: dict) -> BrainVot
                 data_scaled = scaler.transform(data).astype(np.float32)
                 data_scaled = np.nan_to_num(data_scaled, nan=0.0, posinf=0.0, neginf=0.0)
                 
+                # Let the shadow arena candidates process this same data
+                try:
+                    from src.shadow_arena import evaluate_candidates
+                    evaluate_candidates(symbol, price, data_scaled)
+                except Exception as shadow_e:
+                    import logging
+                    logging.getLogger("shadow_arena").error(f"Shadow evaluation failed: {shadow_e}")
+                
                 x = torch.tensor(data_scaled).unsqueeze(0).to(device)
                 with torch.no_grad():
                     raw_logit = model(x).squeeze(1).item()
