@@ -480,6 +480,48 @@ async def run_periodic_research() -> None:
             logger.error(f"Error running Automatic Research: {e}")
             await asyncio.sleep(3600)
 
+async def run_periodic_post_mortem() -> None:
+    """Background task to run the Post-Mortem AI every Saturday morning."""
+    import sys
+    import os
+    from datetime import datetime, timedelta
+    
+    script_path = os.path.join(os.path.dirname(__file__), '..', 'scripts', 'post_mortem.py')
+    
+    while True:
+        try:
+            now = datetime.now()
+            # Calculate days until Saturday (5 = Saturday)
+            days_ahead = 5 - now.weekday()
+            if days_ahead < 0 or (days_ahead == 0 and now.hour >= 4):
+                days_ahead += 7
+                
+            # Target 4 AM on Saturday
+            target_time = now + timedelta(days=days_ahead)
+            target_time = target_time.replace(hour=4, minute=0, second=0, microsecond=0)
+            
+            sleep_seconds = (target_time - now).total_seconds()
+            logger.info(f"Post-Mortem AI scheduled for {target_time} (in {sleep_seconds/3600:.1f} hours)")
+            
+            await asyncio.sleep(sleep_seconds)
+            
+            logger.info("Running Post-Mortem AI...")
+            process = await asyncio.create_subprocess_exec(
+                sys.executable, script_path,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+            stdout, stderr = await process.communicate()
+            
+            if process.returncode == 0:
+                logger.info(f"Post-Mortem AI completed successfully:\n{stdout.decode().strip()}")
+            else:
+                logger.error(f"Post-Mortem AI failed with code {process.returncode}:\n{stderr.decode().strip()}")
+                
+        except Exception as e:
+            logger.error(f"Error running Post-Mortem AI: {e}")
+            await asyncio.sleep(3600)
+
 async def run_trading_bot() -> None:
     """Main trading bot loop."""
     global ex
@@ -554,6 +596,12 @@ async def run_trading_bot() -> None:
         active_tasks.add(research_task)
         research_task.add_done_callback(active_tasks.discard)
         logger.info("Periodic Automatic Research task started")
+
+        # Start periodic Post-Mortem AI
+        post_mortem_task = asyncio.create_task(run_periodic_post_mortem())
+        active_tasks.add(post_mortem_task)
+        post_mortem_task.add_done_callback(active_tasks.discard)
+        logger.info("Periodic Post-Mortem AI task started")
 
         # Main trading loop
         logger.info("Bot initialization complete. Starting event-driven trading loop.")

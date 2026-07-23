@@ -241,6 +241,54 @@ async def run_backtest(
 
     return result
 
+def run_monte_carlo_analysis(result: BacktestResult, n_simulations: int = 1000) -> Dict[str, Any]:
+    """
+    Run Monte Carlo permutation on the sequence of trades to determine true risk of ruin.
+    """
+    if not result.trades:
+        return {"risk_of_ruin_pct": 0.0, "p05_drawdown_pct": 0.0, "p05_return_pct": 0.0}
+
+    # Extract percentage returns of each trade
+    trade_rets = np.array([t.pnl_pct / 100.0 for t in result.trades])
+    
+    n_trades = len(trade_rets)
+    start_equity = result.start_equity
+    
+    # Generate random indices to shuffle trades
+    rng = np.random.RandomState(42)
+    indices = rng.randint(0, n_trades, size=(n_simulations, n_trades))
+    
+    # Sampled trades
+    sampled_rets = trade_rets[indices]
+    
+    # Compute equity curves (compound returns)
+    # equity_curves = start_equity * cumulative product of (1 + r)
+    compound_returns = np.cumprod(1 + sampled_rets, axis=1)
+    equity_curves = start_equity * compound_returns
+    
+    # Metrics per simulation
+    final_returns = compound_returns[:, -1] - 1.0
+    
+    # Max Drawdowns
+    peaks = np.maximum.accumulate(equity_curves, axis=1)
+    drawdowns = (equity_curves - peaks) / peaks
+    max_drawdowns = np.min(drawdowns, axis=1) * 100  # negative percentages
+    
+    # Risk of Ruin (probability of hitting > 20% drawdown)
+    ruin_count = np.sum(max_drawdowns <= -20.0)
+    risk_of_ruin_pct = (ruin_count / n_simulations) * 100
+    
+    p05_drawdown = float(np.percentile(max_drawdowns, 5)) # 5th percentile worst drawdown
+    p05_return = float(np.percentile(final_returns, 5)) * 100 # 5th percentile worst return
+    
+    logger.info(f"Monte Carlo ({n_simulations} sims) -> Risk of Ruin: {risk_of_ruin_pct:.1f}%, 5th Pctl DD: {p05_drawdown:.2f}%")
+    
+    return {
+        "risk_of_ruin_pct": risk_of_ruin_pct,
+        "p05_drawdown_pct": p05_drawdown,
+        "p05_return_pct": p05_return,
+    }
+
 
 def print_backtest_summary(result: BacktestResult) -> None:
     """Pretty-print backtest results."""
