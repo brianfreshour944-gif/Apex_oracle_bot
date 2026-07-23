@@ -211,6 +211,7 @@ def get_open_snapshot(symbol: str) -> Optional[Dict[str, Any]]:
                 "entry_price": row.entry_price,
                 "qty": row.qty,
                 "brain_votes": json.loads(row.votes_json or "{}"),
+                "feature_snapshot": json.loads(row.feature_snapshot_json or "{}"),
                 "created_at": row.created_at.isoformat() if row.created_at else None,
             }
     except Exception as e:

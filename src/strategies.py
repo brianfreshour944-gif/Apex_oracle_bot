@@ -248,63 +248,55 @@ class TradingStrategy:
                     "features": regime_data
                 }
 
-            # Check if we should enter a position
-            if not position:
-                if regime in ["bull", "trending"]:
-                    # Buy on deeper pullbacks while higher timeframe trend is intact
-                    if rsi < 55.0 and rsi > prev_rsi and regime_data.get("htf_trend") != "bearish":
-                        return {
-                            "symbol": symbol,
-                            "action": "buy",
-                            "reason": "trending_pullback_bounce_buy",
-                            "regime": regime,
-                            "rsi": rsi,
-                            "htf_trend": regime_data.get("htf_trend"),
-                            "features": regime_data
-                        }
+            # AI Strategy Selection
+            from src.strategy_selector import select_best_strategy
+            from src.execution_strategies import STRATEGIES
 
-                elif regime == "sideways":
-                    # Buy when oversold, sell (short) when overbought
-                    if rsi < settings.RSI_OVERSOLD and rsi > prev_rsi:
-                        return {
-                            "symbol": symbol,
-                            "action": "buy",
-                            "reason": "mean_reverting_bounce_buy",
-                            "regime": regime,
-                            "rsi": rsi,
-                            "features": regime_data
-                        }
-                    elif rsi > settings.RSI_OVERBOUGHT:
-                        return {
-                            "symbol": symbol,
-                            "action": "sell",
-                            "reason": "mean_reverting_overbought_sell",
-                            "regime": regime,
-                            "rsi": rsi,
-                            "features": regime_data
-                        }
+            best_strategy_name = select_best_strategy(regime)
+            active_strategy = STRATEGIES.get(best_strategy_name)
 
-            # Check if we should exit a position (regime flip OR price-based exits)
+            if not active_strategy:
+                raise ValueError(f"Selected strategy {best_strategy_name} not found")
+
+            # Generate signal from the selected strategy
+            strat_signal = active_strategy.generate_signal(symbol, current_price, position, regime_data)
+            
+            action = strat_signal.get("action", "hold")
+            reason = f"[{best_strategy_name.upper()}] " + strat_signal.get("reason", "No signal")
+
+            # If we are in a position, verify price-based exits (SL/TP overrides strategy)
             if position:
-                # Regime-based exit
-                if (regime in ["bull", "bear", "trending"] and rsi > settings.RSI_NEUTRAL_SELL) or \
-                   (regime == "sideways" and rsi < settings.RSI_NEUTRAL_BUY):
-                    return {
-                        "symbol": symbol,
-                        "action": "close",
-                        "reason": "regime_change_exit_signal",
-                        "regime": regime,
-                        "rsi": rsi,
-                        "features": regime_data
-                    }
-
-                # Price-based exit checks
                 exit_signal = self._check_price_based_exits(symbol, current_price, position)
                 if exit_signal:
                     exit_signal["regime"] = regime
                     exit_signal["rsi"] = rsi
                     exit_signal["features"] = regime_data
+                    exit_signal["selected_strategy"] = best_strategy_name
                     return exit_signal
+
+                # Strategy-based exit
+                if action == "close":
+                    return {
+                        "symbol": symbol,
+                        "action": "close",
+                        "reason": reason,
+                        "regime": regime,
+                        "rsi": rsi,
+                        "features": regime_data,
+                        "selected_strategy": best_strategy_name
+                    }
+
+            if action in ["buy", "sell"]:
+                return {
+                    "symbol": symbol,
+                    "action": action,
+                    "reason": reason,
+                    "regime": regime,
+                    "rsi": rsi,
+                    "htf_trend": regime_data.get("htf_trend"),
+                    "features": regime_data,
+                    "selected_strategy": best_strategy_name
+                }
 
             return {
                 "symbol": symbol,

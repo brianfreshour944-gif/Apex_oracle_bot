@@ -90,6 +90,18 @@ async def _record_committee_outcome(symbol: str, exit_price: float, exit_reason:
                 await alert_weight_change(
                     report.regime, report.old_weights, report.new_weights, learner.sample_count
                 )
+                
+        # Update strategy learner
+        selected_strategy = snap.get("feature_snapshot", {}).get("selected_strategy")
+        if selected_strategy:
+            from src.strategy_selector import record_strategy_outcome
+            record_strategy_outcome(
+                regime=snap.get("regime", "default"),
+                strategy_name=selected_strategy,
+                pnl=realized_pnl,
+                return_pct=return_pct
+            )
+
     except Exception as e:
         logger.error(f"Adaptive outcome recording failed for {symbol} (non-fatal): {e}")
 
@@ -267,7 +279,10 @@ async def process_signal_for_symbol(symbol: str, current_price: float, risk_mana
                     entry_price=current_price,
                     qty=position_size,
                     brain_votes={v.name: v.action for v in committee_result.votes},
-                    feature_snapshot_json=json.dumps(signal.get("features", {})),
+                    feature_snapshot_json=json.dumps({
+                        **signal.get("features", {}),
+                        "selected_strategy": signal.get("selected_strategy")
+                    }),
                 )
             except Exception as e:
                 logger.warning(f"Decision snapshot persist failed for {symbol} (non-fatal): {e}")
