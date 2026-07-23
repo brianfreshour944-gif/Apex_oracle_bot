@@ -438,6 +438,48 @@ async def run_periodic_cull() -> None:
             logger.error(f"Error running Evolution Cull: {e}")
             await asyncio.sleep(86400)
 
+async def run_periodic_research() -> None:
+    """Background task to run the Automatic Researcher every Sunday morning."""
+    import sys
+    import os
+    from datetime import datetime, timedelta
+    
+    script_path = os.path.join(os.path.dirname(__file__), '..', 'scripts', 'automatic_researcher.py')
+    
+    while True:
+        try:
+            now = datetime.now()
+            # Calculate days until Sunday (6 = Sunday)
+            days_ahead = 6 - now.weekday()
+            if days_ahead < 0 or (days_ahead == 0 and now.hour >= 4):
+                days_ahead += 7
+                
+            # Target 4 AM on Sunday
+            target_time = now + timedelta(days=days_ahead)
+            target_time = target_time.replace(hour=4, minute=0, second=0, microsecond=0)
+            
+            sleep_seconds = (target_time - now).total_seconds()
+            logger.info(f"Automatic Research scheduled for {target_time} (in {sleep_seconds/3600:.1f} hours)")
+            
+            await asyncio.sleep(sleep_seconds)
+            
+            logger.info("Running Automatic Research...")
+            process = await asyncio.create_subprocess_exec(
+                sys.executable, script_path,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+            stdout, stderr = await process.communicate()
+            
+            if process.returncode == 0:
+                logger.info(f"Automatic Research completed successfully:\n{stdout.decode().strip()}")
+            else:
+                logger.error(f"Automatic Research failed with code {process.returncode}:\n{stderr.decode().strip()}")
+                
+        except Exception as e:
+            logger.error(f"Error running Automatic Research: {e}")
+            await asyncio.sleep(3600)
+
 async def run_trading_bot() -> None:
     """Main trading bot loop."""
     global ex
@@ -506,6 +548,12 @@ async def run_trading_bot() -> None:
         active_tasks.add(cull_task)
         cull_task.add_done_callback(active_tasks.discard)
         logger.info("Periodic Evolution Cull task started")
+
+        # Start periodic Automatic Research
+        research_task = asyncio.create_task(run_periodic_research())
+        active_tasks.add(research_task)
+        research_task.add_done_callback(active_tasks.discard)
+        logger.info("Periodic Automatic Research task started")
 
         # Main trading loop
         logger.info("Bot initialization complete. Starting event-driven trading loop.")
