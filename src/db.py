@@ -91,6 +91,53 @@ class ShadowTrade(Base):
         DateTime(timezone=True), nullable=True, default=None
     )
 
+class ExperimentRecord(Base):
+    """Registry of all automated research experiments to track historical performance."""
+    __tablename__ = "experiments"
+
+    experiment_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    generation_type: Mapped[str] = mapped_column(String(32)) # e.g. "Genetic", "AutoML"
+    architecture_details: Mapped[str] = mapped_column(Text) # JSON string
+    sharpe: Mapped[float] = mapped_column(Float, default=0.0)
+    profit_factor: Mapped[float] = mapped_column(Float, default=0.0)
+    max_dd: Mapped[float] = mapped_column(Float, default=0.0)
+    total_return: Mapped[float] = mapped_column(Float, default=0.0)
+    status: Mapped[str] = mapped_column(String(32), default="Candidate")
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.datetime.now(datetime.timezone.utc)
+    )
+
+def save_experiment_record(
+    experiment_id: str,
+    generation_type: str,
+    architecture_details: Dict[str, Any],
+    sharpe: float,
+    max_dd: float,
+    total_return: float,
+    status: str = "Candidate",
+    profit_factor: float = 0.0
+) -> bool:
+    """Save an experiment to the registry."""
+    try:
+        Base.metadata.create_all(get_engine())
+        with get_db_session() as session:
+            rec = ExperimentRecord(
+                experiment_id=experiment_id,
+                generation_type=generation_type,
+                architecture_details=json.dumps(architecture_details),
+                sharpe=float(sharpe),
+                profit_factor=float(profit_factor),
+                max_dd=float(max_dd),
+                total_return=float(total_return),
+                status=status
+            )
+            session.merge(rec)
+            session.commit()
+        return True
+    except Exception as e:
+        logger.warning(f"save_experiment_record failed (non-fatal): {e}")
+        return False
+
 # Engine will be created lazily when first needed
 _engine = None
 

@@ -33,7 +33,9 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')
 from src.feature_engineering import add_features, MASTER_FEATURE_COLS, get_active_features
 from src.committee.transformer_brain import GrokGQA_Transformer
 from src.telegram_alerts import send_telegram_alert
+from src.db import save_experiment_record
 import asyncio
+import uuid
 
 ACTIVE_FEATURES = get_active_features()
 
@@ -240,6 +242,17 @@ def main():
         _, acc = evaluate_model(model, holdout_loader, device, criterion)
         log.info(f"{name}: {acc:.2f}%")
         msg_lines.append(f"- {name}: {acc:.2f}%")
+        
+        save_experiment_record(
+            experiment_id=str(uuid.uuid4()),
+            generation_type="AutoML",
+            architecture_details=candidates[name],
+            sharpe=0.0,
+            max_dd=0.0,
+            total_return=acc,
+            status="Candidate"
+        )
+        
         if acc > best_acc:
             best_acc = acc
             best_name = name

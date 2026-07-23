@@ -17,6 +17,8 @@ sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 from src.config import settings
 from src.backtest import run_backtest, BacktestResult, run_monte_carlo_analysis
 from src.logging_config import get_logger
+from src.db import save_experiment_record
+import uuid
 
 logger = get_logger("genetic_researcher")
 
@@ -76,6 +78,17 @@ async def evaluate_fitness(symbol: str, config: Dict[str, Any], seed: int = 42) 
         fitness = res.sharpe * 100 + res.total_return_pct
         if mc_res["risk_of_ruin_pct"] > 5.0:
             fitness -= 1000  # Blow up penalty
+            
+        save_experiment_record(
+            experiment_id=str(uuid.uuid4()),
+            generation_type="Genetic",
+            architecture_details=config,
+            sharpe=res.sharpe,
+            max_dd=res.max_drawdown_pct,
+            total_return=res.total_return_pct,
+            status="Candidate",
+            profit_factor=0.0 # Could be calculated from trades
+        )
             
         return {
             "config": config,
