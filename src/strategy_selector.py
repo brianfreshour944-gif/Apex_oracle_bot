@@ -44,6 +44,11 @@ def select_best_strategy(regime: str) -> str:
         if s not in weights:
             weights[s] = learner.min_weight
             
+    # Remove any stale strategies from old state files
+    stale_keys = [k for k in weights.keys() if k not in STRATEGIES]
+    for k in stale_keys:
+        del weights[k]
+            
     # Re-normalize to ensure they sum to 1
     total = sum(weights.values())
     if total > 0:
