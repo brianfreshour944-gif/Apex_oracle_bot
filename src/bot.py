@@ -685,28 +685,30 @@ async def run_trading_bot() -> None:
         logger.info("Periodic Post-Mortem AI task started")
 
         # Main trading loop
-        logger.info("Bot initialization complete. Starting event-driven trading loop.")
-
-        last_eval_time = {s: 0.0 for s in settings.SYMBOLS}
+        logger.info(f"Bot initialization complete. Starting stateless REST polling loop for {settings.SYMBOLS} (interval: {settings.LOOP_INTERVAL_SEC}s).")
 
         try:
-            async for bar_msg in ex.listen_crypto_bars(settings.SYMBOLS):
-                symbol = bar_msg.get("S")
-                current_price = float(bar_msg.get("c"))
-                
-                # Throttle evaluation to LOOP_INTERVAL_SEC to avoid REST rate limits on get_bars/get_positions
-                now = time.time()
-                if now - last_eval_time.get(symbol, 0) < settings.LOOP_INTERVAL_SEC:
-                    continue
-                last_eval_time[symbol] = now
-
-                # Dispatch signal processing to a background task so it doesn't block the WebSocket stream
-                task = asyncio.create_task(process_signal_for_symbol(symbol, current_price, risk_manager, strategy, ex))
-                active_tasks.add(task)
-                task.add_done_callback(active_tasks.discard)
+            while True:
+                for symbol in settings.SYMBOLS:
+                    try:
+                        latest_bar_df = await ex.get_latest_bar(symbol)
+                        if latest_bar_df.is_empty():
+                            continue
+                        
+                        current_price = latest_bar_df["close"][0]
+                        
+                        # Dispatch signal processing to a background task
+                        task = asyncio.create_task(process_signal_for_symbol(symbol, current_price, risk_manager, strategy, ex))
+                        active_tasks.add(task)
+                        task.add_done_callback(active_tasks.discard)
+                    except Exception as sym_e:
+                        logger.error(f"[MAIN_LOOP] Error polling {symbol}: {sym_e}")
+                        
+                # Wait for the next evaluation cycle
+                await asyncio.sleep(settings.LOOP_INTERVAL_SEC)
 
         except Exception as e:
-            logger.error(f"WebSocket stream error: {e}")
+            logger.error(f"Stateless polling loop error: {e}")
             await asyncio.sleep(5)
 
     except KeyboardInterrupt:

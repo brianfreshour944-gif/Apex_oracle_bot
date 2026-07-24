@@ -1,15 +1,11 @@
-"""Modern Alpaca exchange client using httpx and Polars with rate limiting, circuit breakers, and order confirmation."""
+"""Modern Alpaca exchange client using alpaca-py with rate limiting and circuit breakers."""
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, AsyncGenerator, Optional
-import json
+from typing import Any, Dict, List, Optional
 import asyncio
-import random
 import time
-import websockets
-
-import httpx
+import datetime
 from tenacity import retry, stop_after_attempt, wait_exponential
 
 import polars as pl
@@ -20,13 +16,20 @@ from src.circuit_breaker import CircuitBreaker
 
 from typing import Protocol, runtime_checkable
 
+# Import alpaca-py components
+from alpaca.trading.client import TradingClient
+from alpaca.trading.requests import MarketOrderRequest, GetOrdersRequest
+from alpaca.trading.enums import OrderSide, TimeInForce, OrderStatus
+from alpaca.data.historical.crypto import CryptoHistoricalDataClient
+from alpaca.data.requests import CryptoBarsRequest, CryptoLatestBarRequest
+from alpaca.data.timeframe import TimeFrame, TimeFrameUnit
+
 logger = get_logger(__name__)
 
 
 @runtime_checkable
 class BaseExchange(Protocol):
-    """Abstract Base Exchange Protocol for multi-exchange adapters (Alpaca, OKX, Binance, Bybit)."""
-
+    """Abstract Base Exchange Protocol for multi-exchange adapters."""
     async def load(self) -> None: ...
     async def close(self) -> None: ...
     async def get_account(self) -> Dict[str, Any]: ...
@@ -35,54 +38,21 @@ class BaseExchange(Protocol):
     async def create_order(self, symbol: str, qty: float, side: str, type: str = "market", time_in_force: str = "ioc") -> Dict[str, Any]: ...
 
 
-
-class RateLimiter:
-    """Token-bucket rate limiter for API calls."""
-
-    def __init__(self, max_rate: float = 200.0, time_period: float = 60.0):
-        self.max_tokens = max_rate
-        self.tokens = max_rate
-        self.time_period = time_period
-        self.fill_rate = max_rate / time_period
-        self.last_update = time.monotonic()
-        self._lock = asyncio.Lock()
-
-    async def acquire(self) -> None:
-        """Acquire a token from the bucket, pausing if rate limit is reached."""
-        async with self._lock:
-            now = time.monotonic()
-            elapsed = now - self.last_update
-            self.last_update = now
-            self.tokens = min(self.max_tokens, self.tokens + elapsed * self.fill_rate)
-
-            if self.tokens < 1.0:
-                wait_time = (1.0 - self.tokens) / self.fill_rate
-                logger.debug(f"Rate limit hit. Waiting {wait_time:.2f}s...")
-                await asyncio.sleep(wait_time)
-                self.tokens = 0.0
-            else:
-                self.tokens -= 1.0
-
-
 class AlpacaExchange:
-    """Modern Alpaca exchange client using httpx and Polars."""
+    """Modern Alpaca exchange client using alpaca-py."""
 
     def __init__(self):
-        self.client = None
-        self.data_client = None
-        base = settings.ALPACA_BASE_URL or "https://paper-api.alpaca.markets"
-        if not base.startswith(("http://", "https://")):
-            base = "https://" + base
-        self.base_url = base
-        self.data_base_url = "https://data.alpaca.markets"
         self.api_key = settings.ALPACA_API_KEY
         self.secret_key = settings.ALPACA_SECRET_KEY
-        self.headers = {
-            "APCA-API-KEY-ID": self.api_key,
-            "APCA-API-SECRET-KEY": self.secret_key,
-        }
-        self.rate_limiter = RateLimiter(max_rate=180.0, time_period=60.0)
+        base_url = settings.ALPACA_BASE_URL or "https://paper-api.alpaca.markets"
+        self.paper = "paper" in base_url.lower()
+        
+        self.trading_client: Optional[TradingClient] = None
+        self.data_client: Optional[CryptoHistoricalDataClient] = None
+        
         self.circuit_breaker = CircuitBreaker("alpaca_exchange")
+        # Internal lock for mimicking rate limiter if needed, though SDK handles some
+        self._lock = asyncio.Lock()
 
     async def load(self) -> None:
         """Initialize the exchange client and verify credentials."""
@@ -91,172 +61,175 @@ class AlpacaExchange:
                 "Alpaca credentials missing. Set ALPACA_API_KEY and ALPACA_SECRET_KEY "
                 "(e.g. in Coolify environment variables)."
             )
-        self.client = httpx.AsyncClient(
-            base_url=self.base_url,
-            headers=self.headers,
-            timeout=30.0,
-        )
+            
         try:
-            await self.rate_limiter.acquire()
-            resp = await self.client.get("/v2/account")
-            if resp.status_code == 401:
-                raise RuntimeError(
-                    "Alpaca returned 401 Unauthorized. Check ALPACA_API_KEY/ALPACA_SECRET_KEY "
-                    "are valid and match the environment. base_url=" + self.base_url
-                )
-            resp.raise_for_status()
-        except Exception:
-            await self.client.aclose()
-            self.client = None
-            raise
-        logger.info(f"Alpaca client initialized for {self.base_url}")
-        self.data_client = httpx.AsyncClient(
-            base_url=self.data_base_url,
-            headers=self.headers,
-            timeout=30.0,
-        )
-        logger.info(f"Alpaca data client initialized for {self.data_base_url}")
+            # Initialize Alpaca-py clients (these are synchronous under the hood, but we wrap calls in threads/async if needed)
+            self.trading_client = TradingClient(self.api_key, self.secret_key, paper=self.paper)
+            self.data_client = CryptoHistoricalDataClient(self.api_key, self.secret_key)
+            
+            # Verify credentials by fetching account
+            account = await asyncio.to_thread(self.trading_client.get_account)
+            if account.account_blocked:
+                raise RuntimeError("Alpaca account is blocked.")
+        except Exception as e:
+            self.trading_client = None
+            self.data_client = None
+            raise RuntimeError(f"Failed to initialize Alpaca clients: {e}")
+            
+        logger.info(f"Alpaca client initialized (Paper={self.paper})")
 
     async def close(self) -> None:
         """Close the exchange client."""
-        if self.client:
-            await self.client.aclose()
-            logger.info("Alpaca client closed")
-        if self.data_client:
-            await self.data_client.aclose()
-            logger.info("Alpaca data client closed")
+        self.trading_client = None
+        self.data_client = None
+        logger.info("Alpaca client closed")
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
     async def get_account(self) -> Dict[str, Any]:
-        """Get account information."""
-        if not self.client:
+        """Get account information (formatted to dict for compatibility)."""
+        if not self.trading_client:
             await self.load()
-        await self.rate_limiter.acquire()
-        response = await self.client.get("/v2/account")
-        response.raise_for_status()
-        return response.json()
+            
+        account = await asyncio.to_thread(self.trading_client.get_account)
+        # Return a dictionary mimicking old JSON response
+        return {
+            "id": str(account.id),
+            "status": str(account.status),
+            "currency": str(account.currency),
+            "buying_power": float(account.buying_power),
+            "equity": float(account.equity),
+            "portfolio_value": float(account.portfolio_value),
+        }
+        
+    def _parse_timeframe(self, timeframe_str: str) -> TimeFrame:
+        """Parse 1Min, 5Min, 1Hour, 1Day into alpaca-py TimeFrame."""
+        import re
+        match = re.match(r'(\d+)\s*([a-zA-Z]+)?', timeframe_str)
+        if match:
+            val = int(match.group(1))
+            unit = match.group(2).lower() if match.group(2) else ""
+            if "min" in unit or unit == "m":
+                return TimeFrame(val, TimeFrameUnit.Minute)
+            elif "hour" in unit or unit == "h":
+                return TimeFrame(val, TimeFrameUnit.Hour)
+            elif "day" in unit or unit == "d":
+                return TimeFrame(val, TimeFrameUnit.Day)
+        return TimeFrame.Day
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
     async def get_bars(self, symbol: str, timeframe: str = "1D", limit: int = 100) -> pl.DataFrame:
-        """Get crypto market data from Alpaca's data API using Polars."""
+        """Get crypto market data using alpaca-py and convert to Polars."""
         if not self.data_client:
             await self.load()
 
-        import datetime
-        import re
-
+        tf = self._parse_timeframe(timeframe)
+        
+        # Calculate start time heuristically based on limit
         now = datetime.datetime.now(datetime.timezone.utc)
-        match = re.match(r'(\d+)\s*([a-zA-Z]+)?', timeframe)
-        if match:
-            val = int(match.group(1))
-            unit = match.group(2)
-            if unit:
-                unit_lower = unit.lower()
-                if 'min' in unit_lower or unit_lower == 'm':
-                    delta = datetime.timedelta(minutes=val * limit * 1.5)
-                elif 'hour' in unit_lower or unit_lower == 'h':
-                    delta = datetime.timedelta(hours=val * limit * 1.5)
-                elif 'day' in unit_lower or unit_lower == 'd':
-                    delta = datetime.timedelta(days=val * limit * 1.5)
-                else:
-                    delta = datetime.timedelta(days=limit * 1.5)
-            else:
-                delta = datetime.timedelta(days=limit * 1.5)
+        if tf.unit == TimeFrameUnit.Minute:
+            delta = datetime.timedelta(minutes=tf.amount * limit * 1.5)
+        elif tf.unit == TimeFrameUnit.Hour:
+            delta = datetime.timedelta(hours=tf.amount * limit * 1.5)
         else:
-            delta = datetime.timedelta(days=limit * 1.5)
+            delta = datetime.timedelta(days=tf.amount * limit * 1.5)
+            
+        start_time = now - max(delta, datetime.timedelta(hours=1))
+        
+        request_params = CryptoBarsRequest(
+            symbol_or_symbols=symbol,
+            timeframe=tf,
+            start=start_time,
+            limit=limit
+        )
 
-        min_delta = datetime.timedelta(hours=1)
-        if delta < min_delta:
-            delta = min_delta
-
-        start_time = now - delta
-
-        params = {
-            "symbols": symbol,
-            "timeframe": timeframe,
-            "limit": limit,
-            "start": start_time.strftime("%Y-%m-%dT%H:%M:%SZ"),
-        }
-
-        await self.rate_limiter.acquire()
-        response = await self.data_client.get("/v1beta3/crypto/us/bars", params=params)
-        if response.status_code in (401, 403, 404):
-            body = response.text[:300]
-            raise RuntimeError(
-                f"Crypto market data unavailable for {symbol} (HTTP {response.status_code}): {body}"
-            )
-        response.raise_for_status()
-
-        data = response.json()
-        bars = data.get("bars", {})
-        if not bars or symbol not in bars:
-            return pl.DataFrame()
-        df = pl.DataFrame(bars[symbol])
-        rename_map = {
-            "t": "timestamp",
-            "o": "open",
-            "h": "high",
-            "l": "low",
-            "c": "close",
-            "v": "volume",
-            "vw": "vwap",
-            "n": "trade_count",
-        }
-        df = df.rename({k: v for k, v in rename_map.items() if k in df.columns})
-        return df
+        try:
+            bars_df = await asyncio.to_thread(self.data_client.get_crypto_bars, request_params)
+            if bars_df.data and symbol in bars_df.data:
+                # Get the list of Bar objects
+                bars = bars_df.data[symbol]
+                
+                # Convert to dict format expected by downstream
+                data_list = []
+                for b in bars:
+                    data_list.append({
+                        "timestamp": b.timestamp.isoformat() if hasattr(b.timestamp, "isoformat") else b.timestamp,
+                        "open": float(b.open),
+                        "high": float(b.high),
+                        "low": float(b.low),
+                        "close": float(b.close),
+                        "volume": float(b.volume),
+                        "vwap": float(b.vwap),
+                        "trade_count": int(b.trade_count),
+                    })
+                
+                return pl.DataFrame(data_list)
+        except Exception as e:
+            logger.warning(f"Failed to fetch bars for {symbol}: {e}")
+            
+        return pl.DataFrame()
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
     async def get_latest_bar(self, symbol: str) -> pl.DataFrame:
-        """Get the latest bar for a crypto symbol using the dedicated latest/bars endpoint."""
+        """Get the latest bar for a crypto symbol."""
         if not self.data_client:
             await self.load()
 
-        params = {"symbols": symbol}
-        await self.rate_limiter.acquire()
-        response = await self.data_client.get("/v1beta3/crypto/us/latest/bars", params=params)
-        response.raise_for_status()
+        request_params = CryptoLatestBarRequest(symbol_or_symbols=symbol)
+        try:
+            latest_bars = await asyncio.to_thread(self.data_client.get_crypto_latest_bar, request_params)
+            if symbol in latest_bars:
+                b = latest_bars[symbol]
+                data = {
+                    "timestamp": b.timestamp.isoformat() if hasattr(b.timestamp, "isoformat") else b.timestamp,
+                    "open": float(b.open),
+                    "high": float(b.high),
+                    "low": float(b.low),
+                    "close": float(b.close),
+                    "volume": float(b.volume),
+                    "vwap": float(b.vwap),
+                    "trade_count": int(b.trade_count),
+                }
+                return pl.DataFrame([data])
+        except Exception as e:
+            logger.warning(f"Failed to fetch latest bar for {symbol}: {e}")
 
-        data = response.json()
-        bars = data.get("bars", {})
-        if not bars or symbol not in bars:
-            return pl.DataFrame()
-
-        bar = bars[symbol]
-        if isinstance(bar, dict):
-            bar = [bar]
-        df = pl.DataFrame(bar)
-        rename_map = {
-            "t": "timestamp",
-            "o": "open",
-            "h": "high",
-            "l": "low",
-            "c": "close",
-            "v": "volume",
-            "vw": "vwap",
-            "n": "trade_count",
-        }
-        df = df.rename({k: v for k, v in rename_map.items() if k in df.columns})
-        return df
+        return pl.DataFrame()
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
     async def get_positions(self) -> List[Dict[str, Any]]:
         """Get open positions."""
-        if not self.client:
+        if not self.trading_client:
             await self.load()
-        await self.rate_limiter.acquire()
-        response = await self.client.get("/v2/positions")
-        response.raise_for_status()
-        return response.json()
+            
+        positions = await asyncio.to_thread(self.trading_client.get_all_positions)
+        result = []
+        for p in positions:
+            result.append({
+                "symbol": str(p.symbol),
+                "qty": float(p.qty),
+                "avg_entry_price": float(p.avg_entry_price),
+                "market_value": float(p.market_value),
+                "unrealized_pl": float(p.unrealized_pl),
+                "unrealized_plpc": float(p.unrealized_plpc),
+            })
+        return result
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
     async def get_order(self, order_id: str) -> Dict[str, Any]:
         """Fetch order details by order ID."""
-        if not self.client:
+        if not self.trading_client:
             await self.load()
-        await self.rate_limiter.acquire()
-        response = await self.client.get(f"/v2/orders/{order_id}")
-        response.raise_for_status()
-        return response.json()
+            
+        order = await asyncio.to_thread(self.trading_client.get_order_by_id, order_id)
+        return {
+            "id": str(order.id),
+            "symbol": str(order.symbol),
+            "qty": float(order.qty) if order.qty else 0.0,
+            "filled_qty": float(order.filled_qty) if order.filled_qty else 0.0,
+            "status": str(order.status.value) if hasattr(order.status, "value") else str(order.status),
+            "side": str(order.side.value) if hasattr(order.side, "value") else str(order.side),
+            "type": str(order.type.value) if hasattr(order.type, "value") else str(order.type),
+        }
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
     async def create_order(
@@ -269,35 +242,42 @@ class AlpacaExchange:
         confirm: bool = True,
         confirm_timeout: float = 10.0,
     ) -> Dict[str, Any]:
-        """Create a new order with optional confirmation polling."""
-        if not self.client:
+        """Create a new order using alpaca-py."""
+        if not self.trading_client:
             await self.load()
+            
+        # Parse enums
+        order_side = OrderSide.BUY if side.lower() == "buy" else OrderSide.SELL
+        
+        # We enforce market orders in this bot, but it can be expanded.
+        request = MarketOrderRequest(
+            symbol=symbol,
+            qty=qty,
+            side=order_side,
+            time_in_force=TimeInForce.IOC if time_in_force.lower() == "ioc" else TimeInForce.GTC
+        )
 
-        order_data = {
-            "symbol": symbol,
-            "qty": qty,
-            "side": side,
-            "type": type,
-            "time_in_force": time_in_force,
+        order = await asyncio.to_thread(self.trading_client.submit_order, request)
+        order_id = str(order.id)
+        
+        order_info = {
+            "id": order_id,
+            "symbol": str(order.symbol),
+            "qty": float(order.qty) if order.qty else 0.0,
+            "status": str(order.status.value) if hasattr(order.status, "value") else str(order.status),
         }
-
-        await self.rate_limiter.acquire()
-        response = await self.client.post("/v2/orders", json=order_data)
-        response.raise_for_status()
-        order_info = response.json()
-        order_id = order_info.get("id")
 
         if not confirm or not order_id:
             return order_info
 
-        # Confirmation loop: poll order until filled, canceled, or expired
+        # Confirmation loop
         start_time = time.monotonic()
         while time.monotonic() - start_time < confirm_timeout:
             await asyncio.sleep(0.5)
             try:
                 poll_info = await self.get_order(order_id)
                 status = poll_info.get("status")
-                if status in ("filled", "canceled", "expired", "rejected"):
+                if status in (OrderStatus.FILLED.value, OrderStatus.CANCELED.value, OrderStatus.EXPIRED.value, OrderStatus.REJECTED.value, "filled", "canceled", "expired", "rejected"):
                     logger.info(f"Order {order_id} reached final status: {status}")
                     return poll_info
             except Exception as e:
@@ -305,58 +285,3 @@ class AlpacaExchange:
 
         logger.warning(f"Order {order_id} confirmation timed out after {confirm_timeout}s")
         return order_info
-
-    async def listen_crypto_bars(self, symbols: List[str]) -> AsyncGenerator[Dict[str, Any], None]:
-        """Listen to real-time crypto bars with exponential backoff, jitter, and circuit breaker."""
-        wss_url = "wss://stream.data.alpaca.markets/v1beta3/crypto/us"
-        attempt = 0
-        min_delay = 1.0
-        max_delay = 60.0
-
-        while True:
-            try:
-                async with websockets.connect(wss_url) as ws:
-                    logger.info("Connected to Alpaca Crypto WebSocket")
-                    attempt = 0  # reset attempt count on successful connect
-
-                    connected_msg = json.loads(await ws.recv())
-                    logger.debug(f"WebSocket connected: {connected_msg}")
-
-                    auth_message = {
-                        "action": "auth",
-                        "key": self.api_key,
-                        "secret": self.secret_key
-                    }
-                    await ws.send(json.dumps(auth_message))
-                    auth_response = json.loads(await ws.recv())
-                    logger.info(f"WebSocket Auth Response: {auth_response}")
-                    if isinstance(auth_response, list) and auth_response[0].get("T") == "error":
-                        err_msg = auth_response[0].get("msg", "")
-                        if "connection limit" in err_msg.lower():
-                            logger.warning("⚠️ Alpaca WebSocket connection limit exceeded (another bot instance is using the API key). Backing off 15s...")
-                            await asyncio.sleep(15.0)
-                        raise ValueError(f"WebSocket auth failed: {err_msg}")
-
-
-                    sub_message = {
-                        "action": "subscribe",
-                        "bars": symbols
-                    }
-                    await ws.send(json.dumps(sub_message))
-                    sub_response = json.loads(await ws.recv())
-                    logger.info(f"WebSocket Subscription Response: {sub_response}")
-                    if isinstance(sub_response, list) and sub_response[0].get("T") == "error":
-                        logger.error(f"WebSocket subscription failed: {sub_response[0].get('msg')}")
-
-                    while True:
-                        message = await ws.recv()
-                        data = json.loads(message)
-                        for item in data:
-                            if item.get("T") == "b":
-                                yield item
-
-            except Exception as e:
-                attempt += 1
-                backoff = min(max_delay, min_delay * (2 ** (attempt - 1))) + random.uniform(0, 1.0)
-                logger.error(f"WebSocket connection error (attempt {attempt}): {e}. Reconnecting in {backoff:.2f}s...")
-                await asyncio.sleep(backoff)
