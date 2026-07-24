@@ -151,7 +151,7 @@ async def run_backtest(
 
     for row in bars.iter_rows(named=True):
         current_price = float(row["close"])
-        ts = str(row["t"])
+        ts = row["t"]
         exchange.current_time = ts
 
         # Build a position dict the strategy understands (only if we hold one)

@@ -26,7 +26,7 @@ from .llm_brain import llm_brain
 logger = get_logger("committee")
 
 # Default fallback if symbol lacks optimized data
-DEFAULT_SCORE_THRESHOLD = 0.60
+DEFAULT_SCORE_THRESHOLD = 0.15
 
 import json
 import os
@@ -192,6 +192,19 @@ async def run_committee(symbol: str, price: float, signal: Dict[str, Any]) -> Co
         CommitteeResult containing final action, weighted score, size_multiplier, and vote audit logs.
     """
     regime = signal.get("regime", "default")
+    
+    # Check for hard exits (Stop Loss / Take Profit) BEFORE voting
+    if signal.get("action") == "close":
+        return CommitteeResult(
+            action="close",
+            score=1.0,
+            size_multiplier=0.0,
+            entropy=0.0,
+            votes=[],
+            active_weights={},
+            explanation=signal.get("reason", "Price-based exit condition")
+        )
+        
     weights = REGIME_WEIGHT_MATRIX.get(regime, REGIME_WEIGHT_MATRIX["default"])
     symbol_threshold = get_symbol_threshold(symbol)
 
@@ -215,7 +228,8 @@ async def run_committee(symbol: str, price: float, signal: Dict[str, Any]) -> Co
             weight=w,
             regime=v.regime,
             reason=v.reason,
-            is_veto=v.is_veto
+            is_veto=v.is_veto,
+            tensor_state=getattr(v, "tensor_state", None)
         ))
 
     # Check for hard vetoes (Sentinel / Crash)
@@ -237,9 +251,15 @@ async def run_committee(symbol: str, price: float, signal: Dict[str, Any]) -> Co
 
     # ── Classic (baseline) weighted score per action ──
     scores = defaultdict(float)
+    active_weight = 0.0
     for v in votes:
         if v.action not in ["stand_aside", "skip"]:
             scores[v.action] += v.confidence * v.weight
+            active_weight += v.weight
+
+    if active_weight > 0:
+        for action in scores:
+            scores[action] /= active_weight
 
     if scores:
         baseline_winner = max(scores, key=scores.get)

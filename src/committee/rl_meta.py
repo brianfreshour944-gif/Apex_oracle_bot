@@ -98,9 +98,15 @@ class RLMetaLearner:
             from .adaptive_meta import BrainScore
             
             action_scores = {}
+            active_weight = 0.0
             for v in brain_outputs:
-                if v.action in ["buy", "sell"]:
+                if v.action in ["buy", "sell", "hold"]:
                     action_scores[v.action] = action_scores.get(v.action, 0.0) + (v.confidence * 0.2)
+                    active_weight += 0.2
+                    
+            if active_weight > 0:
+                for action in action_scores:
+                    action_scores[action] /= active_weight
                     
             action = max(action_scores, key=action_scores.get) if action_scores else "stand_aside"
             confidence = action_scores.get(action, 0.0)
@@ -132,11 +138,17 @@ class RLMetaLearner:
         from .adaptive_meta import BrainScore
         scores = []
         
+        active_weight = 0.0
         for v in brain_outputs:
             w = weights.get(v.name, 0.2)
             scores.append(BrainScore(name=v.name, action=v.action, confidence=float(v.confidence), weight=w))
-            if v.action in ["buy", "sell"]:
+            if v.action in ["buy", "sell", "hold"]:
                 action_scores[v.action] = action_scores.get(v.action, 0.0) + (v.confidence * w)
+                active_weight += w
+                
+        if active_weight > 0:
+            for action in action_scores:
+                action_scores[action] /= active_weight
                 
         final_action = "stand_aside"
         confidence = 0.0
