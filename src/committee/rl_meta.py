@@ -123,7 +123,7 @@ class RLMetaLearner:
         weights_arr = exp_w / exp_w.sum()
         
         pos_size_mult = ((action[5] + 1.0) / 2.0) + 0.5 
-        conf_thresh = ((action[6] + 1.0) / 2.0) * 0.3 + 0.5
+        conf_thresh = ((action[6] + 1.0) / 2.0) * 0.2 + 0.35
         
         weights = {BRAINS[i]: float(weights_arr[i]) for i in range(len(BRAINS))}
         
