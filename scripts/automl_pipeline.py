@@ -202,9 +202,9 @@ def main():
     criterion = nn.BCEWithLogitsLoss()
     
     candidates = {
-        "Bot_A_Light": {"layers": 2, "embed": 128, "lr": 5e-4, "dropout": 0.2, "stop_loss": 0.015, "profit_target": 0.03, "threshold": 0.55},
+        "Bot_A_Light": {"layers": 4, "embed": 128, "lr": 5e-4, "dropout": 0.2, "stop_loss": 0.015, "profit_target": 0.03, "threshold": 0.55},
         "Bot_B_Standard": {"layers": 4, "embed": 128, "lr": 3e-4, "dropout": 0.1, "stop_loss": 0.02, "profit_target": 0.04, "threshold": 0.58},
-        "Bot_C_Heavy": {"layers": 6, "embed": 256, "lr": 1e-4, "dropout": 0.3, "stop_loss": 0.03, "profit_target": 0.06, "threshold": 0.60},
+        "Bot_C_Heavy": {"layers": 4, "embed": 256, "lr": 1e-4, "dropout": 0.3, "stop_loss": 0.03, "profit_target": 0.06, "threshold": 0.60},
     }
     
     import json

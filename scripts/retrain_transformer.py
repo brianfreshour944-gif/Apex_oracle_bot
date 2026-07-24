@@ -51,6 +51,17 @@ class ReplayBufferDataset(Dataset):
         x, y = self.samples[idx]
         return torch.tensor(x), torch.tensor([y], dtype=torch.float32)
 
+def evaluate_loss(model, loader, criterion, device):
+    model.eval()
+    total_loss = 0.0
+    with torch.no_grad():
+        for batch_x, batch_y in loader:
+            batch_x, batch_y = batch_x.to(device), batch_y.to(device)
+            logits = model(batch_x)
+            loss = criterion(logits, batch_y)
+            total_loss += loss.item() * len(batch_y)
+    return total_loss / len(loader.dataset)
+
 def retrain_model():
     logger.info("Initializing Transformer Replay Retraining...")
     
@@ -63,15 +74,21 @@ def retrain_model():
         logger.warning(f"Not enough data in replay buffer ({len(dataset)} samples). Waiting for more trades.")
         return
         
-    loader = DataLoader(dataset, batch_size=BATCH_SIZE, shuffle=True)
-    logger.info(f"Loaded {len(dataset)} trade experiences.")
+    train_size = int(0.85 * len(dataset))
+    val_size = len(dataset) - train_size
+    train_dataset, val_dataset = torch.utils.data.random_split(dataset, [train_size, val_size])
+        
+    train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True)
+    val_loader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False)
+    
+    logger.info(f"Loaded {len(dataset)} trade experiences. Split: {train_size} train, {val_size} holdout.")
     
     # Infer input shape from dataset
     sample_x, _ = dataset[0]
     seq_len, embed_dim = sample_x.shape
     
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model = GrokGQA_Transformer(embed_dim=embed_dim, num_heads=4, num_layers=2, seq_len=seq_len).to(device)
+    model = GrokGQA_Transformer(embed_dim=embed_dim, num_heads=4, num_layers=4, seq_len=seq_len).to(device)
     
     # Load existing weights if they exist
     if os.path.exists(MODEL_PATH):
@@ -82,13 +99,20 @@ def retrain_model():
             logger.warning(f"Could not load existing weights, starting fresh: {e}")
             
     criterion = nn.BCEWithLogitsLoss()
+    
+    # 1. Evaluate Champion
+    champion_loss = float("inf")
+    if os.path.exists(MODEL_PATH):
+        champion_loss = evaluate_loss(model, val_loader, criterion, device)
+        logger.info(f"🏆 Champion Baseline Holdout Loss: {champion_loss:.4f}")
+        
+    # 2. Train Challenger
     optimizer = optim.Adam(model.parameters(), lr=LR)
     
-    model.train()
-    
     for epoch in range(EPOCHS):
+        model.train()
         total_loss = 0.0
-        for batch_x, batch_y in loader:
+        for batch_x, batch_y in train_loader:
             batch_x = batch_x.to(device)
             batch_y = batch_y.to(device)
             
@@ -98,14 +122,22 @@ def retrain_model():
             loss.backward()
             optimizer.step()
             
-            total_loss += loss.item()
+            total_loss += loss.item() * len(batch_y)
             
-        avg_loss = total_loss / len(loader)
-        logger.info(f"Epoch {epoch+1}/{EPOCHS} - Loss: {avg_loss:.4f}")
+        avg_loss = total_loss / len(train_loader.dataset)
+        logger.info(f"Epoch {epoch+1}/{EPOCHS} - Train Loss: {avg_loss:.4f}")
         
-    os.makedirs("models", exist_ok=True)
-    torch.save(model.state_dict(), MODEL_PATH)
-    logger.info(f"✅ Retraining complete. Saved updated model to {MODEL_PATH}")
+    # 3. Evaluate Challenger
+    challenger_loss = evaluate_loss(model, val_loader, criterion, device)
+    logger.info(f"⚔️ Challenger Holdout Loss: {challenger_loss:.4f}")
+    
+    # 4. Champion vs Challenger
+    if challenger_loss < champion_loss:
+        os.makedirs("models", exist_ok=True)
+        torch.save(model.state_dict(), MODEL_PATH)
+        logger.info(f"✅ Challenger WINS! Saved updated model to {MODEL_PATH}")
+    else:
+        logger.info("❌ Challenger FAILED to beat Champion. Discarding new weights.")
 
 if __name__ == "__main__":
     retrain_model()

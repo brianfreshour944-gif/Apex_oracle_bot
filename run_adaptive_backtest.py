@@ -118,6 +118,7 @@ async def run_adaptive_simulation(symbol: str = "BTC-USD", n_days: int = 180):
                 
                 t_votes = [v for v in committee_result.votes if v.name == "transformer"]
                 tensor_state = t_votes[0].tensor_state if t_votes else None
+                t_prob = t_votes[0].confidence if t_votes else 0.5
                 
                 # Snapshot the committee's state for training
                 entry_snapshot = {
@@ -126,8 +127,12 @@ async def run_adaptive_simulation(symbol: str = "BTC-USD", n_days: int = 180):
                     "final_action": "buy",
                     "confidence": committee_result.score,
                     "brain_votes": {v.name: v.action for v in committee_result.votes},
+                    "weights": committee_result.active_weights,
                     "entry_time": entry_time,
-                    "tensor_state": tensor_state
+                    "tensor_state": tensor_state,
+                    "t_prob": t_prob,
+                    "atr": signal.get("atr", 0.0),
+                    "volatility": signal.get("volatility", 0.0)
                 }
                 
         elif final_action == "sell" and open_pos is None:
@@ -141,6 +146,7 @@ async def run_adaptive_simulation(symbol: str = "BTC-USD", n_days: int = 180):
                 
                 t_votes = [v for v in committee_result.votes if v.name == "transformer"]
                 tensor_state = t_votes[0].tensor_state if t_votes else None
+                t_prob = t_votes[0].confidence if t_votes else 0.5
                 
                 entry_snapshot = {
                     "symbol": symbol,
@@ -148,8 +154,12 @@ async def run_adaptive_simulation(symbol: str = "BTC-USD", n_days: int = 180):
                     "final_action": "sell",
                     "confidence": committee_result.score,
                     "brain_votes": {v.name: v.action for v in committee_result.votes},
+                    "weights": committee_result.active_weights,
                     "entry_time": entry_time,
-                    "tensor_state": tensor_state
+                    "tensor_state": tensor_state,
+                    "t_prob": t_prob,
+                    "atr": signal.get("atr", 0.0),
+                    "volatility": signal.get("volatility", 0.0)
                 }
                 
         elif final_action == "close" and open_pos is not None:
@@ -179,8 +189,25 @@ async def run_adaptive_simulation(symbol: str = "BTC-USD", n_days: int = 180):
                     t_label = 1.0 if pnl > 0 else 0.0
                     buffer_path = "data/transformer_replay_buffer.jsonl"
                     os.makedirs("data", exist_ok=True)
+                    
+                    record = {
+                        "tensor": entry_snapshot["tensor_state"],
+                        "prediction": "buy" if entry_snapshot["t_prob"] > 0.5 else "sell",
+                        "actual_outcome": t_label,
+                        "confidence": entry_snapshot["t_prob"],
+                        "committee_weights": entry_snapshot["weights"],
+                        "market_regime": entry_snapshot["regime"],
+                        "symbol": entry_snapshot["symbol"],
+                        "atr": entry_snapshot["atr"],
+                        "volatility": entry_snapshot["volatility"],
+                        "entry_time": entry_snapshot["entry_time"],
+                        "exit_time": ts,
+                        "reward": pnl_pct,
+                        "label": t_label
+                    }
+                    
                     with open(buffer_path, "a") as f:
-                        f.write(json.dumps({"tensor": entry_snapshot["tensor_state"], "label": t_label}) + "\n")
+                        f.write(json.dumps(record) + "\n")
                 
                 label = "WIN" if pnl > 0 else "LOSS"
                 print(f"[{ts}] Trade Closed: {label} ({pnl_pct:+.2f}%). Sent to Meta-Learner & Replay Buffer.")

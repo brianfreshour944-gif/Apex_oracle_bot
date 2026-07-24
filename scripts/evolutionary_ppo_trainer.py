@@ -301,16 +301,49 @@ async def main():
         logger.info(f"Training PPO Meta-Learner on {len(surviving_snapshots)} surviving trades...")
         from src.committee.rl_env import MetaDecisionEnv
         from stable_baselines3 import PPO
+        import os
         
         env = MetaDecisionEnv(surviving_snapshots)
-        model = PPO("MlpPolicy", env, verbose=1, learning_rate=0.001)
-        model.learn(total_timesteps=len(surviving_snapshots) * 50)
-        
         models_dir = os.path.join(os.path.dirname(__file__), '..', 'models')
         os.makedirs(models_dir, exist_ok=True)
         save_path = os.path.join(models_dir, 'ppo_meta_weights.zip')
-        model.save(save_path)
-        logger.info(f"✅ Saved PPO model to {save_path}")
+        
+        def evaluate_ppo(test_model, test_env):
+            obs, _ = test_env.reset()
+            total_reward = 0.0
+            done = False
+            while not done:
+                action, _ = test_model.predict(obs, deterministic=True)
+                obs, reward, done, truncated, _ = test_env.step(action)
+                total_reward += reward
+                if truncated: done = True
+            return total_reward
+
+        # 1. Evaluate PPO Champion
+        champion_reward = float('-inf')
+        if os.path.exists(save_path):
+            try:
+                champion_model = PPO.load(save_path, env=env)
+                champion_reward = evaluate_ppo(champion_model, env)
+                logger.info(f"🏆 PPO Champion Baseline Reward: {champion_reward:.2f}")
+            except Exception as e:
+                logger.warning(f"Could not load existing PPO Champion: {e}")
+                
+        # 2. Train PPO Challenger
+        logger.info("Training PPO Challenger...")
+        challenger = PPO("MlpPolicy", env, verbose=0, learning_rate=0.001)
+        challenger.learn(total_timesteps=len(surviving_snapshots) * 50)
+        
+        # 3. Evaluate PPO Challenger
+        challenger_reward = evaluate_ppo(challenger, env)
+        logger.info(f"⚔️ PPO Challenger Reward: {challenger_reward:.2f}")
+        
+        # 4. Champion vs Challenger
+        if challenger_reward > champion_reward:
+            challenger.save(save_path)
+            logger.info(f"✅ PPO Challenger WINS! Saved updated meta-learner to {save_path}")
+        else:
+            logger.info("❌ PPO Challenger FAILED to beat Champion. Discarding new weights.")
     else:
         logger.warning("No candidates survived the GA filter. PPO was not trained.")
 
