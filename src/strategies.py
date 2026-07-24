@@ -17,12 +17,13 @@ import time
 class TradingStrategy:
     """Modern trading strategy with regime classification and signal generation."""
 
-    def __init__(self, exchange: AlpacaExchange, cache_ttl: float = 60.0):
+    def __init__(self, exchange: AlpacaExchange, cache_ttl: float = 60.0, backtest: bool = False):
         self.exchange = exchange
         self.current_regime = "neutral"
         self.last_analysis_time = None
         self._regime_cache: Dict[str, Tuple[float, Dict[str, Any]]] = {}
         self._cache_ttl = cache_ttl
+        self.backtest = backtest
 
     async def analyze_market_regime(self, symbol: str, timeframe: str = "1D", limit: int = 100) -> Dict[str, Any]:
         """Analyze market regime using Hurst exponent, ATR, and RSI with TTL caching."""
@@ -76,9 +77,10 @@ class TradingStrategy:
                 htf_trend = "bullish" if close_arr[-1] > ema20 else "bearish"
 
             # Classify regime
-            if atr > settings.HIGH_VOLATILITY_PCT:
+            atr_pct = (atr / close_arr[-1]) * 100 if close_arr[-1] > 0 else 0
+            if atr_pct > settings.HIGH_VOLATILITY_PCT:
                 regime = "high_volatility"
-            elif atr < settings.HIGH_VOLATILITY_PCT * 0.25:
+            elif atr_pct < settings.HIGH_VOLATILITY_PCT * 0.25:
                 regime = "low_volatility"
             elif hurst > settings.HURST_TREND_UP:
                 if htf_trend == "bullish":
@@ -95,31 +97,42 @@ class TradingStrategy:
             self.current_regime = regime
 
             # Fetch On-Chain Derivatives Data
-            try:
-                from src.onchain_data import fetch_derivatives_data
-                import asyncio
-                
-                deriv_data = await fetch_derivatives_data(symbol)
-                funding_rate = float(deriv_data.get("funding_rate", 0.0))
-                open_interest = float(deriv_data.get("open_interest", 0.0))
-                long_short_ratio = float(deriv_data.get("long_short_ratio", 1.0))
-                bid_ask_imbalance = float(deriv_data.get("bid_ask_imbalance", 0.0))
-            except Exception as e:
-                logger.warning(f"Failed to fetch derivatives data for {symbol}: {e}")
+            if not self.backtest:
+                try:
+                    from src.onchain_data import fetch_derivatives_data
+                    import asyncio
+                    
+                    deriv_data = await fetch_derivatives_data(symbol)
+                    funding_rate = float(deriv_data.get("funding_rate", 0.0))
+                    open_interest = float(deriv_data.get("open_interest", 0.0))
+                    long_short_ratio = float(deriv_data.get("long_short_ratio", 1.0))
+                    bid_ask_imbalance = float(deriv_data.get("bid_ask_imbalance", 0.0))
+                except Exception as e:
+                    logger.warning(f"Failed to fetch derivatives data for {symbol}: {e}")
+                    funding_rate = 0.0
+                    open_interest = 0.0
+                    long_short_ratio = 1.0
+                    bid_ask_imbalance = 0.0
+            else:
                 funding_rate = 0.0
                 open_interest = 0.0
                 long_short_ratio = 1.0
                 bid_ask_imbalance = 0.0
                 
             # Fetch News Sentiment Alternative Data
-            try:
-                from src.sentiment_analyzer import extract_sentiment
-                sentiment_data = await extract_sentiment(symbol)
-                sentiment_score = float(sentiment_data.get("sentiment_score", 0.0))
-                event_type = str(sentiment_data.get("event_type", "none"))
-                sentiment_conf = float(sentiment_data.get("confidence", 0.0))
-            except Exception as e:
-                logger.warning(f"Failed to fetch sentiment data for {symbol}: {e}")
+            if not self.backtest:
+                try:
+                    from src.sentiment_analyzer import extract_sentiment
+                    sentiment_data = await extract_sentiment(symbol)
+                    sentiment_score = float(sentiment_data.get("sentiment_score", 0.0))
+                    event_type = str(sentiment_data.get("event_type", "none"))
+                    sentiment_conf = float(sentiment_data.get("confidence", 0.0))
+                except Exception as e:
+                    logger.warning(f"Failed to fetch sentiment data for {symbol}: {e}")
+                    sentiment_score = 0.0
+                    event_type = "none"
+                    sentiment_conf = 0.0
+            else:
                 sentiment_score = 0.0
                 event_type = "none"
                 sentiment_conf = 0.0
@@ -224,30 +237,34 @@ class TradingStrategy:
         if len(prices) < period + 1:
             return 50.0, 50.0
 
-        deltas = np.diff(prices)
-        seed = deltas[:period+1]
-
-        up = seed[seed >= 0].sum() / period
-        down = -seed[seed < 0].sum() / period
-
-        rs = up / down
-        rsi = np.where(down == 0, 100, 100 - (100 / (1 + rs)))
-
-        for i in range(period+1, len(prices)):
-            delta = deltas[i-1]
-
+        diffs = np.diff(prices)
+        # Calculate initial SMMA
+        up = np.mean(np.where(diffs[:period] > 0, diffs[:period], 0))
+        down = np.mean(np.where(diffs[:period] < 0, -diffs[:period], 0))
+        
+        if down == 0:
+            rsi = [100.0]
+        else:
+            rs = up / down
+            rsi = [100.0 - (100.0 / (1.0 + rs))]
+        
+        for i in range(period, len(prices)-1):
+            delta = diffs[i]
             if delta > 0:
-                up_val = delta
-                down_val = 0.0
+                upval = delta
+                downval = 0
             else:
-                up_val = 0.0
-                down_val = -delta
-
-            up = (up * (period - 1) + up_val) / period
-            down = (down * (period - 1) + down_val) / period
-
-            rs = up / down if down != 0 else float('inf')
-            rsi = np.append(rsi, 100 - (100 / (1 + rs)) if rs != float('inf') else 100.0)
+                upval = 0
+                downval = -delta
+                
+            up = (up * (period - 1) + upval) / period
+            down = (down * (period - 1) + downval) / period
+            
+            if down == 0:
+                rsi.append(100.0)
+            else:
+                rs = up / down
+                rsi.append(100.0 - (100.0 / (1.0 + rs)))
 
         if len(rsi) >= 2:
             return float(rsi[-1]), float(rsi[-2])
@@ -283,6 +300,7 @@ class TradingStrategy:
                     "reason": "high_volatility_regime",
                     "regime": regime,
                     "rsi": rsi,
+                    "atr": regime_data.get("atr", 0.0),
                     "features": regime_data
                 }
 
@@ -308,6 +326,7 @@ class TradingStrategy:
                 if exit_signal:
                     exit_signal["regime"] = regime
                     exit_signal["rsi"] = rsi
+                    exit_signal["atr"] = regime_data.get("atr", 0.0)
                     exit_signal["features"] = regime_data
                     exit_signal["selected_strategy"] = best_strategy_name
                     return exit_signal
@@ -320,6 +339,7 @@ class TradingStrategy:
                         "reason": reason,
                         "regime": regime,
                         "rsi": rsi,
+                        "atr": regime_data.get("atr", 0.0),
                         "features": regime_data,
                         "selected_strategy": best_strategy_name
                     }
@@ -331,6 +351,7 @@ class TradingStrategy:
                     "reason": reason,
                     "regime": regime,
                     "rsi": rsi,
+                    "atr": regime_data.get("atr", 0.0),
                     "htf_trend": regime_data.get("htf_trend"),
                     "features": regime_data,
                     "selected_strategy": best_strategy_name
@@ -342,6 +363,7 @@ class TradingStrategy:
                 "reason": "no_signal",
                 "regime": regime,
                 "rsi": rsi,
+                "atr": regime_data.get("atr", 0.0),
                 "features": regime_data
             }
 
@@ -354,6 +376,7 @@ class TradingStrategy:
                 "error": str(e),
                 "regime": "neutral",
                 "rsi": 50.0,
+                "atr": 0.0,
                 "features": {}
             }
 

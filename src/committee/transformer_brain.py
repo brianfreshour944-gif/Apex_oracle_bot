@@ -128,6 +128,17 @@ def get_ml_predictor():
 
 async def transformer_brain(symbol: str, price: float, signal: dict) -> BrainVote:
     """Evaluates Grok GQA PyTorch Transformer model prediction with graceful fallback."""
+    if not getattr(settings, 'ADAPTIVE_ML_ENABLED', True):
+        # We are in backtest/analysis mode where ML is disabled to save time
+        return BrainVote(
+            name="transformer",
+            action="stand_aside",
+            confidence=0.0,
+            weight=0.35,
+            regime=signal.get("regime", "unknown"),
+            reason="Analysis mode - ML disabled"
+        )
+        
     predictor = get_ml_predictor()
     raw_action = signal.get("action", "hold")
     regime = signal.get("regime", "unknown")
