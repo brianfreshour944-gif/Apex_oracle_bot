@@ -187,7 +187,7 @@ async def run_adaptive_simulation(symbol: str = "BTC-USD", n_days: int = 180):
                 # Log to Transformer Replay Buffer
                 if entry_snapshot.get("tensor_state") is not None:
                     t_label = 1.0 if pnl > 0 else 0.0
-                    buffer_path = "data/transformer_replay_buffer.jsonl"
+                    buffer_path = "data/live_experiences.jsonl"
                     os.makedirs("data", exist_ok=True)
                     
                     record = {

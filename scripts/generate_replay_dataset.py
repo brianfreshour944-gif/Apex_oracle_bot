@@ -25,7 +25,7 @@ from src.logging_config import get_logger
 logger = get_logger("replay_generator")
 
 SYMBOLS = ["BTC-USD", "ETH-USD", "SOL-USD", "DOGE-USD", "XRP-USD", "ADA-USD", "LINK-USD", "LTC-USD", "AVAX-USD", "BCH-USD"]
-BUFFER_PATH = "data/transformer_replay_buffer.jsonl"
+BUFFER_PATH = "data/historical_experiences.jsonl"
 HISTORY_DAYS = 365 * 3  # 3 years
 
 class FastExchange:
