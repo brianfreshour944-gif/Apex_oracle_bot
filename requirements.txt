@@ -12,6 +12,7 @@ tenacity==9.1.4
 psycopg2-binary==2.9.12
 
 pandas==3.0.3
+pyarrow>=14.0.0
 redis==5.2.1
 typer==0.15.1
 pytest==9.0.3
