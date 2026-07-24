@@ -36,51 +36,37 @@ class MetaDecisionEnv(gym.Env):
         self.snapshots = historical_snapshots
         self.current_step = 0
         
-        # Observation Space: 6 (regimes) + 7 (features) + 2 (sentiment) + 6 (events) + 5 (votes) = 26
-        self.observation_space = spaces.Box(low=-100.0, high=100.0, shape=(26,), dtype=np.float32)
+        # Observation Space: 1(RSI) + 1(ATR) + 1(Transformer Conf) + 1(Sentiment) + 6(Regimes) + 1(ADX) + 1(Volatility) + 5(Votes) = 17
+        self.observation_space = spaces.Box(low=-100.0, high=100.0, shape=(17,), dtype=np.float32)
         
         # Action Space: 7 continuous variables between -1 and 1
         self.action_space = spaces.Box(low=-1.0, high=1.0, shape=(7,), dtype=np.float32)
         
     def _get_obs(self):
         if self.current_step >= len(self.snapshots):
-            # Return zero vector if done
-            return np.zeros(26, dtype=np.float32)
+            return np.zeros(17, dtype=np.float32)
             
         snap = self.snapshots[self.current_step]
         
-        # 1. Regime One-Hot
+        # 1. Features
+        feats = snap.get("features", {})
+        rsi = (feats.get("rsi", 50.0) - 50) / 50.0  # scale -1 to 1
+        atr = feats.get("atr", 0.0) / 100.0
+        transformer_conf = snap.get("confidence", 0.5)
+        sentiment = np.clip(feats.get("sentiment_score", 0.0), -1.0, 1.0)
+        adx = feats.get("adx", 20.0) / 100.0
+        volatility = feats.get("volatility", 0.0)
+        
+        # 2. Regime One-Hot
         regime = snap.get("regime", "default")
         regime_vec = np.zeros(len(REGIMES), dtype=np.float32)
         if regime in REGIMES:
             regime_vec[REGIMES.index(regime)] = 1.0
             
-        # 2. Features
-        feats = snap.get("features", {})
-        rsi = (feats.get("rsi", 50.0) - 50) / 50.0  # scale -1 to 1
-        atr = feats.get("atr", 0.0) / 100.0 # simple scale
-        macd = np.clip(feats.get("macd", 0.0), -1.0, 1.0)
-        
-        # On-Chain Features
-        fr = np.clip(feats.get("funding_rate", 0.0) * 1000, -1.0, 1.0) # Scale funding rate
-        oi = np.clip(feats.get("open_interest", 0.0) / 1e9, 0.0, 10.0) # Scale OI
-        lsr = np.clip((feats.get("long_short_ratio", 1.0) - 1.0), -1.0, 1.0) # Center LSR at 0
-        imb = np.clip(feats.get("bid_ask_imbalance", 0.0), -1.0, 1.0) # L2 Imbalance
-        
-        # Sentiment Features
-        sent_score = np.clip(feats.get("sentiment_score", 0.0), -1.0, 1.0)
-        sent_conf = np.clip(feats.get("sentiment_conf", 0.0), 0.0, 1.0)
-        
-        event_types = ["earnings", "regulation", "macro", "security", "adoption", "none"]
-        event = feats.get("event_type", "none")
-        event_vec = np.zeros(len(event_types), dtype=np.float32)
-        if event in event_types:
-            event_vec[event_types.index(event)] = 1.0
-            
-        feature_vec = np.array([rsi, atr, macd, fr, oi, lsr, imb, sent_score, sent_conf], dtype=np.float32)
+        feature_vec = np.array([rsi, atr, transformer_conf, sentiment, adx, volatility], dtype=np.float32)
         
         # 3. Brain Votes
-        votes = snap.get("votes", {})
+        votes = snap.get("votes", snap.get("brain_votes", {}))
         vote_vec = np.zeros(len(BRAINS), dtype=np.float32)
         for i, b in enumerate(BRAINS):
             v = votes.get(b, "hold")
@@ -89,7 +75,7 @@ class MetaDecisionEnv(gym.Env):
             elif v == "sell":
                 vote_vec[i] = -1.0
                 
-        obs = np.concatenate([regime_vec, feature_vec, event_vec, vote_vec])
+        obs = np.concatenate([feature_vec, regime_vec, vote_vec])
         return np.nan_to_num(obs, 0.0).astype(np.float32)
         
     def reset(self, seed=None, options=None):

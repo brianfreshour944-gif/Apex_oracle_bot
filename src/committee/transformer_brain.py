@@ -129,6 +129,7 @@ async def transformer_brain(symbol: str, price: float, signal: dict) -> BrainVot
         prob = 0.50
 
     causal_reasoning_dict = None
+    tensor_state = None
     if predictor is not None:
         try:
             import asyncio
@@ -227,12 +228,12 @@ async def transformer_brain(symbol: str, price: float, signal: dict) -> BrainVot
                 with torch.no_grad():
                     out_prob = float(torch.sigmoid(torch.tensor(raw_logit.item())).item())
                     
-                return out_prob, raw_logit.item(), causal_reasoning
+                return out_prob, raw_logit.item(), causal_reasoning, data_scaled.tolist()
                 
             res = await asyncio.to_thread(_do_inference)
             
             if res is not None:
-                prob, logit, causal_reasoning_dict = res
+                prob, logit, causal_reasoning_dict, tensor_state = res
                 reason = f"Grok PyTorch Inference prob={prob:.3f} (logit={logit:.2f})"
         except Exception as e:
             import logging
@@ -253,5 +254,6 @@ async def transformer_brain(symbol: str, price: float, signal: dict) -> BrainVot
         weight=0.35,
         regime=regime,
         reason=reason,
-        causal_reasoning=causal_reasoning_dict
+        causal_reasoning=causal_reasoning_dict,
+        tensor_state=tensor_state
     )

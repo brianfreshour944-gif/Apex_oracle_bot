@@ -116,6 +116,9 @@ async def run_adaptive_simulation(symbol: str = "BTC-USD", n_days: int = 180):
                 entry_price = current_price
                 entry_time = ts
                 
+                t_votes = [v for v in committee_result.votes if v.name == "transformer"]
+                tensor_state = t_votes[0].tensor_state if t_votes else None
+                
                 # Snapshot the committee's state for training
                 entry_snapshot = {
                     "symbol": symbol,
@@ -123,7 +126,8 @@ async def run_adaptive_simulation(symbol: str = "BTC-USD", n_days: int = 180):
                     "final_action": "buy",
                     "confidence": committee_result.score,
                     "brain_votes": {v.name: v.action for v in committee_result.votes},
-                    "entry_time": entry_time
+                    "entry_time": entry_time,
+                    "tensor_state": tensor_state
                 }
                 
         elif final_action == "sell" and open_pos is None:
@@ -135,13 +139,17 @@ async def run_adaptive_simulation(symbol: str = "BTC-USD", n_days: int = 180):
                 entry_price = current_price
                 entry_time = ts
                 
+                t_votes = [v for v in committee_result.votes if v.name == "transformer"]
+                tensor_state = t_votes[0].tensor_state if t_votes else None
+                
                 entry_snapshot = {
                     "symbol": symbol,
                     "regime": regime_seen,
                     "final_action": "sell",
                     "confidence": committee_result.score,
                     "brain_votes": {v.name: v.action for v in committee_result.votes},
-                    "entry_time": entry_time
+                    "entry_time": entry_time,
+                    "tensor_state": tensor_state
                 }
                 
         elif final_action == "close" and open_pos is not None:
@@ -166,8 +174,16 @@ async def run_adaptive_simulation(symbol: str = "BTC-USD", n_days: int = 180):
                 example = from_decision_snapshot(entry_snapshot, realized_pnl=pnl, return_pct=pnl_pct)
                 learner.update(example.to_decision_snapshot(), example.to_realized_outcome())
                 
+                # Log to Transformer Replay Buffer
+                if entry_snapshot.get("tensor_state") is not None:
+                    t_label = 1.0 if pnl > 0 else 0.0
+                    buffer_path = "data/transformer_replay_buffer.jsonl"
+                    os.makedirs("data", exist_ok=True)
+                    with open(buffer_path, "a") as f:
+                        f.write(json.dumps({"tensor": entry_snapshot["tensor_state"], "label": t_label}) + "\n")
+                
                 label = "WIN" if pnl > 0 else "LOSS"
-                print(f"[{ts}] Trade Closed: {label} ({pnl_pct:+.2f}%). Sent to Meta-Learner.")
+                print(f"[{ts}] Trade Closed: {label} ({pnl_pct:+.2f}%). Sent to Meta-Learner & Replay Buffer.")
             
             open_pos = None
             entry_snapshot = None

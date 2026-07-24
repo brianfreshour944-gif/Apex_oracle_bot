@@ -13,6 +13,7 @@ class BrainVote:
     reason: str
     is_veto: bool = False
     causal_reasoning: Optional[Dict[str, float]] = None
+    tensor_state: Optional[List[List[float]]] = None
 
 @dataclass
 class CommitteeResult:
