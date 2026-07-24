@@ -95,6 +95,14 @@ class TradingStrategy:
                 regime = "neutral"
 
             self.current_regime = regime
+            
+            volatility = float(np.std(returns) * 100) if len(returns) > 0 else 0.0
+            logger.info(
+                f"Regime: {regime.upper()} "
+                f"Hurst={hurst:.3f} "
+                f"ATR={atr_pct:.2f}% "
+                f"Volatility={volatility:.2f}%"
+            )
 
             # Fetch On-Chain Derivatives Data
             if not self.backtest:
@@ -291,18 +299,6 @@ class TradingStrategy:
             regime = regime_data["regime"]
             rsi = regime_data["rsi"]
             prev_rsi = regime_data.get("prev_rsi", rsi)
-
-            # Skip trading in high volatility regime
-            if regime == "high_volatility":
-                return {
-                    "symbol": symbol,
-                    "action": "stand_aside",
-                    "reason": "high_volatility_regime",
-                    "regime": regime,
-                    "rsi": rsi,
-                    "atr": regime_data.get("atr", 0.0),
-                    "features": regime_data
-                }
 
             # AI Strategy Selection
             from src.strategy_selector import select_best_strategy

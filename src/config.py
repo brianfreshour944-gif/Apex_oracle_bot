@@ -144,7 +144,7 @@ class TradingBotSettings(BaseSettings):
         lt=1
     )
     HIGH_VOLATILITY_PCT: float = Field(
-        default=5.0,
+        default=12.0,
         description="ATR% above this triggers stand-aside mode",
         gt=0
     )
@@ -318,11 +318,11 @@ class TradingBotSettings(BaseSettings):
 
     # --- Machine Learning Paths ---
     TRANSFORMER_MODEL_PATH: str = Field(
-        default="data/grok_gqa_v9_best.pth",
+        default="models/grok_gqa_v9_best.pth",
         description="Path to PyTorch model weights"
     )
     TRANSFORMER_SCALER_PATH: str = Field(
-        default="data/feature_scaler.pkl",
+        default="models/feature_scaler.pkl",
         description="Path to feature scaler"
     )
 
