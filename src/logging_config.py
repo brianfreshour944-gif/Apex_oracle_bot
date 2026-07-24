@@ -33,15 +33,17 @@ def configure_structlog() -> None:
 
         # Configure standard logging
         logging.basicConfig(
-            level=logging.DEBUG,
+            level=logging.INFO,
             format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
             stream=sys.stdout,
             force=True,
         )
-        print("✅ Structlog configured successfully (debug mode)", file=sys.stderr)
+        
+        # Silence noisy third-party libraries
+        for noisy_logger in ["httpx", "httpcore", "websockets", "urllib3", "apscheduler", "alpaca", "torch", "matplotlib"]:
+            logging.getLogger(noisy_logger).setLevel(logging.WARNING)
 
-
-
+        print("✅ Structlog configured successfully (info mode)", file=sys.stderr)
     except Exception as e:
         print(f"⚠️  Logging setup failed: {e}. Using basic fallback.", file=sys.stderr)
         logging.basicConfig(

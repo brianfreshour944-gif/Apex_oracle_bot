@@ -137,6 +137,8 @@ async def _record_committee_outcome(symbol: str, exit_price: float, exit_reason:
 ex: Optional[AlpacaExchange] = None
 strategy: Optional[TradingStrategy] = None
 risk_manager: Optional[RiskManager] = None
+latest_scan_results: Dict[str, dict] = {}
+scan_cycle_count: int = 0
 
 import json
 
@@ -150,7 +152,7 @@ def read_regime_flag():
         "regime": "normal"
     }
     try:
-        with open(r"C:\Users\brian\OneDrive\Documents\Static-Repo-okx-bot\regime_flag.txt", "r") as f:
+        with open("data/regime_flag.txt", "r") as f:
             data = json.load(f)
             return data
     except (FileNotFoundError, json.JSONDecodeError):
@@ -204,7 +206,7 @@ async def process_signal_for_symbol(symbol: str, current_price: float, risk_mana
             current_position
         )
 
-        logger.info(f"Signal for {symbol} @ ${current_price:.2f}: {signal['action']} (regime: {signal['regime']}, RSI: {signal['rsi']:.2f})")
+        logger.debug(f"[SCAN] Signal for {symbol} @ ${current_price:.2f}: {signal['action']} (regime: {signal['regime']}, RSI: {signal['rsi']:.2f})")
 
         # ── 5-BRAIN ENSEMBLE COMMITTEE EVALUATION ──
         from src.committee.committee import run_committee
@@ -220,14 +222,18 @@ async def process_signal_for_symbol(symbol: str, current_price: float, risk_mana
             )
 
         if committee_result.vetoed:
-            logger.info(f"🛑 {symbol} trade VETOED by Committee: {committee_result.veto_reason}")
+            logger.info(f"[RISK] 🛑 {symbol} trade VETOED by Committee: {committee_result.veto_reason}")
+            latest_scan_results[symbol] = {"score": committee_result.score, "action": "VETO", "price": current_price}
             return
 
-        logger.info(f"   Winner: {committee_result.action.upper()} score={committee_result.score:.3f} (threshold >= 0.60)")
+        logger.debug(f"[MODEL] Winner: {committee_result.action.upper()} score={committee_result.score:.3f} (threshold >= 0.60)")
 
         if committee_result.action in ["stand_aside", "skip", "hold"]:
-            logger.info(f"⏭️ {symbol}: Committee action is {committee_result.action.upper()} (score={committee_result.score:.3f}). Skipping trade entry.")
+            logger.debug(f"[SCAN] ⏭️ {symbol}: Committee action is {committee_result.action.upper()} (score={committee_result.score:.3f}). Skipping trade entry.")
+            latest_scan_results[symbol] = {"score": committee_result.score, "action": committee_result.action.upper(), "price": current_price}
             return
+
+        latest_scan_results[symbol] = {"score": committee_result.score, "action": committee_result.action.upper(), "price": current_price}
 
         # Override original signal action & confidence with committee's consensus decision
         signal["action"] = committee_result.action
@@ -250,10 +256,10 @@ async def process_signal_for_symbol(symbol: str, current_price: float, risk_mana
             # Check position limit before entering
             risk_status = await risk_manager.update_account_status()
             if risk_status["status"] == "position_limit_exceeded":
-                logger.warning(f"Skipping entry for {symbol}: position limit reached")
+                logger.warning(f"[RISK] Skipping entry for {symbol}: position limit reached")
                 return
             if risk_status["status"] == "exposure_limit_exceeded":
-                logger.warning(f"Skipping entry for {symbol}: exposure cap reached")
+                logger.warning(f"[RISK] Skipping entry for {symbol}: exposure cap reached")
                 return
 
             # Calculate position size
@@ -266,7 +272,7 @@ async def process_signal_for_symbol(symbol: str, current_price: float, risk_mana
             )
 
             if sizing_status != "ok":
-                logger.warning(f"Position sizing failed for {symbol}: {sizing_status}")
+                logger.warning(f"[RISK] Position sizing failed for {symbol}: {sizing_status}")
                 return
                 
             # Apply Regime Switch Multiplier if buying
@@ -288,8 +294,8 @@ async def process_signal_for_symbol(symbol: str, current_price: float, risk_mana
                 type="market"
             )
 
-            logger.info(f"Order executed: {signal['action']} {position_size} {symbol} @ ${current_price:.2f}")
-            logger.debug(f"Order result: {order_result}")
+            logger.info(f"[TRADE] Order executed: {signal['action'].upper()} {position_size} {symbol} @ ${current_price:.2f}")
+            logger.debug(f"[TRADE] Order result: {order_result}")
             await send_telegram_alert(f"📈 <b>Order Executed</b>\nSymbol: {symbol}\nAction: {signal['action'].upper()}\nQty: {position_size}\nPrice: ${current_price:.2f}")
 
             # Persist committee decision snapshot for the adaptive meta-learner
@@ -334,14 +340,50 @@ async def process_signal_for_symbol(symbol: str, current_price: float, risk_mana
                 type="market"
             )
 
-            logger.info(f"Position closed: {symbol} (was {qty}) - reason: {signal.get('reason', 'unknown')}")
-            logger.debug(f"Close order result: {order_result}")
+            logger.info(f"[TRADE] Position closed: {symbol} (was {qty}) - reason: {signal.get('reason', 'unknown')}")
+            logger.debug(f"[TRADE] Close order result: {order_result}")
             await send_telegram_alert(f"📉 <b>Position Closed</b>\nSymbol: {symbol}\nReason: {signal.get('reason', 'unknown')}")
             await _record_committee_outcome(symbol, current_price, exit_reason=signal.get('reason', 'unknown'))
 
     except Exception as e:
         logger.error(f"Error processing {symbol}: {e}")
 
+
+async def scan_heartbeat_loop() -> None:
+    """Background task to print periodic scan summary."""
+    global scan_cycle_count, latest_scan_results
+    while True:
+        try:
+            await asyncio.sleep(settings.LOOP_INTERVAL_SEC)
+            scan_cycle_count += 1
+            
+            if not latest_scan_results:
+                continue
+                
+            trades_this_cycle = False
+            out = []
+            out.append("========================================")
+            out.append(f"Cycle {scan_cycle_count}")
+            out.append(f"{len(latest_scan_results)} Symbols")
+            out.append("Scanning...")
+            out.append("========================================")
+            
+            for sym, data in latest_scan_results.items():
+                action = data.get("action", "UNKNOWN")
+                score = data.get("score", 0.0)
+                out.append(f"{sym:<10} Score {score:.3f} {action}")
+                if action in ["BUY", "SELL"]:
+                    trades_this_cycle = True
+            
+            if not trades_this_cycle:
+                out.append("\nNo trades this cycle.")
+            
+            # Use raw print to format nicely as a block without structlog prefix wrapping
+            print("\n" + "\n".join(out) + "\n", flush=True)
+            
+        except Exception as e:
+            logger.error(f"[HEARTBEAT] Error printing heartbeat: {e}")
+            await asyncio.sleep(10)
 
 async def monitor_killswitch(risk_manager: RiskManager) -> None:
     """Background task to monitor killswitch continuously."""
@@ -605,6 +647,12 @@ async def run_trading_bot() -> None:
         active_tasks.add(ks_task)
         ks_task.add_done_callback(active_tasks.discard)
         logger.info("Killswitch monitor started")
+
+        # Start Scan Heartbeat
+        heartbeat_task = asyncio.create_task(scan_heartbeat_loop())
+        active_tasks.add(heartbeat_task)
+        heartbeat_task.add_done_callback(active_tasks.discard)
+        logger.info("Scan heartbeat monitor started")
 
         # Start periodic analyzer
         analyzer_task = asyncio.create_task(run_periodic_analyzer())
