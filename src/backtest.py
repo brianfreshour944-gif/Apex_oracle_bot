@@ -56,9 +56,12 @@ class BacktestExchange:
 
     def __init__(self, bars: Dict[str, pl.DataFrame]):
         self._bars = bars  # symbol -> DataFrame with columns [t, open, high, low, close, volume]
+        self.current_time: Optional[str] = None
 
     async def get_bars(self, symbol: str, timeframe: str = "1D", limit: int = 100) -> pl.DataFrame:
         df = self._bars.get(symbol, pl.DataFrame())
+        if self.current_time is not None:
+            df = df.filter(pl.col("t") <= self.current_time)
         return df.tail(limit) if len(df) else df
 
     async def get_account(self) -> Dict[str, Any]:
@@ -134,7 +137,7 @@ async def run_backtest(
     bars = _generate_synthetic_bars(symbol, n=n_bars, seed=seed, regime=regime)
     exchange = BacktestExchange({symbol: bars})
 
-    strategy = TradingStrategy(exchange)
+    strategy = TradingStrategy(exchange, cache_ttl=0.0, backtest=True)
     risk = RiskManager(exchange)
 
     result = BacktestResult(symbol=symbol, start_equity=start_equity, end_equity=start_equity)
@@ -149,6 +152,7 @@ async def run_backtest(
     for row in bars.iter_rows(named=True):
         current_price = float(row["close"])
         ts = str(row["t"])
+        exchange.current_time = ts
 
         # Build a position dict the strategy understands (only if we hold one)
         position = None

@@ -152,6 +152,8 @@ class RiskManager:
                 position_size *= 1.5
             elif regime == "mean_reverting":
                 position_size *= 0.8
+            elif regime == "high_volatility":
+                position_size *= 0.5
 
             # Confidence weighting
             conf_weight = np.clip(confidence, 0.5, 1.5)

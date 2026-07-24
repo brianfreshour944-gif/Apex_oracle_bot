@@ -28,9 +28,11 @@ async def sentinel_brain(symbol: str, price: float, signal: dict) -> BrainVote:
         reason = "Hard Veto: Trading halted"
     elif price > 0 and atr > 0 and (atr / price) > 0.10:
         # ATR > 10% of price indicates abnormal price swing / gap risk
-        is_veto = True
+        # Extreme volatility - Reduce position sizing heavily and demand near unanimous agreement
+        is_veto = False
         action = "stand_aside"
-        reason = f"Hard Veto: Abnormal ATR volatility ratio ({(atr/price)*100:.1f}%)"
+        confidence = 0.80  # Severe penalty, just below the 0.85 hard veto threshold
+        reason = f"Extreme Volatility Penalty: ATR ({(atr/price)*100:.1f}%)"
     elif regime == "high_volatility":
         # Soft veto: reduce conviction without outright blocking
         is_veto = False
