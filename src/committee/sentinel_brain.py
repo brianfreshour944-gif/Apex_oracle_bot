@@ -16,20 +16,32 @@ async def sentinel_brain(symbol: str, price: float, signal: dict) -> BrainVote:
     reason = "Sentinel cleared trade"
     action = "hold"
 
-    if regime == "high_volatility":
+    confidence = 0.50
+
+    if signal.get("flash_crash", False):
         is_veto = True
         action = "stand_aside"
-        reason = f"Hard Veto: Extreme market volatility detected in regime '{regime}'"
-    elif price > 0 and atr > 0 and (atr / price) > 0.15:
-        # ATR > 15% of price indicates abnormal price swing / gap risk
+        reason = "Hard Veto: Flash crash condition detected"
+    elif signal.get("halted", False):
+        is_veto = True
+        action = "stand_aside"
+        reason = "Hard Veto: Trading halted"
+    elif price > 0 and atr > 0 and (atr / price) > 0.10:
+        # ATR > 10% of price indicates abnormal price swing / gap risk
         is_veto = True
         action = "stand_aside"
         reason = f"Hard Veto: Abnormal ATR volatility ratio ({(atr/price)*100:.1f}%)"
+    elif regime == "high_volatility":
+        # Soft veto: reduce conviction without outright blocking
+        is_veto = False
+        action = "stand_aside"
+        confidence = 0.50
+        reason = f"Soft Veto: High volatility regime '{regime}'"
 
     return BrainVote(
         name="sentinel",
         action=action,
-        confidence=0.95 if is_veto else 0.50,
+        confidence=0.95 if is_veto else confidence,
         weight=0.10,
         regime=regime,
         reason=reason,
