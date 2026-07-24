@@ -218,6 +218,12 @@ def main():
             best_val_acc = val_acc
             patience_counter = 0
             torch.save(model.state_dict(), MODEL_PATH)
+            
+            import json
+            config_path = os.path.join(MODELS_DIR, "transformer_config.json")
+            with open(config_path, "w") as f:
+                json.dump({"num_layers": 4, "embed_dim": 128}, f)
+                
             logger.info(f"⭐ New Best Model! Saved to {MODEL_PATH}")
         else:
             patience_counter += 1

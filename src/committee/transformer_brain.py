@@ -97,7 +97,20 @@ def get_ml_predictor():
 
             # Determine feature dimension from scaler
             input_dim = scaler.n_features_in_ if hasattr(scaler, "n_features_in_") else 11
-            model = GrokGQA_Transformer(input_dim=input_dim).to(device)
+            
+            # Load dynamic architecture config if it exists
+            config_path = os.path.join(os.path.dirname(MODEL_PATH), "transformer_config.json")
+            if os.path.exists(config_path):
+                import json
+                with open(config_path, "r") as f:
+                    arch = json.load(f)
+                model = GrokGQA_Transformer(
+                    input_dim=input_dim, 
+                    num_layers=arch.get("num_layers", 4),
+                    embed_dim=arch.get("embed_dim", 128)
+                ).to(device)
+            else:
+                model = GrokGQA_Transformer(input_dim=input_dim).to(device)
             state_dict = torch.load(MODEL_PATH, map_location=device, weights_only=True)
             model.load_state_dict(state_dict)
             model.eval()

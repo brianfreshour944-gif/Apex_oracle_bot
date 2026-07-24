@@ -85,59 +85,87 @@ def retrain_model():
     
     # Infer input shape from dataset
     sample_x, _ = dataset[0]
-    seq_len, embed_dim = sample_x.shape
-    
+    seq_len, input_dim = sample_x.shape
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model = GrokGQA_Transformer(embed_dim=embed_dim, num_heads=4, num_layers=4, seq_len=seq_len).to(device)
     
-    # Load existing weights if they exist
-    if os.path.exists(MODEL_PATH):
-        try:
-            model.load_state_dict(torch.load(MODEL_PATH, map_location=device))
-            logger.info("Loaded existing weights for fine-tuning.")
-        except Exception as e:
-            logger.warning(f"Could not load existing weights, starting fresh: {e}")
+    # 1. Load and Evaluate Champion
+    champion_loss = float("inf")
+    config_path = os.path.join(os.path.dirname(MODEL_PATH), "transformer_config.json")
+    
+    champ_layers = 4
+    champ_embed = 128
+    if os.path.exists(config_path):
+        import json
+        with open(config_path, "r") as f:
+            arch = json.load(f)
+            champ_layers = arch.get("num_layers", 4)
+            champ_embed = arch.get("embed_dim", 128)
             
+    if os.path.exists(MODEL_PATH):
+        champion_model = GrokGQA_Transformer(input_dim=input_dim, num_layers=champ_layers, embed_dim=champ_embed, seq_len=seq_len).to(device)
+        try:
+            champion_model.load_state_dict(torch.load(MODEL_PATH, map_location=device))
+            champion_loss = evaluate_loss(champion_model, val_loader, nn.BCEWithLogitsLoss(), device)
+            logger.info(f"🏆 Champion [{champ_layers}L, {champ_embed}D] Baseline Holdout Loss: {champion_loss:.4f}")
+        except Exception as e:
+            logger.warning(f"Failed to load Champion: {e}")
+            
+    # 2. Define NAS Candidates
+    candidates = [
+        {"num_layers": 2, "embed_dim": 64},
+        {"num_layers": 4, "embed_dim": 128},
+        {"num_layers": 6, "embed_dim": 256}
+    ]
+    
+    best_challenger_loss = float("inf")
+    best_challenger_arch = None
+    best_challenger_state = None
+    
     criterion = nn.BCEWithLogitsLoss()
     
-    # 1. Evaluate Champion
-    champion_loss = float("inf")
-    if os.path.exists(MODEL_PATH):
-        champion_loss = evaluate_loss(model, val_loader, criterion, device)
-        logger.info(f"🏆 Champion Baseline Holdout Loss: {champion_loss:.4f}")
+    # 3. Train all NAS candidates
+    for arch in candidates:
+        L = arch["num_layers"]
+        E = arch["embed_dim"]
+        logger.info(f"--- Training NAS Candidate [{L}L, {E}D] ---")
         
-    # 2. Train Challenger
-    optimizer = optim.Adam(model.parameters(), lr=LR)
-    
-    for epoch in range(EPOCHS):
-        model.train()
-        total_loss = 0.0
-        for batch_x, batch_y in train_loader:
-            batch_x = batch_x.to(device)
-            batch_y = batch_y.to(device)
-            
-            optimizer.zero_grad()
-            logits = model(batch_x)
-            loss = criterion(logits, batch_y)
-            loss.backward()
-            optimizer.step()
-            
-            total_loss += loss.item() * len(batch_y)
-            
-        avg_loss = total_loss / len(train_loader.dataset)
-        logger.info(f"Epoch {epoch+1}/{EPOCHS} - Train Loss: {avg_loss:.4f}")
+        model = GrokGQA_Transformer(input_dim=input_dim, num_layers=L, embed_dim=E, seq_len=seq_len).to(device)
+        optimizer = optim.Adam(model.parameters(), lr=LR)
         
-    # 3. Evaluate Challenger
-    challenger_loss = evaluate_loss(model, val_loader, criterion, device)
-    logger.info(f"⚔️ Challenger Holdout Loss: {challenger_loss:.4f}")
+        for epoch in range(EPOCHS):
+            model.train()
+            total_loss = 0.0
+            for batch_x, batch_y in train_loader:
+                batch_x = batch_x.to(device)
+                batch_y = batch_y.to(device)
+                
+                optimizer.zero_grad()
+                logits = model(batch_x)
+                loss = criterion(logits, batch_y)
+                loss.backward()
+                optimizer.step()
+                total_loss += loss.item() * len(batch_y)
+                
+        cand_loss = evaluate_loss(model, val_loader, criterion, device)
+        logger.info(f"Candidate [{L}L, {E}D] Holdout Loss: {cand_loss:.4f}")
+        
+        if cand_loss < best_challenger_loss:
+            best_challenger_loss = cand_loss
+            best_challenger_arch = arch
+            best_challenger_state = {k: v.cpu() for k, v in model.state_dict().items()}
+            
+    # 4. Champion vs Best Challenger
+    logger.info(f"⚔️ Best Challenger [{best_challenger_arch['num_layers']}L, {best_challenger_arch['embed_dim']}D] Loss: {best_challenger_loss:.4f}")
     
-    # 4. Champion vs Challenger
-    if challenger_loss < champion_loss:
+    if best_challenger_loss < champion_loss:
         os.makedirs("models", exist_ok=True)
-        torch.save(model.state_dict(), MODEL_PATH)
-        logger.info(f"✅ Challenger WINS! Saved updated model to {MODEL_PATH}")
+        torch.save(best_challenger_state, MODEL_PATH)
+        import json
+        with open(config_path, "w") as f:
+            json.dump(best_challenger_arch, f)
+        logger.info(f"✅ Challenger WINS! Saved new NAS architecture to {config_path}")
     else:
-        logger.info("❌ Challenger FAILED to beat Champion. Discarding new weights.")
+        logger.info("❌ All Challengers FAILED to beat Champion. Discarding new weights.")
 
 if __name__ == "__main__":
     retrain_model()
