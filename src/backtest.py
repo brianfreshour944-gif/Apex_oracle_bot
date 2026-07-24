@@ -292,6 +292,54 @@ def run_monte_carlo_analysis(result: BacktestResult, n_simulations: int = 1000) 
 
 def print_backtest_summary(result: BacktestResult) -> None:
     """Pretty-print backtest results."""
+    # Re-calculate metrics to ensure they are robustly populated
+    if result.trades:
+        result.n_trades = len(result.trades)
+        result.n_wins = sum(1 for t in result.trades if t.pnl > 0)
+        result.n_losses = sum(1 for t in result.trades if t.pnl <= 0)
+        result.win_rate = (result.n_wins / result.n_trades * 100) if result.n_trades else 0.0
+        
+        gross_profit = sum(t.pnl for t in result.trades if t.pnl > 0)
+        gross_loss = abs(sum(t.pnl for t in result.trades if t.pnl <= 0))
+        profit_factor = (gross_profit / gross_loss) if gross_loss > 0 else float('inf')
+        
+        avg_win = gross_profit / result.n_wins if result.n_wins else 0.0
+        avg_loss = gross_loss / result.n_losses if result.n_losses else 0.0
+        expectancy = (result.win_rate/100 * avg_win) - ((1 - result.win_rate/100) * avg_loss)
+    else:
+        profit_factor = 0.0
+        avg_win = 0.0
+        avg_loss = 0.0
+        expectancy = 0.0
+
+    eq = np.array(result.equity_curve)
+    if len(eq) > 0:
+        peak = np.maximum.accumulate(eq)
+        drawdown_pct = (eq - peak) / peak * 100
+        result.max_drawdown_pct = float(drawdown_pct.min())
+        
+        max_drawdown_usd = float((eq - peak).min())
+        net_profit = result.end_equity - result.start_equity
+        recovery_factor = abs(net_profit / max_drawdown_usd) if max_drawdown_usd < 0 else 0.0
+    else:
+        result.max_drawdown_pct = 0.0
+        max_drawdown_usd = 0.0
+        recovery_factor = 0.0
+
+    if len(eq) > 2:
+        rets = np.diff(eq) / eq[:-1]
+        std_rets = np.std(rets)
+        result.sharpe = float(np.mean(rets) / (std_rets + 1e-9) * np.sqrt(252)) if std_rets > 0 else 0.0
+        
+        downside_rets = rets[rets < 0]
+        std_downside = np.std(downside_rets) if len(downside_rets) > 0 else 0.0
+        sortino = float(np.mean(rets) / (std_downside + 1e-9) * np.sqrt(252)) if std_downside > 0 else 0.0
+    else:
+        result.sharpe = 0.0
+        sortino = 0.0
+        
+    calmar = (result.total_return_pct / abs(result.max_drawdown_pct)) if result.max_drawdown_pct < 0 else 0.0
+
     print("=" * 60)
     print(f"BACKTEST RESULTS: {result.symbol}")
     print("=" * 60)
@@ -301,8 +349,14 @@ def print_backtest_summary(result: BacktestResult) -> None:
     print(f"Trades:            {result.n_trades}")
     print(f"Wins / Losses:     {result.n_wins} / {result.n_losses}")
     print(f"Win rate:          {result.win_rate:.1f}%")
-    print(f"Max drawdown:      {result.max_drawdown_pct:.2f}%")
+    print(f"Avg Win / Loss:    ${avg_win:.2f} / ${avg_loss:.2f}")
+    print(f"Profit Factor:     {profit_factor:.2f}")
+    print(f"Expectancy:        ${expectancy:.2f}")
+    print(f"Max drawdown:      {result.max_drawdown_pct:.2f}% (${abs(max_drawdown_usd):,.2f})")
+    print(f"Recovery Factor:   {recovery_factor:.2f}")
     print(f"Sharpe (ann.):     {result.sharpe:.2f}")
+    print(f"Sortino (ann.):    {sortino:.2f}")
+    print(f"Calmar Ratio:      {calmar:.2f}")
     print(f"Regimes seen:      {result.regimes_seen}")
     print("=" * 60)
 

@@ -71,7 +71,8 @@ class TradingStrategy:
             # Multi-timeframe confirmation check (e.g. EMA slope on bars)
             htf_trend = "neutral"
             if len(close_arr) >= 20:
-                ema20 = float(bars_df["close"].ewm_mean(span=20)[-1])
+                # Use pandas for robust EWM to avoid Polars version API drift
+                ema20 = float(bars_df["close"].to_pandas().ewm(span=20).mean().iloc[-1])
                 htf_trend = "bullish" if close_arr[-1] > ema20 else "bearish"
 
             # Classify regime

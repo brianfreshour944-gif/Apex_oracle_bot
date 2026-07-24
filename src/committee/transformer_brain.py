@@ -129,7 +129,6 @@ async def transformer_brain(symbol: str, price: float, signal: dict) -> BrainVot
         prob = 0.50
 
     causal_reasoning_dict = None
-
     if predictor is not None:
         try:
             import asyncio
@@ -188,47 +187,47 @@ async def transformer_brain(symbol: str, price: float, signal: dict) -> BrainVot
                     from src.feature_engineering import get_active_features
                     cols = get_active_features()
                 
-            data = df_feat[cols].tail(32).values.astype(np.float32)
-            if len(data) < 32:
-                return None
+                data = df_feat[cols].tail(32).values.astype(np.float32)
+                if len(data) < 32:
+                    return None
+                    
+                data = np.nan_to_num(data, nan=0.0, posinf=0.0, neginf=0.0)
+                data = np.clip(data, -1e6, 1e6)
+                data_scaled = scaler.transform(data).astype(np.float32)
+                data_scaled = np.nan_to_num(data_scaled, nan=0.0, posinf=0.0, neginf=0.0)
                 
-            data = np.nan_to_num(data, nan=0.0, posinf=0.0, neginf=0.0)
-            data = np.clip(data, -1e6, 1e6)
-            data_scaled = scaler.transform(data).astype(np.float32)
-            data_scaled = np.nan_to_num(data_scaled, nan=0.0, posinf=0.0, neginf=0.0)
-            
-            # Let the shadow arena candidates process the raw dataframe using their own scaler
-            try:
-                from src.shadow_arena import evaluate_candidates
-                evaluate_candidates(symbol, price, df_feat)
-            except Exception as shadow_e:
-                import logging
-                logging.getLogger("shadow_arena").error(f"Shadow evaluation failed: {shadow_e}")
-            
-            x = torch.tensor(data_scaled).unsqueeze(0).to(device)
-            
-            # Causal Reasoning: Approximate SHAP via Gradients * Input
-            x.requires_grad = True
-            
-            raw_logit = model(x).squeeze(1)
-            raw_logit.backward()
-            
-            # Gradients w.r.t the last timestep's features
-            grads = x.grad[0, -1, :].cpu().numpy()
-            feats = data_scaled[-1, :]
-            
-            # Simple Feature Importance (Gradient * Input)
-            contributions = grads * feats
-            
-            # Map contributions to feature names
-            causal_reasoning = {}
-            for i, col in enumerate(cols):
-                causal_reasoning[col] = float(contributions[i])
-            
-            with torch.no_grad():
-                out_prob = float(torch.sigmoid(torch.tensor(raw_logit.item())).item())
+                # Let the shadow arena candidates process the raw dataframe using their own scaler
+                try:
+                    from src.shadow_arena import evaluate_candidates
+                    evaluate_candidates(symbol, price, df_feat)
+                except Exception as shadow_e:
+                    import logging
+                    logging.getLogger("shadow_arena").error(f"Shadow evaluation failed: {shadow_e}")
                 
-            return out_prob, raw_logit.item(), causal_reasoning
+                x = torch.tensor(data_scaled).unsqueeze(0).to(device)
+                
+                # Causal Reasoning: Approximate SHAP via Gradients * Input
+                x.requires_grad = True
+                
+                raw_logit = model(x).squeeze(1)
+                raw_logit.backward()
+                
+                # Gradients w.r.t the last timestep's features
+                grads = x.grad[0, -1, :].cpu().numpy()
+                feats = data_scaled[-1, :]
+                
+                # Simple Feature Importance (Gradient * Input)
+                contributions = grads * feats
+                
+                # Map contributions to feature names
+                causal_reasoning = {}
+                for i, col in enumerate(cols):
+                    causal_reasoning[col] = float(contributions[i])
+                
+                with torch.no_grad():
+                    out_prob = float(torch.sigmoid(torch.tensor(raw_logit.item())).item())
+                    
+                return out_prob, raw_logit.item(), causal_reasoning
                 
             res = await asyncio.to_thread(_do_inference)
             
