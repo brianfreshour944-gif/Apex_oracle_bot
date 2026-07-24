@@ -132,102 +132,102 @@ async def transformer_brain(symbol: str, price: float, signal: dict) -> BrainVot
         try:
             import asyncio
             import os
-                from src.feature_engineering import add_features
-                # fetch_bars is actually located in data_fetcher or similar, wait I will just copy the import logic
-                try:
-                    from src.data_fetcher import fetch_bars
-                except ImportError:
-                    # fallback if fetch_bars was moved
-                    from src.feature_engineering import fetch_bars
-                    
-                from alpaca.data.historical import CryptoHistoricalDataClient
-
-                torch = predictor["torch"]
-                model = predictor["model"]
-                scaler = predictor["scaler"]
-                device = predictor["device"]
+            from src.feature_engineering import add_features
+            # fetch_bars is actually located in data_fetcher or similar, wait I will just copy the import logic
+            try:
+                from src.data_fetcher import fetch_bars
+            except ImportError:
+                # fallback if fetch_bars was moved
+                from src.feature_engineering import fetch_bars
                 
-                def _do_inference():
-                    key = os.getenv("APCA_API_KEY_ID")
-                    secret = os.getenv("APCA_API_SECRET_KEY")
-                    if not key or not secret:
-                        return None
-                    
-                    client = CryptoHistoricalDataClient(api_key=key, secret_key=secret)
-                    df_raw = fetch_bars(client, symbol.replace("/", ""), days=2)
-                    if df_raw is None or len(df_raw) < 32:
-                        return None
-                        
-                    # Inject On-Chain / Derivatives Data
-                    try:
-                        from src.onchain_data import fetch_derivatives_data
-                        import asyncio
-                        # We are inside to_thread but we can run an async function synchronously here
-                        loop = asyncio.new_event_loop()
-                        asyncio.set_event_loop(loop)
-                        deriv_data = loop.run_until_complete(fetch_derivatives_data(symbol))
-                        loop.close()
-                        
-                        df_raw["funding_rate"] = deriv_data.get("funding_rate", 0.0)
-                        df_raw["open_interest"] = deriv_data.get("open_interest", 0.0)
-                        df_raw["long_short_ratio"] = deriv_data.get("long_short_ratio", 1.0)
-                    except Exception as e:
-                        import logging
-                        logging.getLogger("onchain").warning(f"Failed to append onchain data: {e}")
-                        df_raw["funding_rate"] = 0.0
-                        df_raw["open_interest"] = 0.0
-                        df_raw["long_short_ratio"] = 1.0
+            from alpaca.data.historical import CryptoHistoricalDataClient
 
-                    df_feat = add_features(df_raw.copy())
-                    
-                    if hasattr(scaler, "feature_names_in_"):
-                        cols = list(scaler.feature_names_in_)
-                    else:
-                        from src.feature_engineering import get_active_features
-                        cols = get_active_features()
-                    
-                data = df_feat[cols].tail(32).values.astype(np.float32)
-                if len(data) < 32:
+            torch = predictor["torch"]
+            model = predictor["model"]
+            scaler = predictor["scaler"]
+            device = predictor["device"]
+            
+            def _do_inference():
+                key = os.getenv("APCA_API_KEY_ID")
+                secret = os.getenv("APCA_API_SECRET_KEY")
+                if not key or not secret:
+                    return None
+                
+                client = CryptoHistoricalDataClient(api_key=key, secret_key=secret)
+                df_raw = fetch_bars(client, symbol.replace("/", ""), days=2)
+                if df_raw is None or len(df_raw) < 32:
                     return None
                     
-                data = np.nan_to_num(data, nan=0.0, posinf=0.0, neginf=0.0)
-                data = np.clip(data, -1e6, 1e6)
-                data_scaled = scaler.transform(data).astype(np.float32)
-                data_scaled = np.nan_to_num(data_scaled, nan=0.0, posinf=0.0, neginf=0.0)
-                
-                # Let the shadow arena candidates process the raw dataframe using their own scaler
+                # Inject On-Chain / Derivatives Data
                 try:
-                    from src.shadow_arena import evaluate_candidates
-                    evaluate_candidates(symbol, price, df_feat)
-                except Exception as shadow_e:
+                    from src.onchain_data import fetch_derivatives_data
+                    import asyncio
+                    # We are inside to_thread but we can run an async function synchronously here
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+                    deriv_data = loop.run_until_complete(fetch_derivatives_data(symbol))
+                    loop.close()
+                    
+                    df_raw["funding_rate"] = deriv_data.get("funding_rate", 0.0)
+                    df_raw["open_interest"] = deriv_data.get("open_interest", 0.0)
+                    df_raw["long_short_ratio"] = deriv_data.get("long_short_ratio", 1.0)
+                except Exception as e:
                     import logging
-                    logging.getLogger("shadow_arena").error(f"Shadow evaluation failed: {shadow_e}")
+                    logging.getLogger("onchain").warning(f"Failed to append onchain data: {e}")
+                    df_raw["funding_rate"] = 0.0
+                    df_raw["open_interest"] = 0.0
+                    df_raw["long_short_ratio"] = 1.0
+
+                df_feat = add_features(df_raw.copy())
                 
-                x = torch.tensor(data_scaled).unsqueeze(0).to(device)
+                if hasattr(scaler, "feature_names_in_"):
+                    cols = list(scaler.feature_names_in_)
+                else:
+                    from src.feature_engineering import get_active_features
+                    cols = get_active_features()
                 
-                # Causal Reasoning: Approximate SHAP via Gradients * Input
-                x.requires_grad = True
+            data = df_feat[cols].tail(32).values.astype(np.float32)
+            if len(data) < 32:
+                return None
                 
-                raw_logit = model(x).squeeze(1)
-                raw_logit.backward()
+            data = np.nan_to_num(data, nan=0.0, posinf=0.0, neginf=0.0)
+            data = np.clip(data, -1e6, 1e6)
+            data_scaled = scaler.transform(data).astype(np.float32)
+            data_scaled = np.nan_to_num(data_scaled, nan=0.0, posinf=0.0, neginf=0.0)
+            
+            # Let the shadow arena candidates process the raw dataframe using their own scaler
+            try:
+                from src.shadow_arena import evaluate_candidates
+                evaluate_candidates(symbol, price, df_feat)
+            except Exception as shadow_e:
+                import logging
+                logging.getLogger("shadow_arena").error(f"Shadow evaluation failed: {shadow_e}")
+            
+            x = torch.tensor(data_scaled).unsqueeze(0).to(device)
+            
+            # Causal Reasoning: Approximate SHAP via Gradients * Input
+            x.requires_grad = True
+            
+            raw_logit = model(x).squeeze(1)
+            raw_logit.backward()
+            
+            # Gradients w.r.t the last timestep's features
+            grads = x.grad[0, -1, :].cpu().numpy()
+            feats = data_scaled[-1, :]
+            
+            # Simple Feature Importance (Gradient * Input)
+            contributions = grads * feats
+            
+            # Map contributions to feature names
+            causal_reasoning = {}
+            for i, col in enumerate(cols):
+                causal_reasoning[col] = float(contributions[i])
+            
+            with torch.no_grad():
+                out_prob = float(torch.sigmoid(torch.tensor(raw_logit.item())).item())
                 
-                # Gradients w.r.t the last timestep's features
-                grads = x.grad[0, -1, :].cpu().numpy()
-                feats = data_scaled[-1, :]
+            return out_prob, raw_logit.item(), causal_reasoning
                 
-                # Simple Feature Importance (Gradient * Input)
-                contributions = grads * feats
-                
-                # Map contributions to feature names
-                causal_reasoning = {}
-                for i, col in enumerate(cols):
-                    causal_reasoning[col] = float(contributions[i])
-                
-                with torch.no_grad():
-                    out_prob = float(torch.sigmoid(torch.tensor(raw_logit.item())).item())
-                    
-                return out_prob, raw_logit.item(), causal_reasoning
-                    
             res = await asyncio.to_thread(_do_inference)
             causal_reasoning_dict = None
             if res is not None:
