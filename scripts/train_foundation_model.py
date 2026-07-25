@@ -26,12 +26,23 @@ from src.logging_config import get_logger
 logger = get_logger("foundation_trainer")
 
 # Config
-SYMBOLS = ["BTC-USD"]
-DAYS = 14  # Bootstrap dataset length
+SYMBOLS = [
+    "BTC-USD",
+    "ETH-USD",
+    "SOL-USD",
+    "XRP-USD",
+    "DOGE-USD",
+    "ADA-USD",
+    "LINK-USD",
+    "LTC-USD",
+    "AVAX-USD",
+    "BCH-USD"
+]
+DAYS = 730  # Bootstrap dataset length
 SEQ_LEN = 32
 HORIZON = 6
 BATCH_SIZE = 256
-EPOCHS = 5
+EPOCHS = 30
 PATIENCE = 10
 LR = 5e-4
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
