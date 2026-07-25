@@ -140,8 +140,11 @@ async def simulate_candidate(bars: pl.DataFrame, symbol: str, config: Dict[str, 
             raw_action = signal.get("action", "hold")
             regime_seen = signal.get("regime", "neutral")
             
+            print(f"{ts} | Action={raw_action} | Regime={regime_seen}")
+            
             if raw_action == "buy" and open_pos is None:
-                size, status = risk.calculate_position_size(symbol, current_price, regime_seen)
+                size, status = risk.calculate_position_size(symbol, current_price, regime_seen, atr=signal.get("atr"))
+                print(f"Position Size={size} Status={status}")
                 if status == "ok" and size > 0:
                     open_pos = {"qty": size, "side": "long"}
                     entry_price = current_price
