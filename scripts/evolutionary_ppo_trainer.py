@@ -259,14 +259,26 @@ async def main():
                 worst_dd = res.max_drawdown_pct
                 worst_res = res
                 
-        if total_trades < 50:
-            logger.info(f"Gen {generation+1}: Rejected (Too few aggregate trades: {total_trades})")
+        if total_trades == 0:
+            logger.info(f"Gen {generation+1}: Rejected (0 trades)")
             continue
             
         composite_wr = (total_wins / total_trades) * 100
         avg_ret = np.mean(composite_returns)
         composite_sharpe = avg_ret / (np.std(composite_returns) + 1e-9) if len(composite_returns) > 1 else 0.0
         
+        # Adaptive minimum trades based on data size (180 days = ~0.5 years)
+        years_of_data = 180 / 365.0
+        min_expected_trades = max(20, int(len(bars_dict) * years_of_data * 10))
+        
+        trade_penalty = 1.0
+        if total_trades < min_expected_trades:
+            trade_penalty = float(total_trades) / float(min_expected_trades)
+            logger.info(f"Gen {generation+1}: Low trade count ({total_trades} < {min_expected_trades}). Applying {trade_penalty:.2f}x confidence penalty.")
+            # Shrink Sharpe toward 0 and Win Rate toward 50%
+            composite_sharpe *= trade_penalty
+            composite_wr = 50.0 + ((composite_wr - 50.0) * trade_penalty)
+            
         logger.info(f"Gen {generation+1} Candidate: Composite Sharpe ~{composite_sharpe:.2f} | Worst DD {worst_dd:.2f}% | WR {composite_wr:.1f}%")
         
         # 2. Reject bad models
