@@ -102,7 +102,7 @@ async def simulate_candidate(bars: pl.DataFrame, symbol: str, config: Dict[str, 
         
     exchange = FastExchange(bars)
     strategy = TradingStrategy(exchange)
-    risk = RiskManager()
+    risk = RiskManager(exchange)
     
     start_equity = 10000.0
     equity = start_equity
@@ -128,7 +128,7 @@ async def simulate_candidate(bars: pl.DataFrame, symbol: str, config: Dict[str, 
                     "symbol": symbol,
                     "qty": open_pos["qty"],
                     "side": open_pos["side"],
-                    "entry_price": entry_price,
+                    "avg_entry_price": entry_price,
                     "current_price": current_price
                 }
                 
