@@ -16,6 +16,9 @@ import sys
 import shutil
 import subprocess
 from datetime import datetime
+
+# Add project root to path before importing src
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from src.logging_config import get_logger
 
 logger = get_logger("kaggle_stage3")
