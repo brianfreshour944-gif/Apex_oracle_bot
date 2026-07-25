@@ -59,12 +59,12 @@ def main():
     os.makedirs(kaggle_out, exist_ok=True)
     
     models_dir = os.path.join(project_root, "models")
-    transformer_path = os.path.join(models_dir, "transformer.pt")
+    transformer_path = os.path.join(models_dir, "grok_gqa_v9_best.pth")
     scaler_path = os.path.join(models_dir, "feature_scaler.pkl")
     
     if os.path.exists(transformer_path):
-        shutil.copy(transformer_path, os.path.join(kaggle_out, "transformer.pt"))
-        logger.info(f"✅ Saved transformer.pt -> {kaggle_out}")
+        shutil.copy(transformer_path, os.path.join(kaggle_out, "grok_gqa_v9_best.pth"))
+        logger.info(f"✅ Saved grok_gqa_v9_best.pth -> {kaggle_out}")
     else:
         logger.warning(f"❌ Could not find {transformer_path}")
         

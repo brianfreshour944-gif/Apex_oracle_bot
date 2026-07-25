@@ -37,11 +37,11 @@ def main():
     os.chdir(project_root)
     
     # Check if Stage 1 models exist
-    transformer_path = os.path.join(project_root, "models", "transformer.pt")
+    transformer_path = os.path.join(project_root, "models", "grok_gqa_v9_best.pth")
     if not os.path.exists(transformer_path):
-        logger.warning("⚠️ transformer.pt not found! The backtest will run using fallback heuristics.")
+        logger.warning("⚠️ grok_gqa_v9_best.pth not found! The backtest will run using fallback heuristics.")
     else:
-        logger.info("✅ Found pre-trained transformer.pt. Ready for PPO Backtest Learning.")
+        logger.info("✅ Found pre-trained grok_gqa_v9_best.pth. Ready for PPO Backtest Learning.")
 
     # 1. Run Evolutionary PPO Trainer
     logger.info("\n--- STEP 1: Running Evolutionary PPO Tournament ---")
