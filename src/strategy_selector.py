@@ -33,11 +33,30 @@ def select_best_strategy(regime: str) -> str:
     learner = get_strategy_learner()
     weights = learner._clamp_normalize(learner._regime_weights(regime))
     
-    # Check if there are no weights yet, init evenly
+    # Default logical priors based on market regime
+    # If the meta-learner is uninitialized, we shouldn't just guess randomly.
+    # We should seed it with domain knowledge.
     if not weights:
         strategies = list(STRATEGIES.keys())
         for s in strategies:
-            weights[s] = 1.0 / len(strategies)
+            weights[s] = learner.min_weight
+            
+        if regime in ["trending", "bull", "bear"]:
+            weights["trend_following"] = 0.5
+            weights["momentum"] = 0.3
+        elif regime == "sideways":
+            weights["mean_reversion"] = 0.5
+            weights["grid"] = 0.3
+        elif regime == "high_volatility":
+            weights["breakout"] = 0.5
+            weights["scalping"] = 0.3
+        elif regime == "low_volatility":
+            weights["grid"] = 0.5
+            weights["mean_reversion"] = 0.3
+        else: # neutral
+            weights["trend_following"] = 0.2
+            weights["mean_reversion"] = 0.2
+            weights["momentum"] = 0.2
             
     # Always include all available strategies in the pool
     for s in STRATEGIES.keys():

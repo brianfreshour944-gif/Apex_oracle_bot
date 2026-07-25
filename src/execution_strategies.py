@@ -28,10 +28,12 @@ class TrendFollowingStrategy(BaseExecutionStrategy):
         htf_trend = features.get("htf_trend", "neutral")
 
         if not position:
-            if htf_trend == "bullish" and rsi < 55.0 and rsi > prev_rsi:
-                return {"action": "buy", "reason": f"Trend Following: Bullish pullback bounce (RSI {rsi:.1f})"}
-            elif htf_trend == "bearish" and rsi > 45.0 and rsi < prev_rsi:
-                return {"action": "sell", "reason": f"Trend Following: Bearish rally rejection (RSI {rsi:.1f})"}
+            # Trend following buys upward momentum or pullbacks in a bull trend.
+            # Using 65/35 instead of 55/45 to be less restrictive.
+            if htf_trend == "bullish" and rsi < 65.0 and rsi > prev_rsi:
+                return {"action": "buy", "reason": f"Trend Following: Bullish momentum (RSI {rsi:.1f})"}
+            elif htf_trend == "bearish" and rsi > 35.0 and rsi < prev_rsi:
+                return {"action": "sell", "reason": f"Trend Following: Bearish momentum (RSI {rsi:.1f})"}
         else:
             qty = float(position.get("qty", 0))
             if qty > 0 and htf_trend == "bearish":
@@ -53,9 +55,10 @@ class MeanReversionStrategy(BaseExecutionStrategy):
         prev_rsi = features.get("prev_rsi", 50.0)
 
         if not position:
-            if rsi < settings.RSI_OVERSOLD and rsi > prev_rsi:
+            # Added +10 and -10 to make mean reversion trigger more reasonably on 1H timeframe
+            if rsi < (settings.RSI_OVERSOLD + 10.0) and rsi > prev_rsi:
                 return {"action": "buy", "reason": f"Mean Reversion: Oversold bounce (RSI {rsi:.1f})"}
-            elif rsi > settings.RSI_OVERBOUGHT and rsi < prev_rsi:
+            elif rsi > (settings.RSI_OVERBOUGHT - 10.0) and rsi < prev_rsi:
                 return {"action": "sell", "reason": f"Mean Reversion: Overbought rejection (RSI {rsi:.1f})"}
         else:
             qty = float(position.get("qty", 0))
@@ -106,9 +109,9 @@ class BreakoutStrategy(BaseExecutionStrategy):
         # Basic proxy for breakout: high volatility combined with directional RSI
         if not position:
             if regime == "high_volatility":
-                if rsi > 65.0:
+                if rsi > 55.0:
                     return {"action": "buy", "reason": "Breakout: High Volatility Bullish Break"}
-                elif rsi < 35.0:
+                elif rsi < 45.0:
                     return {"action": "sell", "reason": "Breakout: High Volatility Bearish Break"}
         else:
             qty = float(position.get("qty", 0))
@@ -159,9 +162,9 @@ class ScalpingStrategy(BaseExecutionStrategy):
         prev_rsi = features.get("prev_rsi", 50.0)
 
         if not position:
-            if rsi > prev_rsi and rsi < 45.0:
+            if rsi > prev_rsi and rsi < 55.0:
                 return {"action": "buy", "reason": "Scalp: Micro-bounce detected"}
-            elif rsi < prev_rsi and rsi > 55.0:
+            elif rsi < prev_rsi and rsi > 45.0:
                 return {"action": "sell", "reason": "Scalp: Micro-rejection detected"}
         else:
             entry = float(position.get("avg_entry_price", 0.0))
