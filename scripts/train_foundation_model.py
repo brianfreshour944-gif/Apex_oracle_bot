@@ -26,12 +26,12 @@ from src.logging_config import get_logger
 logger = get_logger("foundation_trainer")
 
 # Config
-SYMBOLS = ["BTC-USD", "ETH-USD", "SOL-USD", "DOGE-USD", "XRP-USD", "ADA-USD", "LINK-USD", "LTC-USD", "AVAX-USD", "BCH-USD"]
-DAYS = 720  # yfinance 1h limit is 730 days
+SYMBOLS = ["BTC-USD"]
+DAYS = 14  # Bootstrap dataset length
 SEQ_LEN = 32
 HORIZON = 6
 BATCH_SIZE = 256
-EPOCHS = 100
+EPOCHS = 5
 PATIENCE = 10
 LR = 5e-4
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -165,10 +165,10 @@ def main():
     val_loader = DataLoader(SequenceDataset(X_val, y_val), batch_size=BATCH_SIZE, shuffle=False)
     
     # 4. Initialize Grok GQA Transformer
-    model = GrokGQA_Transformer(embed_dim=128, num_heads=4, num_layers=4, seq_len=SEQ_LEN, input_dim=F).to(DEVICE)
+    model = GrokGQA_Transformer(embed_dim=128, num_q_heads=4, num_layers=4, seq_len=SEQ_LEN, input_dim=F).to(DEVICE)
     criterion = nn.BCEWithLogitsLoss()
     optimizer = optim.AdamW(model.parameters(), lr=LR, weight_decay=1e-4)
-    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=3, verbose=True)
+    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=3)
     
     # 5. Training Loop with Early Stopping
     best_val_loss = float('inf')

@@ -14,6 +14,73 @@ from src.config import settings
 MODEL_PATH = settings.TRANSFORMER_MODEL_PATH
 SCALER_PATH = settings.TRANSFORMER_SCALER_PATH
 
+try:
+    import torch
+    import torch.nn as nn
+    import torch.nn.functional as F
+
+    class GQA_TransformerBlock(nn.Module):
+        def __init__(self, embed_dim=128, num_q_heads=8, num_kv_heads=2, dropout=0.1):
+            super().__init__()
+            self.num_q_heads = num_q_heads
+            self.num_kv_heads = num_kv_heads
+            self.head_dim = embed_dim // num_q_heads
+            self.q_proj = nn.Linear(embed_dim, num_q_heads * self.head_dim)
+            self.k_proj = nn.Linear(embed_dim, num_kv_heads * self.head_dim)
+            self.v_proj = nn.Linear(embed_dim, num_kv_heads * self.head_dim)
+            self.out_proj = nn.Linear(num_q_heads * self.head_dim, embed_dim)
+            self.norm1 = nn.LayerNorm(embed_dim)
+            self.norm2 = nn.LayerNorm(embed_dim)
+            self.ffn = nn.Sequential(
+                nn.Linear(embed_dim, embed_dim * 4),
+                nn.GELU(),
+                nn.Dropout(dropout),
+                nn.Linear(embed_dim * 4, embed_dim),
+            )
+            self.dropout = nn.Dropout(dropout)
+
+        def forward(self, x):
+            residual = x
+            norm_x = self.norm1(x)
+            batch, seq, _ = norm_x.shape
+            q = self.q_proj(norm_x).view(batch, seq, self.num_q_heads, self.head_dim).transpose(1, 2)
+            k = self.k_proj(norm_x).view(batch, seq, self.num_kv_heads, self.head_dim).transpose(1, 2)
+            v = self.v_proj(norm_x).view(batch, seq, self.num_kv_heads, self.head_dim).transpose(1, 2)
+            k = k.repeat_interleave(self.num_q_heads // self.num_kv_heads, dim=1)
+            v = v.repeat_interleave(self.num_q_heads // self.num_kv_heads, dim=1)
+            attn = F.scaled_dot_product_attention(q, k, v)
+            attn = attn.transpose(1, 2).contiguous().view(batch, seq, self.num_q_heads * self.head_dim)
+            x = residual + self.dropout(self.out_proj(attn))
+            residual = x
+            norm_x = self.norm2(x)
+            x = residual + self.ffn(norm_x)
+            return x
+
+    class GrokGQA_Transformer(nn.Module):
+        def __init__(self, input_dim=11, seq_len=32, embed_dim=128, num_layers=4, num_q_heads=8, num_kv_heads=2, dropout=0.1):
+            super().__init__()
+            self.input_projection = nn.Linear(input_dim, embed_dim)
+            self.pos_encoder = nn.Parameter(torch.zeros(1, seq_len, embed_dim))
+            self.dropout = nn.Dropout(dropout)
+            self.layers = nn.ModuleList([
+                GQA_TransformerBlock(embed_dim, num_q_heads, num_kv_heads, dropout)
+                for _ in range(num_layers)
+            ])
+            self.norm = nn.LayerNorm(embed_dim)
+            self.output_head = nn.Linear(embed_dim, 1)
+
+        def forward(self, x):
+            x = self.input_projection(x)
+            x = x + self.pos_encoder 
+            x = self.dropout(x)
+            for layer in self.layers:
+                x = layer(x)
+            x = self.norm(x)
+            x = self.output_head(x[:, -1, :])
+            return x
+except ImportError:
+    pass
+
 _predictor_instance = None
 _predictor_initialized = False
 
@@ -27,71 +94,6 @@ def get_ml_predictor():
     if os.path.exists(MODEL_PATH) and os.path.exists(SCALER_PATH):
         try:
             import joblib
-            import torch
-            import torch.nn as nn
-
-            import torch.nn.functional as F
-
-            class GQA_TransformerBlock(nn.Module):
-                def __init__(self, embed_dim=128, num_q_heads=8, num_kv_heads=2, dropout=0.1):
-                    super().__init__()
-                    self.num_q_heads = num_q_heads
-                    self.num_kv_heads = num_kv_heads
-                    self.head_dim = embed_dim // num_q_heads
-                    self.q_proj = nn.Linear(embed_dim, num_q_heads * self.head_dim)
-                    self.k_proj = nn.Linear(embed_dim, num_kv_heads * self.head_dim)
-                    self.v_proj = nn.Linear(embed_dim, num_kv_heads * self.head_dim)
-                    self.out_proj = nn.Linear(num_q_heads * self.head_dim, embed_dim)
-                    self.norm1 = nn.LayerNorm(embed_dim)
-                    self.norm2 = nn.LayerNorm(embed_dim)
-                    self.ffn = nn.Sequential(
-                        nn.Linear(embed_dim, embed_dim * 4),
-                        nn.GELU(),
-                        nn.Dropout(dropout),
-                        nn.Linear(embed_dim * 4, embed_dim),
-                    )
-                    self.dropout = nn.Dropout(dropout)
-
-                def forward(self, x):
-                    residual = x
-                    norm_x = self.norm1(x)
-                    batch, seq, _ = norm_x.shape
-                    q = self.q_proj(norm_x).view(batch, seq, self.num_q_heads, self.head_dim).transpose(1, 2)
-                    k = self.k_proj(norm_x).view(batch, seq, self.num_kv_heads, self.head_dim).transpose(1, 2)
-                    v = self.v_proj(norm_x).view(batch, seq, self.num_kv_heads, self.head_dim).transpose(1, 2)
-                    k = k.repeat_interleave(self.num_q_heads // self.num_kv_heads, dim=1)
-                    v = v.repeat_interleave(self.num_q_heads // self.num_kv_heads, dim=1)
-                    attn = F.scaled_dot_product_attention(q, k, v)
-                    attn = attn.transpose(1, 2).contiguous().view(batch, seq, self.num_q_heads * self.head_dim)
-                    x = residual + self.dropout(self.out_proj(attn))
-                    residual = x
-                    norm_x = self.norm2(x)
-                    x = residual + self.ffn(norm_x)
-                    return x
-
-            class GrokGQA_Transformer(nn.Module):
-                def __init__(self, input_dim=11, seq_len=32, embed_dim=128, num_layers=4, num_q_heads=8, num_kv_heads=2, dropout=0.1):
-                    super().__init__()
-                    self.input_projection = nn.Linear(input_dim, embed_dim)
-                    self.pos_encoder = nn.Parameter(torch.zeros(1, seq_len, embed_dim))
-                    self.dropout = nn.Dropout(dropout)
-                    self.layers = nn.ModuleList([
-                        GQA_TransformerBlock(embed_dim, num_q_heads, num_kv_heads, dropout)
-                        for _ in range(num_layers)
-                    ])
-                    self.norm = nn.LayerNorm(embed_dim)
-                    self.output_head = nn.Linear(embed_dim, 1)
-
-                def forward(self, x):
-                    x = self.input_projection(x)
-                    x = x + self.pos_encoder 
-                    x = self.dropout(x)
-                    for layer in self.layers:
-                        x = layer(x)
-                    x = self.norm(x)
-                    x = self.output_head(x[:, -1, :])
-                    return x
-
             device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
             scaler = joblib.load(SCALER_PATH)
 

@@ -17,6 +17,7 @@ import yfinance as yf
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 
 from src.config import settings
+settings.ADAPTIVE_ML_ENABLED = False
 from src.strategies import TradingStrategy
 from src.risk import RiskManager
 from src.committee.committee import run_committee
@@ -26,7 +27,7 @@ logger = get_logger("replay_generator")
 
 SYMBOLS = ["BTC-USD", "ETH-USD", "SOL-USD", "DOGE-USD", "XRP-USD", "ADA-USD", "LINK-USD", "LTC-USD", "AVAX-USD", "BCH-USD"]
 BUFFER_PATH = "data/historical_experiences.jsonl"
-HISTORY_DAYS = 365 * 3  # 3 years
+HISTORY_DAYS = 720  # ~2 years (yfinance 1h limit is 730 days)
 
 class FastExchange:
     def __init__(self, df: pl.DataFrame):
@@ -48,8 +49,8 @@ class FastExchange:
 async def generate_history_for_symbol(symbol: str, bars: pl.DataFrame):
     logger.info(f"Generating trades for {symbol}...")
     exchange = FastExchange(bars)
-    strategy = TradingStrategy(exchange)
-    risk = RiskManager()
+    strategy = TradingStrategy(exchange, cache_ttl=0.0, backtest=True)
+    risk = RiskManager(exchange)
     
     open_pos = None
     entry_price = 0.0
@@ -70,15 +71,20 @@ async def generate_history_for_symbol(symbol: str, bars: pl.DataFrame):
                 "symbol": symbol,
                 "qty": open_pos["qty"],
                 "side": open_pos["side"],
-                "entry_price": entry_price,
+                "avg_entry_price": entry_price,
                 "current_price": current_price
             }
             
         signal = await strategy.generate_trading_signal(symbol, current_price, position)
+        bars_df = await exchange.get_bars(symbol)
+        signal["backtest_df"] = bars_df
         
         # Here we ACTUALLY call the committee so the Transformer runs
         committee_result = await run_committee(symbol, current_price, signal)
         final_action = committee_result.action
+        
+        if final_action != "stand_aside" and final_action != "hold":
+            print(f"Debug [i={i}]: final_action={final_action}, strategy_signal={signal.get('action')}, score={committee_result.score:.2f}")
         regime_seen = signal.get("regime", "neutral")
         
         if final_action == "buy" and open_pos is None:
@@ -185,13 +191,13 @@ async def main():
             bars = pl.from_pandas(df)
             
             logged = await generate_history_for_symbol(sym, bars)
-            logger.info(f"✅ Generated {logged} historical replay records for {sym}")
+            logger.info(f"Generated {logged} historical replay records for {sym}")
             total_generated += logged
             
         except Exception as e:
             logger.error(f"Failed processing {sym}: {e}")
             
-    logger.info(f"🎉 Bulk generation complete. Added {total_generated} records to {BUFFER_PATH}")
+    logger.info(f"Bulk generation complete. Added {total_generated} records to {BUFFER_PATH}")
 
 if __name__ == "__main__":
     asyncio.run(main())
