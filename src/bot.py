@@ -208,58 +208,108 @@ async def process_signal_for_symbol(symbol: str, current_price: float, risk_mana
 
         logger.debug(f"[SCAN] Signal for {symbol} @ ${current_price:.2f}: {signal['action']} (regime: {signal['regime']}, RSI: {signal['rsi']:.2f})")
 
-        # ── 5-BRAIN ENSEMBLE COMMITTEE EVALUATION ──
-        from src.committee.committee import run_committee
-        committee_result = await run_committee(symbol, current_price, signal)
+        # Bypass committee for hard exits (SL/TP)
+        if signal["action"] == "close":
+            pass # proceed directly to close logic below
+        else:
+            # ── 5-BRAIN ENSEMBLE COMMITTEE EVALUATION ──
+            from src.committee.committee import run_committee
+            committee_result = await run_committee(symbol, current_price, signal)
 
-        # Log committee votes breakdown
-        logger.info(f"🗳️ Committee evaluation for {symbol}:")
-        for v in committee_result.votes:
-            logger.info(
-                f"   [{v.name:<11}] {v.action.upper():<11} "
-                f"conf={v.confidence:.3f} (weight={v.weight*100:.0f}%) "
-                f"| {v.reason}"
-            )
+            # ── BUILD REGIME DASHBOARD ──
+            dashboard = []
+            dashboard.append("==============================")
+            dashboard.append(f"{symbol}")
+            dashboard.append("")
+            
+            regime_str = signal.get("regime", "UNKNOWN").upper()
+            hurst = signal.get("features", {}).get("hurst", 0.0)
+            atr = signal.get("atr", 0.0)
+            atr_pct = (atr / current_price * 100) if current_price > 0 else 0.0
+            
+            dashboard.append(f"Regime........ {regime_str}")
+            dashboard.append(f"Hurst......... {hurst:.2f}")
+            dashboard.append(f"ATR........... {atr_pct:.1f}%")
+            dashboard.append("")
+            
+            for v in committee_result.votes:
+                action_str = v.action.upper()
+                if action_str == "STAND_ASIDE":
+                    action_str = "PASS"
+                elif action_str not in ["PASS", "HOLD", "SKIP"]:
+                    action_str = f"{action_str} {v.confidence:.2f}"
+                dashboard.append(f"{v.name.capitalize():<14} {action_str}")
+                
+            dashboard.append("")
+            
+            committee_action = committee_result.action.upper()
+            if committee_result.vetoed:
+                committee_action = "VETO"
+            elif committee_action == "STAND_ASIDE":
+                committee_action = "PASS"
+                
+            dashboard.append(f"Committee...... {committee_action}")
+            dashboard.append("")
 
-        if committee_result.vetoed:
-            logger.info(f"[RISK] 🛑 {symbol} trade VETOED by Committee: {committee_result.veto_reason}")
-            latest_scan_results[symbol] = {"score": committee_result.score, "action": "VETO", "price": current_price}
-            return
+            if committee_result.vetoed:
+                dashboard.append("FINAL.......... NO TRADE")
+                dashboard.append(f"Reason......... {committee_result.veto_reason}")
+                dashboard.append("==============================")
+                print("\n".join(dashboard), flush=True)
+                latest_scan_results[symbol] = {"score": committee_result.score, "action": "VETO", "price": current_price}
+                return
 
-        logger.debug(f"[MODEL] Winner: {committee_result.action.upper()} score={committee_result.score:.3f} (threshold >= 0.60)")
+            if committee_result.action in ["stand_aside", "skip", "hold"]:
+                dashboard.append("FINAL.......... NO TRADE")
+                dashboard.append("Reason......... Committee Consensus")
+                dashboard.append("==============================")
+                print("\n".join(dashboard), flush=True)
+                latest_scan_results[symbol] = {"score": committee_result.score, "action": committee_result.action.upper(), "price": current_price}
+                return
 
-        if committee_result.action in ["stand_aside", "skip", "hold"]:
-            logger.debug(f"[SCAN] ⏭️ {symbol}: Committee action is {committee_result.action.upper()} (score={committee_result.score:.3f}). Skipping trade entry.")
             latest_scan_results[symbol] = {"score": committee_result.score, "action": committee_result.action.upper(), "price": current_price}
-            return
 
-        latest_scan_results[symbol] = {"score": committee_result.score, "action": committee_result.action.upper(), "price": current_price}
-
-        # Override original signal action & confidence with committee's consensus decision
-        signal["action"] = committee_result.action
-        signal["confidence"] = committee_result.score
+            # Override original signal action & confidence with committee's consensus decision
+            signal["action"] = committee_result.action
+            signal["confidence"] = committee_result.score
 
         if signal["action"] in ["buy", "sell"]:
             # ── REGIME SWITCH CHECK (Only for ENTRY, not EXIT) ──
             if signal["action"] == "buy":
                 regime_flag = read_regime_flag()
                 if regime_flag.get("pause_oracle", False):
-                    logger.info(f"⏸️ Oracle paused by Regime Switch (Quiet market). Skipping entry for {symbol}.")
+                    dashboard.append("Risk........... VETO")
+                    dashboard.append("FINAL.......... NO TRADE")
+                    dashboard.append("Reason......... Oracle Paused (Regime Switch)")
+                    dashboard.append("==============================")
+                    print("\n".join(dashboard), flush=True)
                     return
 
             # ── BANNED SYMBOLS CHECK ──
             banned = get_banned_symbols()
             if symbol in banned:
-                logger.info(f"🚫 {symbol} is currently BANNED due to poor performance. Skipping entry.")
+                dashboard.append("Risk........... VETO")
+                dashboard.append("FINAL.......... NO TRADE")
+                dashboard.append("Reason......... Symbol Banned")
+                dashboard.append("==============================")
+                print("\n".join(dashboard), flush=True)
                 return
 
             # Check position limit before entering
             risk_status = await risk_manager.update_account_status()
             if risk_status["status"] == "position_limit_exceeded":
-                logger.warning(f"[RISK] Skipping entry for {symbol}: position limit reached")
+                dashboard.append("Risk........... VETO")
+                dashboard.append("FINAL.......... NO TRADE")
+                dashboard.append("Reason......... Position limit reached")
+                dashboard.append("==============================")
+                print("\n".join(dashboard), flush=True)
                 return
             if risk_status["status"] == "exposure_limit_exceeded":
-                logger.warning(f"[RISK] Skipping entry for {symbol}: exposure cap reached")
+                dashboard.append("Risk........... VETO")
+                dashboard.append("FINAL.......... NO TRADE")
+                dashboard.append("Reason......... Exposure cap reached")
+                dashboard.append("==============================")
+                print("\n".join(dashboard), flush=True)
                 return
 
             # Calculate position size
@@ -272,8 +322,18 @@ async def process_signal_for_symbol(symbol: str, current_price: float, risk_mana
             )
 
             if sizing_status != "ok":
-                logger.warning(f"[RISK] Position sizing failed for {symbol}: {sizing_status}")
+                dashboard.append("Risk........... VETO")
+                dashboard.append("FINAL.......... NO TRADE")
+                dashboard.append(f"Reason......... {sizing_status}")
+                dashboard.append("==============================")
+                print("\n".join(dashboard), flush=True)
                 return
+                
+            dashboard.append("Risk........... PASS")
+            dashboard.append("")
+            dashboard.append(f"FINAL.......... EXECUTE {signal['action'].upper()}")
+            dashboard.append("==============================")
+            print("\n".join(dashboard), flush=True)
                 
             # Apply Regime Switch Multiplier if buying
             if signal["action"] == "buy":
