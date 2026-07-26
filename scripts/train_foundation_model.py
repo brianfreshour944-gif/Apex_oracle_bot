@@ -21,6 +21,7 @@ import pickle
 
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 from src.committee.transformer_brain import GrokGQA_Transformer
+from src.feature_engineering import add_features, get_active_features
 from src.logging_config import get_logger
 
 logger = get_logger("foundation_trainer")
@@ -51,32 +52,6 @@ MODEL_PATH = os.path.join(MODELS_DIR, "grok_gqa_v9_best.pth")
 SCALER_PATH = os.path.join(MODELS_DIR, "feature_scaler.pkl")
 
 # Basic Technical Feature Engineering
-def add_features(df: pd.DataFrame) -> pd.DataFrame:
-    df["return"] = df["close"].pct_change()
-    df["volatility"] = df["return"].rolling(24).std()
-    
-    # RSI
-    delta = df["close"].diff()
-    gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
-    loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
-    rs = gain / (loss + 1e-9)
-    df["rsi"] = 100 - (100 / (1 + rs))
-    
-    # ATR
-    high_low = df["high"] - df["low"]
-    high_close = (df["high"] - df["close"].shift()).abs()
-    low_close = (df["low"] - df["close"].shift()).abs()
-    tr = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
-    df["atr"] = tr.rolling(14).mean()
-    
-    # Moving averages
-    df["sma_20"] = df["close"].rolling(20).mean()
-    df["sma_50"] = df["close"].rolling(50).mean()
-    
-    # Drop NaNs created by rolling windows
-    df = df.dropna()
-    return df
-
 class SequenceDataset(Dataset):
     def __init__(self, X, y):
         self.X = torch.tensor(X, dtype=torch.float32)
@@ -112,7 +87,7 @@ def main():
     all_X = []
     all_y = []
     
-    features_cols = ["open", "high", "low", "close", "volume", "return", "volatility", "rsi", "atr", "sma_20", "sma_50"]
+    features_cols = get_active_features()
     
     for sym in SYMBOLS:
         logger.info(f"Downloading {sym}...")
@@ -123,7 +98,9 @@ def main():
             
             df = df.reset_index()
             df = df.rename(columns={"Datetime": "t", "Open": "open", "High": "high", "Low": "low", "Close": "close", "Volume": "volume"})
+            raw_close = df["close"].copy()
             df = add_features(df)
+            df["close"] = raw_close.values
             
             X, y = extract_sequences(df, features_cols)
             if len(X) > 0:
@@ -176,7 +153,7 @@ def main():
     val_loader = DataLoader(SequenceDataset(X_val, y_val), batch_size=BATCH_SIZE, shuffle=False)
     
     # 4. Initialize Grok GQA Transformer
-    model = GrokGQA_Transformer(embed_dim=128, num_q_heads=4, num_layers=4, seq_len=SEQ_LEN, input_dim=F).to(DEVICE)
+    model = GrokGQA_Transformer(embed_dim=128, num_q_heads=4, num_layers=4, seq_len=SEQ_LEN, input_dim=F, dropout=0.2).to(DEVICE)
     criterion = nn.BCEWithLogitsLoss()
     optimizer = optim.AdamW(model.parameters(), lr=LR, weight_decay=1e-4)
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=3)
@@ -224,7 +201,7 @@ def main():
         
         logger.info(f"Epoch {epoch}/{EPOCHS} | Train Loss: {train_loss:.4f} | Val Loss: {val_loss:.4f} | Val Acc: {val_acc:.2f}%")
         
-        if val_loss < best_val_loss:
+        if val_acc > best_val_acc:
             best_val_loss = val_loss
             best_val_acc = val_acc
             patience_counter = 0
