@@ -101,7 +101,9 @@ def retrain_model():
             champ_embed = arch.get("embed_dim", 128)
             
     if os.path.exists(MODEL_PATH):
-        champion_model = GrokGQA_Transformer(input_dim=input_dim, num_layers=champ_layers, embed_dim=champ_embed, seq_len=seq_len).to(device)
+        champ_q_heads = arch.get("num_q_heads", 8) if os.path.exists(config_path) else 8
+        champ_kv_heads = arch.get("num_kv_heads", 2) if os.path.exists(config_path) else 2
+        champion_model = GrokGQA_Transformer(input_dim=input_dim, num_layers=champ_layers, embed_dim=champ_embed, num_q_heads=champ_q_heads, num_kv_heads=champ_kv_heads, seq_len=seq_len).to(device)
         try:
             champion_model.load_state_dict(torch.load(MODEL_PATH, map_location=device))
             champion_loss = evaluate_loss(champion_model, val_loader, nn.BCEWithLogitsLoss(), device)
@@ -111,9 +113,9 @@ def retrain_model():
             
     # 2. Define NAS Candidates
     candidates = [
-        {"num_layers": 2, "embed_dim": 64},
-        {"num_layers": 4, "embed_dim": 128},
-        {"num_layers": 6, "embed_dim": 256}
+        {"num_layers": 2, "embed_dim": 64, "num_q_heads": 8, "num_kv_heads": 2},
+        {"num_layers": 4, "embed_dim": 128, "num_q_heads": 8, "num_kv_heads": 2},
+        {"num_layers": 6, "embed_dim": 256, "num_q_heads": 8, "num_kv_heads": 2}
     ]
     
     best_challenger_loss = float("inf")
@@ -128,7 +130,7 @@ def retrain_model():
         E = arch["embed_dim"]
         logger.info(f"--- Training NAS Candidate [{L}L, {E}D] ---")
         
-        model = GrokGQA_Transformer(input_dim=input_dim, num_layers=L, embed_dim=E, seq_len=seq_len).to(device)
+        model = GrokGQA_Transformer(input_dim=input_dim, num_layers=L, embed_dim=E, num_q_heads=arch.get("num_q_heads", 8), num_kv_heads=arch.get("num_kv_heads", 2), seq_len=seq_len).to(device)
         optimizer = optim.Adam(model.parameters(), lr=LR)
         
         for epoch in range(EPOCHS):
@@ -157,27 +159,16 @@ def retrain_model():
     logger.info(f"⚔️ Best Challenger [{best_challenger_arch['num_layers']}L, {best_challenger_arch['embed_dim']}D] Loss: {best_challenger_loss:.4f}")
     
     if best_challenger_loss < champion_loss:
-        logger.info("✅ Challenger beat Champion on Holdout Loss! Proceeding to Stage 3: Paper Trading Validation...")
-        
-        # 5. Paper Trading Validation
-        # In a real environment, we would run a 30-day walk-forward backtest here.
-        # For the script, we simulate this validation step.
-        import random
-        # Simulate paper trading results
-        champ_sharpe = random.uniform(1.0, 1.5)
-        challenger_sharpe = champ_sharpe + random.uniform(-0.5, 0.5)
-        
-        logger.info(f"📊 Paper Trading Results: Champion Sharpe={champ_sharpe:.2f} | Challenger Sharpe={challenger_sharpe:.2f}")
-        
-        if challenger_sharpe > champ_sharpe:
-            os.makedirs("models", exist_ok=True)
-            torch.save(best_challenger_state, MODEL_PATH)
-            import json
-            with open(config_path, "w") as f:
-                json.dump(best_challenger_arch, f)
-            logger.info(f"🏆 Challenger PASSED Paper Trading! Saved new NAS architecture to {config_path}")
-        else:
-            logger.info("❌ Challenger FAILED Paper Trading. Vetoing promotion and rolling back to Champion.")
+        logger.info("✅ Challenger beat Champion on Holdout Loss! Promoting based on this real, measured result.")
+        logger.warning("NOTE: Walk-forward paper trading validation is NOT YET IMPLEMENTED. "
+                        "Promotion is currently gated on holdout loss only. Do not treat this as "
+                        "a substitute for live/paper trading performance validation before real capital is at risk.")
+        os.makedirs("models", exist_ok=True)
+        torch.save(best_challenger_state, MODEL_PATH)
+        import json
+        with open(config_path, "w") as f:
+            json.dump(best_challenger_arch, f)
+        logger.info(f"🏆 Challenger promoted. Saved new NAS architecture to {config_path}")
     else:
         logger.info("❌ All Challengers FAILED to beat Champion on Loss. Discarding new weights.")
 
