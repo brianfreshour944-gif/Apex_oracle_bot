@@ -21,6 +21,12 @@ class RiskManager:
         self.open_positions = []
         self.peak_prices: Dict[str, float] = {}  # Tracks highest price seen while in position
         self.last_check_time = datetime.now(timezone.utc)
+        # Protects against a race condition where multiple symbols are evaluated
+        # concurrently (asyncio tasks) and could each independently pass an
+        # exposure-cap check before any of their sibling orders have actually
+        # settled on the exchange.
+        self._exposure_lock = asyncio.Lock()
+        self._reserved_exposure = []  # list of (notional_amount, reserved_at) tuples
 
     async def update_account_status(self) -> Dict[str, Any]:
         """Update account status and check risk limits."""
@@ -233,6 +239,53 @@ class RiskManager:
         status = await self.update_account_status()
         # Only activate on actual risk breaches, NOT on transient errors
         return status.get("status") == "killswitch_activated"
+
+    async def check_and_reserve_exposure(self, additional_notional: float) -> Tuple[bool, str]:
+        """Atomically check whether adding new exposure would breach the cap,
+        accounting for other trades reserved concurrently in this process."""
+        async with self._exposure_lock:
+            now = datetime.now(timezone.utc)
+            self._reserved_exposure = [(a, t) for a, t in self._reserved_exposure if (now - t).total_seconds() < 60]
+            status = await self.update_account_status()
+            if status.get("status") != "risk_ok":
+                return False, status.get("reason", status.get("status", "risk_check_failed"))
+            current_exposure = status["current_exposure"]
+            reserved_total = sum(a for a, _ in self._reserved_exposure)
+            max_portfolio_abs = float(settings.MAX_PORTFOLIO_VALUE)
+            if current_exposure + reserved_total + additional_notional > max_portfolio_abs:
+                logger.warning(f"Exposure reservation denied: current=${current_exposure:.2f} reserved=${reserved_total:.2f} requested=${additional_notional:.2f} cap=${max_portfolio_abs:.2f}")
+                return False, "max_portfolio_value_would_be_exceeded"
+            self._reserved_exposure.append((additional_notional, now))
+            return True, "ok"
+
+    async def reduce_exposure_to_cap(self) -> Dict[str, Any]:
+        """Close positions, worst unrealized P&L first, until exposure is
+        back under the cap. Targeted/incremental, unlike liquidate_all_positions."""
+        try:
+            positions = await self.exchange.get_positions()
+            max_portfolio_abs = float(settings.MAX_PORTFOLIO_VALUE)
+            current_exposure = sum(float(p.get("market_value", 0)) for p in positions)
+            if current_exposure <= max_portfolio_abs:
+                return {"status": "no_action_needed"}
+            positions_sorted = sorted(positions, key=lambda p: float(p.get("unrealized_pl", 0)))
+            results = []
+            for position in positions_sorted:
+                if current_exposure <= max_portfolio_abs:
+                    break
+                symbol = position["symbol"]
+                qty = position["qty"]
+                side = "sell" if float(qty) > 0 else "buy"
+                qty_abs = abs(float(qty))
+                market_value = float(position.get("market_value", 0))
+                order_result = await self.exchange.create_order(symbol=symbol, qty=qty_abs, side=side, type="market")
+                current_exposure -= market_value
+                results.append({"symbol": symbol, "closed_qty": qty, "order": order_result})
+                logger.warning(f"Closed {symbol} to reduce exposure (was ${market_value:.2f})")
+            logger.warning(f"Exposure reduction complete. New exposure: ${current_exposure:.2f} (cap: ${max_portfolio_abs:.2f})")
+            return {"status": "exposure_reduced", "results": results, "final_exposure": current_exposure}
+        except Exception as e:
+            logger.error(f"Exposure reduction failed: {e}")
+            return {"status": "reduction_failed", "error": str(e)}
 
     async def liquidate_all_positions(self) -> Dict[str, Any]:
         """Liquidate all open positions."""

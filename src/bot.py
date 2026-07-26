@@ -346,6 +346,15 @@ async def process_signal_for_symbol(symbol: str, current_price: float, risk_mana
             position_size = round(position_size, 6)
             logger.info(f"📊 Applied Committee Sizing Multiplier ({committee_mult:.2f}x based on score {committee_result.score:.2f}) → Final Qty: {position_size}")
 
+            # Atomically check and reserve exposure to prevent a race condition
+            # where concurrently-evaluated symbols could each pass an individual
+            # exposure check before any of their sibling orders have settled.
+            notional = current_price * position_size
+            reserved_ok, reserve_reason = await risk_manager.check_and_reserve_exposure(notional)
+            if not reserved_ok:
+                logger.warning(f"[{symbol}] Order vetoed: {reserve_reason}")
+                return
+
             # Place order
             order_result = await ex.create_order(
                 symbol=symbol,
@@ -455,6 +464,11 @@ async def monitor_killswitch(risk_manager: RiskManager) -> None:
                 await send_telegram_alert(f"💀 <b>KILLSWITCH ACTIVATED</b>\nLiquidating all positions immediately.")
                 await risk_manager.liquidate_all_positions()
                 os._exit(1)
+
+            exposure_status = await risk_manager.update_account_status()
+            if exposure_status.get("status") == "exposure_limit_exceeded":
+                logger.warning("Exposure cap breached - reducing")
+                await risk_manager.reduce_exposure_to_cap()
             await asyncio.sleep(10)
         except Exception as e:
             logger.error(f"Killswitch monitor error: {e}")
