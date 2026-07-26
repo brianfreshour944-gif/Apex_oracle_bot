@@ -15,9 +15,14 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import Dataset, DataLoader
 import numpy as np
+import asyncio
+import joblib
+import polars as pl
+import yfinance as yf
 
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
-from src.committee.transformer_brain import GrokGQA_Transformer
+from src.committee.transformer_brain import GrokGQA_Transformer, set_ml_predictor_override, reset_ml_predictor
+from src.backtest import run_backtest
 from src.logging_config import get_logger
 
 logger = get_logger("transformer_replay")
@@ -63,6 +68,40 @@ def evaluate_loss(model, loader, criterion, device):
             loss = criterion(logits, batch_y)
             total_loss += loss.item() * len(batch_y)
     return total_loss / len(loader.dataset)
+
+def fetch_validation_bars(symbol: str = "BTC-USD", days: int = 90) -> pl.DataFrame:
+    """Fetch a recent, real historical window for walk-forward-style validation.
+    This is intentionally a separate, more recent slice than what's used for
+    training/holdout-loss evaluation, to give an independent read on real
+    simulated trading performance."""
+    ticker = yf.Ticker(symbol)
+    df = ticker.history(period=f"{days}d", interval="1h")
+    df = df.reset_index()
+    df = df.rename(columns={"Datetime": "t", "Open": "open", "High": "high",
+                             "Low": "low", "Close": "close", "Volume": "volume"})
+    df["t"] = df["t"].astype(str)
+    return pl.from_pandas(df)
+
+
+async def run_real_validation(champion_model, challenger_model, scaler, device, input_dim,
+                               symbol: str = "BTC-USD", days: int = 90):
+    """Run both models through a real simulated backtest (via the full 5-brain
+    committee) over the same real historical window, and return their results
+    for direct comparison. This replaces fake/random validation with an actual
+    measured outcome."""
+    val_bars = fetch_validation_bars(symbol=symbol, days=days)
+    logger.info(f"Fetched {len(val_bars)} real validation bars for {symbol} ({days}d)")
+
+    set_ml_predictor_override(champion_model, scaler, device, input_dim)
+    champ_result = await run_backtest(symbol=symbol, bars=val_bars, use_committee=True)
+    reset_ml_predictor()
+
+    set_ml_predictor_override(challenger_model, scaler, device, input_dim)
+    challenger_result = await run_backtest(symbol=symbol, bars=val_bars, use_committee=True)
+    reset_ml_predictor()
+
+    return champ_result, challenger_result
+
 
 def retrain_model():
     logger.info("Initializing Transformer Replay Retraining (Dual-Buffer NAS)...")
@@ -159,18 +198,52 @@ def retrain_model():
     logger.info(f"⚔️ Best Challenger [{best_challenger_arch['num_layers']}L, {best_challenger_arch['embed_dim']}D] Loss: {best_challenger_loss:.4f}")
     
     if best_challenger_loss < champion_loss:
-        logger.info("✅ Challenger beat Champion on Holdout Loss! Promoting based on this real, measured result.")
-        logger.warning("NOTE: Walk-forward paper trading validation is NOT YET IMPLEMENTED. "
-                        "Promotion is currently gated on holdout loss only. Do not treat this as "
-                        "a substitute for live/paper trading performance validation before real capital is at risk.")
-        os.makedirs("models", exist_ok=True)
-        torch.save(best_challenger_state, MODEL_PATH)
-        import json
-        with open(config_path, "w") as f:
-            json.dump(best_challenger_arch, f)
-        logger.info(f"🏆 Challenger promoted. Saved new NAS architecture to {config_path}")
+        logger.info("Challenger beat Champion on Holdout Loss. Running real walk-forward validation before promoting...")
+
+        challenger_model = GrokGQA_Transformer(
+            input_dim=input_dim,
+            num_layers=best_challenger_arch["num_layers"],
+            embed_dim=best_challenger_arch["embed_dim"],
+            num_q_heads=best_challenger_arch.get("num_q_heads", 8),
+            num_kv_heads=best_challenger_arch.get("num_kv_heads", 2),
+            seq_len=seq_len,
+        ).to(device)
+        challenger_model.load_state_dict(best_challenger_state)
+        challenger_model.eval()
+        champion_model.eval()
+
+        scaler_path = os.path.join(os.path.dirname(MODEL_PATH), "feature_scaler.pkl")
+        val_scaler = joblib.load(scaler_path)
+
+        try:
+            champ_result, challenger_result = asyncio.run(
+                run_real_validation(champion_model, challenger_model, val_scaler, device, input_dim)
+            )
+            logger.info(f"Real Validation - Champion:   return={champ_result.total_return_pct:.2f}% "
+                        f"sharpe={champ_result.sharpe:.3f} trades={champ_result.n_trades} "
+                        f"win_rate={champ_result.win_rate:.1f}%")
+            logger.info(f"Real Validation - Challenger: return={challenger_result.total_return_pct:.2f}% "
+                        f"sharpe={challenger_result.sharpe:.3f} trades={challenger_result.n_trades} "
+                        f"win_rate={challenger_result.win_rate:.1f}%")
+
+            challenger_wins_validation = challenger_result.total_return_pct > champ_result.total_return_pct
+
+            if challenger_wins_validation:
+                os.makedirs("models", exist_ok=True)
+                torch.save(best_challenger_state, MODEL_PATH)
+                import json
+                with open(config_path, "w") as f:
+                    json.dump(best_challenger_arch, f)
+                logger.info(f"Challenger PASSED real validation (holdout loss AND simulated backtest). "
+                            f"Promoted. Saved new NAS architecture to {config_path}")
+            else:
+                logger.info("Challenger beat Champion on holdout loss but FAILED real validation "
+                            "(worse simulated return). Vetoing promotion, keeping current Champion.")
+        except Exception as e:
+            logger.error(f"Real validation failed to run: {e}. Vetoing promotion as a precaution "
+                         f"(cannot confirm the challenger is actually better).")
     else:
-        logger.info("❌ All Challengers FAILED to beat Champion on Loss. Discarding new weights.")
+        logger.info("All Challengers FAILED to beat Champion on Loss. Discarding new weights.")
 
 if __name__ == "__main__":
     retrain_model()

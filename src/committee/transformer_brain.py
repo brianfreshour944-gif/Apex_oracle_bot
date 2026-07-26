@@ -130,6 +130,31 @@ def get_ml_predictor():
             _predictor_instance = None
     return _predictor_instance
 
+def set_ml_predictor_override(model, scaler, device, input_dim):
+    """Directly inject a specific model instance, bypassing file-based loading.
+    Used by validation/comparison code (e.g. retrain_transformer.py) to run
+    the champion and each challenger through real backtests without needing
+    separate processes or touching disk.
+    """
+    global _predictor_instance, _predictor_initialized
+    _predictor_instance = {
+        "model": model,
+        "scaler": scaler,
+        "device": device,
+        "torch": torch,
+        "input_dim": input_dim,
+    }
+    _predictor_initialized = True
+
+
+def reset_ml_predictor():
+    """Clear the cached predictor override so the next call to
+    get_ml_predictor() reloads normally from MODEL_PATH/SCALER_PATH."""
+    global _predictor_instance, _predictor_initialized
+    _predictor_instance = None
+    _predictor_initialized = False
+
+
 async def transformer_brain(symbol: str, price: float, signal: dict) -> BrainVote:
     """Evaluates Grok GQA PyTorch Transformer model prediction with graceful fallback."""
     if not getattr(settings, 'ADAPTIVE_ML_ENABLED', True):

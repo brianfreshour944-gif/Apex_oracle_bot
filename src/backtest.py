@@ -15,6 +15,7 @@ from typing import Dict, Any, List, Optional
 from src.config import settings
 from src.strategies import TradingStrategy
 from src.risk import RiskManager
+from src.committee.committee import run_committee
 from src.logging_config import get_logger
 
 logger = get_logger("backtest")
@@ -131,10 +132,20 @@ async def run_backtest(
     regime: str = "trending",
     fee_pct: float = 0.001,       # 0.1% Taker Fee
     slippage_pct: float = 0.0005, # 0.05% Slippage Buffer
+    bars: Optional[pl.DataFrame] = None,  # Real historical bars; if None, uses synthetic data
+    use_committee: bool = True,   # If True, run the full 5-brain committee (AI-driven decisions).
+                                   # If False, use the raw rule-based strategy signal only.
 ) -> BacktestResult:
-    """Run a full backtest with fee and slippage execution modeling."""
+    """Run a full backtest with fee and slippage execution modeling.
 
-    bars = _generate_synthetic_bars(symbol, n=n_bars, seed=seed, regime=regime)
+    If `bars` is provided (real historical OHLCV data), it is used instead of
+    synthetic data, and signal["backtest_df"] is populated per-bar so that
+    transformer_brain.py uses this historical context instead of attempting
+    a live Alpaca fetch.
+    """
+
+    if bars is None:
+        bars = _generate_synthetic_bars(symbol, n=n_bars, seed=seed, regime=regime)
     exchange = BacktestExchange({symbol: bars})
 
     strategy = TradingStrategy(exchange, cache_ttl=0.0, backtest=True)
@@ -170,7 +181,15 @@ async def run_backtest(
         regime_seen = signal.get("regime", "neutral")
         result.regimes_seen[regime_seen] = result.regimes_seen.get(regime_seen, 0) + 1
 
-        if signal["action"] == "buy" and open_pos is None:
+        if use_committee:
+            bars_df = await exchange.get_bars(symbol)
+            signal["backtest_df"] = bars_df
+            committee_result = await run_committee(symbol, current_price, signal)
+            final_action = committee_result.action
+        else:
+            final_action = signal["action"]
+
+        if final_action == "buy" and open_pos is None:
             size, status = risk.calculate_position_size(symbol, current_price, regime_seen)
             if status == "ok" and size > 0:
                 open_pos = {"qty": size, "side": "long"}
@@ -178,7 +197,7 @@ async def run_backtest(
                 entry_time = ts
                 logger.info(f"[BT] BUY {size:.6f} {symbol} @ {current_price:.2f} (regime={regime_seen})")
 
-        elif signal["action"] == "sell" and open_pos is None:
+        elif final_action == "sell" and open_pos is None:
             size, status = risk.calculate_position_size(symbol, current_price, regime_seen)
             if status == "ok" and size > 0:
                 open_pos = {"qty": size, "side": "short"}
@@ -186,7 +205,7 @@ async def run_backtest(
                 entry_time = ts
                 logger.info(f"[BT] SELL/SHORT {size:.6f} {symbol} @ {current_price:.2f} (regime={regime_seen})")
 
-        elif signal["action"] == "close" and open_pos is not None:
+        elif final_action == "close" and open_pos is not None:
             qty = open_pos["qty"]
             if open_pos["side"] == "long":
                 pnl = (current_price - entry_price) * qty
@@ -462,4 +481,4 @@ if __name__ == "__main__":
             print_backtest_summary(res)
             print()
 
-
+
