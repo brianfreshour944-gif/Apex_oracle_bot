@@ -233,7 +233,7 @@ def main():
             import json
             config_path = os.path.join(MODELS_DIR, "transformer_config.json")
             with open(config_path, "w") as f:
-                json.dump({"num_layers": 4, "embed_dim": 128}, f)
+                json.dump({"num_layers": 4, "embed_dim": 128, "num_q_heads": 4, "num_kv_heads": 2}, f)
                 
             logger.info(f"⭐ New Best Model! Saved to {MODEL_PATH}")
         else:

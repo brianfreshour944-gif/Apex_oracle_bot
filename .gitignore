@@ -71,3 +71,8 @@ data/
 # IDEs
 .vscode/
 .idea/
+
+# Trained model artifacts (generated, not source)
+models/*.pth
+models/*.pkl
+models/transformer_config.json

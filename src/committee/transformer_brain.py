@@ -109,7 +109,9 @@ def get_ml_predictor():
                 model = GrokGQA_Transformer(
                     input_dim=input_dim, 
                     num_layers=arch.get("num_layers", 4),
-                    embed_dim=arch.get("embed_dim", 128)
+                    embed_dim=arch.get("embed_dim", 128),
+                    num_q_heads=arch.get("num_q_heads", 8),
+                    num_kv_heads=arch.get("num_kv_heads", 2)
                 ).to(device)
             else:
                 model = GrokGQA_Transformer(input_dim=input_dim).to(device)
@@ -176,21 +178,45 @@ async def transformer_brain(symbol: str, price: float, signal: dict) -> BrainVot
             device = predictor["device"]
             
             def _do_inference():
-                key = os.getenv("APCA_API_KEY_ID")
-                secret = os.getenv("APCA_API_SECRET_KEY")
-                if not key or not secret:
-                    return None
-                
-                client = CryptoHistoricalDataClient(api_key=key, secret_key=secret)
-                df_raw = fetch_bars(client, symbol.replace("/", ""), days=2)
-                if df_raw is None or len(df_raw) < 32:
-                    return None
-                    
-                # Inject On-Chain / Derivatives Data
+                backtest_df = signal.get("backtest_df")
+                if backtest_df is not None and len(backtest_df) >= 32:
+                    import pandas as pd
+                    import polars as pl
+                    if isinstance(backtest_df, pl.DataFrame):
+                        df_raw = backtest_df.to_pandas()
+                    else:
+                        df_raw = backtest_df.copy()
+                    if "t" in df_raw.columns:
+                        df_raw = df_raw.rename(columns={"t": "timestamp"})
+                        df_raw["timestamp"] = pd.to_datetime(df_raw["timestamp"])
+                        df_raw.set_index("timestamp", inplace=True)
+                    if "vwap" not in df_raw.columns:
+                        df_raw["vwap"] = df_raw["close"]
+                    if "trade_count" not in df_raw.columns:
+                        df_raw["trade_count"] = 0.0
+                    is_live = False
+                else:
+                    key = os.getenv("APCA_API_KEY_ID")
+                    secret = os.getenv("APCA_API_SECRET_KEY")
+                    if not key or not secret:
+                        return None
+
+                    client = CryptoHistoricalDataClient(api_key=key, secret_key=secret)
+                    alpaca_symbol = symbol.replace("-", "/") if "-" in symbol else symbol
+                    df_raw = fetch_bars(client, alpaca_symbol, days=2)
+                    if df_raw is None or len(df_raw) < 32:
+                        return None
+                    is_live = True
+
+                # Inject On-Chain / Derivatives Data (live trading only - skip during backtest to avoid lookahead bias)
+                if not is_live:
+                    df_raw["funding_rate"] = 0.0
+                    df_raw["open_interest"] = 0.0
+                    df_raw["long_short_ratio"] = 1.0
                 try:
+                  if is_live:
                     from src.onchain_data import fetch_derivatives_data
                     import asyncio
-                    # We are inside to_thread but we can run an async function synchronously here
                     loop = asyncio.new_event_loop()
                     asyncio.set_event_loop(loop)
                     deriv_data = loop.run_until_complete(fetch_derivatives_data(symbol))

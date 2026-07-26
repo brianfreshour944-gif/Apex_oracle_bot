@@ -17,7 +17,6 @@ import yfinance as yf
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 
 from src.config import settings
-settings.ADAPTIVE_ML_ENABLED = False
 from src.strategies import TradingStrategy
 from src.risk import RiskManager
 from src.committee.committee import run_committee
@@ -25,7 +24,7 @@ from src.logging_config import get_logger
 
 logger = get_logger("replay_generator")
 
-SYMBOLS = ["BTC-USD", "ETH-USD", "SOL-USD", "DOGE-USD", "XRP-USD", "ADA-USD", "LINK-USD", "LTC-USD", "AVAX-USD", "BCH-USD"]
+SYMBOLS = ["LINK-USD", "LTC-USD", "AVAX-USD", "BCH-USD"]
 BUFFER_PATH = "data/historical_experiences.jsonl"
 HISTORY_DAYS = 720  # ~2 years (yfinance 1h limit is 730 days)
 

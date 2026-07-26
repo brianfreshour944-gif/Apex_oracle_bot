@@ -277,7 +277,7 @@ async def run_committee(symbol: str, price: float, signal: Dict[str, Any]) -> Co
     rl_learner = RLMetaLearner()
     
     # Attempt to use PPO RL Model first
-    if getattr(rl_learner, "model", None) and settings.ADAPTIVE_ML_ENABLED:
+    if getattr(rl_learner, "model", None) and settings.ADAPTIVE_ML_ENABLED and signal.get("backtest_df") is None:
         try:
             # We need to construct the features dict for the RL agent
             features = signal.get("features", {})
