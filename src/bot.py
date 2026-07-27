@@ -349,11 +349,23 @@ async def process_signal_for_symbol(symbol: str, current_price: float, risk_mana
             # Atomically check and reserve exposure to prevent a race condition
             # where concurrently-evaluated symbols could each pass an individual
             # exposure check before any of their sibling orders have settled.
+            # This may approve a SMALLER notional than requested (capped to
+            # remaining headroom) rather than an all-or-nothing veto, so
+            # available capacity actually gets used instead of sitting idle.
             notional = current_price * position_size
-            reserved_ok, reserve_reason = await risk_manager.check_and_reserve_exposure(notional)
-            if not reserved_ok:
+            approved_notional, reserve_reason = await risk_manager.check_and_reserve_exposure(notional)
+            if approved_notional <= 0:
                 logger.warning(f"[{symbol}] Order vetoed: {reserve_reason}")
                 return
+
+            if approved_notional < notional:
+                scale = approved_notional / notional
+                original_size = position_size
+                position_size = round(position_size * scale, 6)
+                logger.info(f"[{symbol}] Position size reduced to fit exposure headroom: {position_size} (was {original_size}, ${approved_notional:.2f} of ${notional:.2f} requested)")
+                if position_size <= 0:
+                    logger.warning(f"[{symbol}] Order vetoed: scaled position size rounded to zero")
+                    return
 
             # Place order
             order_result = await ex.create_order(

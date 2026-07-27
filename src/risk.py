@@ -240,23 +240,29 @@ class RiskManager:
         # Only activate on actual risk breaches, NOT on transient errors
         return status.get("status") == "killswitch_activated"
 
-    async def check_and_reserve_exposure(self, additional_notional: float) -> Tuple[bool, str]:
-        """Atomically check whether adding new exposure would breach the cap,
-        accounting for other trades reserved concurrently in this process."""
+    async def check_and_reserve_exposure(self, requested_notional: float, min_notional: float = 10.0) -> Tuple[float, str]:
+        """Returns the APPROVED notional (may be smaller than requested,
+        capped to remaining headroom) rather than a strict pass/fail, so
+        available capacity gets used instead of sitting idle. Returns
+        (0.0, reason) if headroom is below min_notional."""
         async with self._exposure_lock:
             now = datetime.now(timezone.utc)
             self._reserved_exposure = [(a, t) for a, t in self._reserved_exposure if (now - t).total_seconds() < 60]
             status = await self.update_account_status()
             if status.get("status") != "risk_ok":
-                return False, status.get("reason", status.get("status", "risk_check_failed"))
+                return 0.0, status.get("reason", status.get("status", "risk_check_failed"))
             current_exposure = status["current_exposure"]
             reserved_total = sum(a for a, _ in self._reserved_exposure)
             max_portfolio_abs = float(settings.MAX_PORTFOLIO_VALUE)
-            if current_exposure + reserved_total + additional_notional > max_portfolio_abs:
-                logger.warning(f"Exposure reservation denied: current=${current_exposure:.2f} reserved=${reserved_total:.2f} requested=${additional_notional:.2f} cap=${max_portfolio_abs:.2f}")
-                return False, "max_portfolio_value_would_be_exceeded"
-            self._reserved_exposure.append((additional_notional, now))
-            return True, "ok"
+            headroom = max_portfolio_abs - current_exposure - reserved_total
+            if headroom < min_notional:
+                logger.warning(f"Exposure reservation denied: current=${current_exposure:.2f} reserved=${reserved_total:.2f} headroom=${headroom:.2f} (below min ${min_notional:.2f}) cap=${max_portfolio_abs:.2f}")
+                return 0.0, "max_portfolio_value_would_be_exceeded"
+            approved = min(requested_notional, headroom)
+            if approved < requested_notional:
+                logger.info(f"Exposure reservation partially approved: requested=${requested_notional:.2f} approved=${approved:.2f} (headroom-limited)")
+            self._reserved_exposure.append((approved, now))
+            return approved, "ok"
 
     async def reduce_exposure_to_cap(self) -> Dict[str, Any]:
         """Close positions, worst unrealized P&L first, until exposure is
