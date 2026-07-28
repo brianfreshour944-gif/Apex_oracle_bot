@@ -76,27 +76,36 @@ def select_best_strategy(regime: str) -> str:
     best_strategy = max(weights, key=weights.get)
     return best_strategy
 
-def record_strategy_outcome(regime: str, strategy_name: str, pnl: float, return_pct: float) -> None:
-    """Record the outcome of a trade to train the strategy selector."""
+def record_strategy_outcome(regime: str, strategy_name: str, action: str, pnl: float, return_pct: float) -> None:
+    """Record the outcome of a trade to train the strategy selector.
+
+    ``action`` must be the actual trade direction (``"buy"`` or ``"sell"``).
+    Passing the wrong direction inverts the reward signal for the adaptive
+    learner and biases it away from whichever side happened to work.
+    """
     learner = get_strategy_learner()
     
-    # We construct a mock decision snapshot format expected by AdaptiveMetaLearner
+    # We construct a mock decision snapshot format expected by AdaptiveMetaLearner.
     # AdaptiveMetaLearner expects brain_votes map. Here, the "brains" are our strategies.
     # If the strategy made money, we simulate that it voted correctly.
     # If it lost money, we simulate that it voted incorrectly.
     
-    # The learner expects { "brain_votes": {"trend_following": "buy", ...}, "final_action": "buy" }
+    # Normalise action: only "buy" and "sell" are meaningful directions.
+    # Fall back to "buy" for unexpected values so downstream code is safe.
+    effective_action = action if action in ("buy", "sell") else "buy"
+
+    # The learner expects { "brain_votes": {strategy: action, ...}, "final_action": action }
     # To reward our strategy, we make it agree with the final action.
     mock_votes = {}
     for strat in STRATEGIES.keys():
         if strat == strategy_name:
-            mock_votes[strat] = "buy" # agrees with final action
+            mock_votes[strat] = effective_action  # agrees with final action
         else:
-            mock_votes[strat] = "stand_aside" # neutral
+            mock_votes[strat] = "stand_aside"  # neutral
             
     decision_snapshot = {
         "regime": regime,
-        "final_action": "buy", # The action that earned the PnL
+        "final_action": effective_action,  # use the actual trade direction
         "brain_votes": mock_votes
     }
     

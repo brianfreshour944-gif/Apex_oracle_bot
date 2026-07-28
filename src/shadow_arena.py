@@ -3,9 +3,14 @@ import uuid
 import datetime
 import os
 import json
-import torch
-import torch.nn as nn
 from typing import Dict, Any, List, Optional
+
+try:
+    import torch
+    import torch.nn as nn
+    _TORCH_AVAILABLE = True
+except ImportError:
+    _TORCH_AVAILABLE = False
 from sqlalchemy import select
 from src.db import get_engine, get_db_session, ShadowTrade, Base
 from src.config import settings
@@ -77,6 +82,9 @@ class GrokGQA_Transformer(nn.Module):
 _candidates_cache = {}
 
 def get_candidates():
+    if not _TORCH_AVAILABLE:
+        return {}
+
     if _candidates_cache:
         return _candidates_cache
     

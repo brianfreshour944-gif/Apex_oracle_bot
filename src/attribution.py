@@ -111,7 +111,9 @@ async def _call_gemini_attribution(prompt: str, api_key: str) -> Optional[Dict[s
         genai.configure(api_key=api_key)
         
         model = genai.GenerativeModel('gemini-1.5-flash', generation_config={"response_mime_type": "application/json"})
-        response = model.generate_content(prompt)
+        # generate_content() is synchronous (blocking HTTP call). Run it in a thread
+        # so we don't freeze the entire asyncio event loop during LLM inference.
+        response = await asyncio.to_thread(model.generate_content, prompt)
         
         return json.loads(response.text)
     except Exception as e:

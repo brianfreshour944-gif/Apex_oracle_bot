@@ -7,6 +7,7 @@ import os
 from typing import Dict, Any, Optional, Sequence, List
 from sqlalchemy import (
     create_engine,
+    event,
     text,
     String,
     Float,
@@ -146,22 +147,47 @@ def get_engine():
     """Get the database engine, creating it if needed."""
     global _engine
     if _engine is None:
-        if settings.DATABASE_URL.startswith("sqlite:///"):
+        is_sqlite = settings.DATABASE_URL.startswith("sqlite:///")
+
+        if is_sqlite:
             db_path = settings.DATABASE_URL[len("sqlite:///"):]
             if db_path and db_path != ":memory:":
                 db_dir = os.path.dirname(db_path)
                 if db_dir:
                     os.makedirs(db_dir, exist_ok=True)
 
-        _engine = create_engine(
-            settings.DATABASE_URL,
-            pool_recycle=3600,
-            echo=False,
-            future=True,
-            pool_size=10,
-            max_overflow=20,
-            connect_args={"connect_timeout": 5} if "postgresql" in settings.DATABASE_URL else {},
-        )
+            # SQLite uses QueuePool but does NOT support pool_size / max_overflow.
+            # check_same_thread=False is required for usage across asyncio.to_thread calls.
+            _engine = create_engine(
+                settings.DATABASE_URL,
+                pool_recycle=3600,
+                echo=False,
+                future=True,
+                connect_args={"check_same_thread": False},
+            )
+
+            # Enable WAL journal mode so concurrent reads and writes from multiple
+            # threads (one per symbol evaluated in asyncio.to_thread) don't produce
+            # silent "database is locked" OperationalErrors.
+            @event.listens_for(_engine, "connect")
+            def _set_wal_mode(dbapi_conn, connection_record):
+                cursor = dbapi_conn.cursor()
+                cursor.execute("PRAGMA journal_mode=WAL")
+                cursor.execute("PRAGMA synchronous=NORMAL")
+                cursor.close()
+
+        else:
+            # PostgreSQL / other — pool_size and max_overflow are valid here.
+            _engine = create_engine(
+                settings.DATABASE_URL,
+                pool_recycle=3600,
+                echo=False,
+                future=True,
+                pool_size=10,
+                max_overflow=20,
+                connect_args={"connect_timeout": 5},
+            )
+
         logger.info(f"Database engine created: {settings.DATABASE_URL}")
     return _engine
 

@@ -98,6 +98,7 @@ async def _record_committee_outcome(symbol: str, exit_price: float, exit_reason:
             record_strategy_outcome(
                 regime=snap.get("regime", "default"),
                 strategy_name=selected_strategy,
+                action=action,
                 pnl=realized_pnl,
                 return_pct=return_pct
             )
@@ -685,7 +686,7 @@ async def run_periodic_post_mortem() -> None:
 
 async def run_trading_bot() -> None:
     """Main trading bot loop."""
-    global ex
+    global ex, strategy, risk_manager
 
     try:
         logger.info("Initializing Apex Oracle Bot v2.0.0")
@@ -727,47 +728,65 @@ async def run_trading_bot() -> None:
         await start_fastapi_server_async()
         logger.info("FastAPI server started")
 
+        # Helper: log any unhandled exception from a background task before
+        # removing it from active_tasks. Without this, a crashing killswitch /
+        # heartbeat / analyzer silently disappears with no log entry and never
+        # restarts — leaving safety mechanisms offline.
+        def _on_task_done(task: asyncio.Task) -> None:
+            active_tasks.discard(task)
+            if not task.cancelled():
+                try:
+                    exc = task.exception()
+                    if exc:
+                        logger.critical(
+                            f"Background task '{task.get_name()}' died with an unhandled "
+                            f"exception and will NOT restart: {exc}",
+                            exc_info=exc,
+                        )
+                except asyncio.CancelledError:
+                    pass
+
         # Start Killswitch monitor
         active_tasks: set[asyncio.Task] = set()
-        ks_task = asyncio.create_task(monitor_killswitch(risk_manager))
+        ks_task = asyncio.create_task(monitor_killswitch(risk_manager), name="killswitch")
         active_tasks.add(ks_task)
-        ks_task.add_done_callback(active_tasks.discard)
+        ks_task.add_done_callback(_on_task_done)
         logger.info("Killswitch monitor started")
 
         # Start Scan Heartbeat
-        heartbeat_task = asyncio.create_task(scan_heartbeat_loop())
+        heartbeat_task = asyncio.create_task(scan_heartbeat_loop(), name="heartbeat")
         active_tasks.add(heartbeat_task)
-        heartbeat_task.add_done_callback(active_tasks.discard)
+        heartbeat_task.add_done_callback(_on_task_done)
         logger.info("Scan heartbeat monitor started")
 
         # Start periodic analyzer
-        analyzer_task = asyncio.create_task(run_periodic_analyzer())
+        analyzer_task = asyncio.create_task(run_periodic_analyzer(), name="analyzer")
         active_tasks.add(analyzer_task)
-        analyzer_task.add_done_callback(active_tasks.discard)
+        analyzer_task.add_done_callback(_on_task_done)
         logger.info("Periodic analyzer task started")
 
         # Start periodic AutoML pipeline
-        automl_task = asyncio.create_task(run_periodic_automl())
+        automl_task = asyncio.create_task(run_periodic_automl(), name="automl")
         active_tasks.add(automl_task)
-        automl_task.add_done_callback(active_tasks.discard)
+        automl_task.add_done_callback(_on_task_done)
         logger.info("Periodic AutoML pipeline task started")
 
         # Start periodic Evolution Cull
-        cull_task = asyncio.create_task(run_periodic_cull())
+        cull_task = asyncio.create_task(run_periodic_cull(), name="cull")
         active_tasks.add(cull_task)
-        cull_task.add_done_callback(active_tasks.discard)
+        cull_task.add_done_callback(_on_task_done)
         logger.info("Periodic Evolution Cull task started")
 
         # Start periodic Automatic Research
-        research_task = asyncio.create_task(run_periodic_research())
+        research_task = asyncio.create_task(run_periodic_research(), name="research")
         active_tasks.add(research_task)
-        research_task.add_done_callback(active_tasks.discard)
+        research_task.add_done_callback(_on_task_done)
         logger.info("Periodic Automatic Research task started")
 
         # Start periodic Post-Mortem AI
-        post_mortem_task = asyncio.create_task(run_periodic_post_mortem())
+        post_mortem_task = asyncio.create_task(run_periodic_post_mortem(), name="post_mortem")
         active_tasks.add(post_mortem_task)
-        post_mortem_task.add_done_callback(active_tasks.discard)
+        post_mortem_task.add_done_callback(_on_task_done)
         logger.info("Periodic Post-Mortem AI task started")
 
         # Main trading loop

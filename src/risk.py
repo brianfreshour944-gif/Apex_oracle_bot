@@ -191,6 +191,16 @@ class RiskManager:
             position_size = min(position_size, settings.MAX_SINGLE_TRADE_USD / current_price)
             position_size = round(position_size, 6)
 
+            # Guard: NaN propagates silently through np.clip/min/round without raising.
+            # If confidence was NaN (e.g. scoring math underflowed) we must reject here
+            # before a NaN qty reaches the exchange API.
+            if position_size != position_size:  # IEEE 754: only NaN != NaN
+                logger.error(
+                    f"calculate_position_size({symbol}): NaN position size detected "
+                    f"(confidence={confidence}). Rejecting trade."
+                )
+                return 0.0, "error: NaN position size (confidence was NaN)"
+
             return position_size, "ok"
 
         except Exception as e:

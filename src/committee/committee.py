@@ -208,14 +208,15 @@ async def run_committee(symbol: str, price: float, signal: Dict[str, Any]) -> Co
     weights = REGIME_WEIGHT_MATRIX.get(regime, REGIME_WEIGHT_MATRIX["default"])
     symbol_threshold = get_symbol_threshold(symbol)
 
-    # Run all 5 brains asynchronously
-    raw_votes = [
-        await transformer_brain(symbol, price, signal),
-        await quant_brain(symbol, price, signal),
-        await momentum_brain(symbol, price, signal),
-        await sentinel_brain(symbol, price, signal),
-        await llm_brain(symbol, price, signal),
-    ]
+    # Run all 5 brains concurrently (transformer_brain uses asyncio.to_thread + network I/O,
+    # so running sequentially would serialize its latency before every other brain).
+    raw_votes = list(await asyncio.gather(
+        transformer_brain(symbol, price, signal),
+        quant_brain(symbol, price, signal),
+        momentum_brain(symbol, price, signal),
+        sentinel_brain(symbol, price, signal),
+        llm_brain(symbol, price, signal),
+    ))
 
     # Re-weight votes dynamically based on active regime matrix
     votes = []
