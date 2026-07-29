@@ -24,6 +24,15 @@ class TradingStrategy:
         self._regime_cache: Dict[str, Tuple[float, Dict[str, Any]]] = {}
         self._cache_ttl = cache_ttl
         self.backtest = backtest
+        # Tracks which strategy opened the currently-open position per symbol.
+        # Without this, select_best_strategy() is called fresh every cycle and
+        # can hand an open position to a DIFFERENT strategy's exit logic than
+        # the one that opened it -- e.g. Grid opens a position, then Scalping
+        # becomes "best" next cycle and closes it under its own unrelated
+        # 1%-target rule. That produces rapid, incoherent open/close churn
+        # (a new position roughly every LOOP_INTERVAL_SEC) instead of any one
+        # strategy's logic actually playing out.
+        self._active_strategy: Dict[str, str] = {}
 
     async def analyze_market_regime(self, symbol: str, timeframe: str = "1D", limit: int = 100) -> Dict[str, Any]:
         """Analyze market regime using Hurst exponent, ATR, and RSI with TTL caching."""
@@ -304,7 +313,14 @@ class TradingStrategy:
             from src.strategy_selector import select_best_strategy
             from src.execution_strategies import STRATEGIES
 
-            best_strategy_name = select_best_strategy(regime)
+            if position:
+                # Reuse whichever strategy opened this position (if we have a
+                # record of it) instead of re-selecting every cycle -- see the
+                # note on self._active_strategy in __init__ for why.
+                best_strategy_name = self._active_strategy.get(symbol) or select_best_strategy(regime)
+                self._active_strategy[symbol] = best_strategy_name
+            else:
+                best_strategy_name = select_best_strategy(regime)
             active_strategy = STRATEGIES.get(best_strategy_name)
 
             if not active_strategy:
@@ -325,10 +341,12 @@ class TradingStrategy:
                     exit_signal["atr"] = regime_data.get("atr", 0.0)
                     exit_signal["features"] = regime_data
                     exit_signal["selected_strategy"] = best_strategy_name
+                    self._active_strategy.pop(symbol, None)  # position is closing
                     return exit_signal
 
                 # Strategy-based exit
                 if action == "close":
+                    self._active_strategy.pop(symbol, None)  # position is closing
                     return {
                         "symbol": symbol,
                         "action": "close",
@@ -341,6 +359,7 @@ class TradingStrategy:
                     }
 
             if action in ["buy", "sell"]:
+                self._active_strategy[symbol] = best_strategy_name  # remember who's opening this
                 return {
                     "symbol": symbol,
                     "action": action,
