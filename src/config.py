@@ -124,11 +124,21 @@ class TradingBotSettings(BaseSettings):
         description="Time limit to hold open positions in hours",
         gt=0
     )
-    DUST_VALUE_USD: float = Field(
-        default=1.50,
-        description="Below this market value a holding is considered dust",
-        gt=0
-    )
+DUST_VALUE_USD: float = Field(
+    default=1.50,
+    description="Below this market value a holding is considered dust",
+    gt=0
+)
+COOLDOWN_SECONDS_BUY: int = Field(
+    default=300,
+    description="Seconds to block a new entry on a symbol right after closing "
+                "a position on it. Without this, a strategy that both opened and "
+                "closed a position on the same cycle's re-evaluation (or a fresh "
+                "signal on the very next cycle) can immediately re-enter, producing "
+                "rapid open/close churn that bleeds to spread/slippage on every "
+                "round trip instead of a position actually playing out.",
+    ge=0
+)
 
     # --- Regime Classification Thresholds ---
     HURST_TREND_UP: float = Field(
@@ -410,6 +420,7 @@ STOP_LOSS_PCT = settings.STOP_LOSS_PCT
 ATR_STOP_MULTIPLIER = settings.ATR_STOP_MULTIPLIER
 MAX_HOLD_HOURS = settings.MAX_HOLD_HOURS
 DUST_VALUE_USD = settings.DUST_VALUE_USD
+COOLDOWN_SECONDS_BUY = settings.COOLDOWN_SECONDS_BUY
 HURST_TREND_UP = settings.HURST_TREND_UP
 HURST_MEAN_REVERT = settings.HURST_MEAN_REVERT
 HIGH_VOLATILITY_PCT = settings.HIGH_VOLATILITY_PCT
