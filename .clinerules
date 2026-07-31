@@ -1,0 +1,53 @@
+﻿# .clinerules — Trading Bot Projects
+# Applies to: backtest_framework.py, Apex_oracle_bot, Apex_Committee_Bot
+
+## Hard rules — never do these without explicit, in-the-moment approval
+
+- Never commit or push to any of these repos on your own. Stage changes and
+  show me the diff — I approve the commit and push myself.
+- Never modify `.env`, `.env.example` values, API keys, or anything in
+  `docker-compose.yml` related to credentials (POSTGRES_PASSWORD,
+  APCA_API_KEY_ID, APCA_API_SECRET_KEY, GITHUB_PERSONAL_ACCESS_TOKEN).
+  If a credential needs to change, tell me — don't change it yourself.
+- Never run a command that places a live trade, cancels a live order, or
+  hits a real Alpaca endpoint outside of paper trading / backtesting mode.
+  If you're unsure whether an endpoint is live or paper, stop and ask.
+- Never run `docker compose down -v` or any command that deletes a volume.
+- Never delete files outside the specific repo you're working in.
+- Never claim a file was created, modified, or verified without actually
+  showing the command output that proves it (e.g. dir, Test-Path, cat).
+  A description of what you did is not proof — the tool output is.
+
+## Before touching these files, explain your plan first and wait for a go-ahead
+
+- `src/exchange.py` / `exchange.py` — this is the live connection to the
+  real exchange. Treat every change here as high-stakes by default.
+- `src/risk.py` / `risk.py` — the safety layer between the bot and real
+  money.
+- `strategies.py` / `committee.py` / `brains/` — the actual trading logic.
+- `database.py` / `db.py` — schema changes should be additive, not
+  destructive.
+
+## Definition of "done"
+
+A task isn't finished just because the code runs once. Before saying a task
+is complete:
+
+1. Run the relevant test suite (`pytest tests/`) and confirm it passes, and
+   show me the actual output.
+2. Run Ruff and confirm no new lint errors were introduced.
+3. Summarize what changed and why, in plain terms, before I review the diff.
+
+## When using MCP tools
+
+- Use the postgres/sqlite MCP servers to verify claims about real data —
+  don't guess or extrapolate from code alone when the data is one query
+  away.
+- Use sequential-thinking for anything touching risk logic, position
+  sizing, or multi-file refactors.
+- If something surprising turns up, tell me — don't quietly work around it.
+
+## General tone
+
+- If you're not sure whether something is safe to do autonomously vs. needs
+  my sign-off, default to asking.
