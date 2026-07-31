@@ -1,0 +1,44 @@
+﻿{
+  "[python]": {
+    "editor.defaultFormatter": "charliermarsh.ruff",
+    "editor.formatOnSave": true,
+    "editor.codeActionsOnSave": {
+      "source.fixAll.ruff": "explicit",
+      "source.organizeImports.ruff": "explicit"
+    }
+  },
+  "ruff.lint.args": [],
+  "ruff.format.args": [],
+  "python.analysis.typeCheckingMode": "basic",
+  "python.analysis.autoImportCompletions": true,
+  "python.analysis.inlayHints.functionReturnTypes": true,
+  "python.analysis.inlayHints.variableTypes": true,
+  "python.testing.pytestEnabled": true,
+  "python.testing.unittestEnabled": false,
+  "python.testing.pytestArgs": ["tests"],
+  "python.testing.autoTestDiscoverOnSaveEnabled": true,
+  "coverage-gutters.coverageFileNames": ["coverage.xml", "cov.xml"],
+  "coverage-gutters.showLineCoverage": true,
+  "coverage-gutters.showRulerCoverage": true,
+  "coverage-gutters.showGutterCoverage": true,
+  "errorLens.enabledDiagnosticLevels": ["error", "warning", "info"],
+  "gitlens.hovers.currentLine.over": "line",
+  "gitlens.currentLine.enabled": true,
+  "gitlens.codeLens.enabled": true,
+  "todo-tree.general.tags": ["TODO", "FIXME", "BUG", "HACK"],
+  "editor.rulers": [88],
+  "editor.bracketPairColorization.enabled": true,
+  "files.trimTrailingWhitespace": true,
+  "files.insertFinalNewline": true,
+  "peacock.color": "#007ACC",
+  "workbench.colorCustomizations": {
+    "titleBar.activeBackground": "#007ACC",
+    "titleBar.activeForeground": "#e7e7e7",
+    "titleBar.inactiveBackground": "#00507e",
+    "titleBar.inactiveForeground": "#e7e7e766",
+    "statusBar.background": "#005a9e",
+    "statusBar.foreground": "#e7e7e7",
+    "activityBar.background": "#007ACC",
+    "activityBar.foreground": "#e7e7e7"
+  }
+}

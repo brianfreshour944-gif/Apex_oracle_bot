@@ -69,7 +69,6 @@ data/
 !requirements.txt
 
 # IDEs
-.vscode/
 .idea/
 
 # Trained model artifacts (generated, not source)
