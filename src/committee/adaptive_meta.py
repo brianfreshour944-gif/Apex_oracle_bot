@@ -119,6 +119,12 @@ class AdaptiveMetaLearner:
         self.timestamp = datetime.now(timezone.utc).isoformat()
         self.last_update: Optional[str] = None
         self.sample_count = 0
+        # Per-regime sample counts. `sample_count` above is the aggregate across
+        # all regimes/symbols and must NOT be used to gate whether a specific
+        # regime's weights are "live-ready" -- a regime with almost no samples
+        # of its own could otherwise ride on volume accumulated by other,
+        # unrelated regimes. Use `sample_count_for_regime()` for that gate.
+        self.regime_sample_count: Dict[str, int] = {}
         self.weights: Dict[str, Dict[str, float]] = {}
         self.performance: Dict[str, Dict[str, BrainPerformance]] = {}
 
@@ -253,6 +259,7 @@ class AdaptiveMetaLearner:
         # the sample but leave weights untouched.
         if profitable_dir is None:
             self.sample_count += 1
+            self.regime_sample_count[regime] = self.regime_sample_count.get(regime, 0) + 1
             self.last_update = datetime.now(timezone.utc).isoformat()
             report.new_weights = old
             self._save_safely()
@@ -284,9 +291,16 @@ class AdaptiveMetaLearner:
         report.max_delta = max((abs(new[b] - old.get(b, 0.0)) for b in new), default=0.0)
 
         self.sample_count += 1
+        self.regime_sample_count[regime] = self.regime_sample_count.get(regime, 0) + 1
         self.last_update = datetime.now(timezone.utc).isoformat()
         self._save_safely()
         return report
+
+    def sample_count_for_regime(self, regime: str) -> int:
+        """Per-regime sample count. Use this (not the aggregate `sample_count`)
+        to gate whether a given regime's learned weights are trustworthy --
+        see the constructor comment on `regime_sample_count`."""
+        return self.regime_sample_count.get(regime, 0)
 
     # ---- persistence ----------------------------------------------------
 
@@ -296,6 +310,7 @@ class AdaptiveMetaLearner:
             "timestamp": self.timestamp,
             "last_update": self.last_update,
             "sample_count": self.sample_count,
+            "regime_sample_count": self.regime_sample_count,
             "learning_rate": self.learning_rate,
             "min_weight": self.min_weight,
             "max_weight": self.max_weight,
@@ -360,6 +375,10 @@ class AdaptiveMetaLearner:
             self.timestamp = str(state.get("timestamp", self.timestamp))
             self.last_update = state.get("last_update")
             self.sample_count = int(state.get("sample_count", 0))
+            raw_regime_counts = state.get("regime_sample_count", {})
+            self.regime_sample_count = {
+                str(k): int(v) for k, v in raw_regime_counts.items()
+            } if isinstance(raw_regime_counts, dict) else {}
             self.learning_rate = float(state.get("learning_rate", self.learning_rate))
             self.min_weight = float(state.get("min_weight", self.min_weight))
             self.max_weight = float(state.get("max_weight", self.max_weight))
@@ -396,6 +415,7 @@ class AdaptiveMetaLearner:
         self.timestamp = datetime.now(timezone.utc).isoformat()
         self.last_update = None
         self.sample_count = 0
+        self.regime_sample_count = {}
         self.weights = {}
         self.performance = {}
 

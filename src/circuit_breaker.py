@@ -6,7 +6,7 @@ from __future__ import annotations
 import asyncio  
 import time  
 from enum import Enum  
-from typing import Callable, TypeVar  
+from typing import Callable, Optional, TypeVar  
   
 from src.config import settings  
 from src.logging_config import get_logger  

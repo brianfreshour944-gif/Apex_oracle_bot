@@ -19,7 +19,6 @@ class TradingStrategy:
 
     def __init__(self, exchange: AlpacaExchange, cache_ttl: float = 60.0, backtest: bool = False):
         self.exchange = exchange
-        self.current_regime = "neutral"
         self.last_analysis_time = None
         self._regime_cache: Dict[str, Tuple[float, Dict[str, Any]]] = {}
         self._cache_ttl = cache_ttl
@@ -103,8 +102,6 @@ class TradingStrategy:
             else:
                 regime = "neutral"
 
-            self.current_regime = regime
-            
             volatility = float(np.std(returns) * 100) if len(returns) > 0 else 0.0
             logger.info(
                 f"Regime: {regime.upper()} "
@@ -246,8 +243,13 @@ class TradingStrategy:
             np.abs(high - prev_close),
             np.abs(low - prev_close),
         ])
-        atr = np.mean(tr)
-        return float(atr)
+        # Guard against a single bad/NaN bar corrupting the entire ATR value.
+        # np.mean propagates one NaN through the whole result, which would
+        # then silently disable downstream `atr > threshold` veto checks
+        # (NaN comparisons are always False in Python/numpy) exactly when
+        # the input data is worst.
+        atr = np.nanmean(tr) if np.any(np.isfinite(tr)) else 0.0
+        return float(np.nan_to_num(atr, nan=0.0, posinf=0.0, neginf=0.0))
 
     def _calculate_rsi(self, prices: np.ndarray, period: int = 14) -> Tuple[float, float]:
         """Calculate Relative Strength Index. Returns (current_rsi, prev_rsi)."""

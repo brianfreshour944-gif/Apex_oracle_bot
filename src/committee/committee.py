@@ -318,7 +318,7 @@ async def run_committee(symbol: str, price: float, signal: Dict[str, Any]) -> Co
             decision = learner.combine(raw_votes, regime)
             adaptive_weights = decision.weights
             explanation = decision.explanation
-            live_ready = learner.sample_count >= settings.ADAPTIVE_MIN_TRADES_BEFORE_LIVE
+            live_ready = learner.sample_count_for_regime(regime) >= settings.ADAPTIVE_MIN_TRADES_BEFORE_LIVE
             if settings.ADAPTIVE_ML_ENABLED and live_ready:
                 adaptive_used = True
                 winner, score = decision.action, decision.confidence
