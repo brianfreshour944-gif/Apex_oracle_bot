@@ -55,7 +55,7 @@ def crossover(parent_a: Dict[str, Any], parent_b: Dict[str, Any]) -> Dict[str, A
 def mutate(genome: Dict[str, Any]) -> Dict[str, Any]:
     """Randomly mutate genes."""
     child = copy.deepcopy(genome)
-    for key, bounds in PARAM_BOUNDS.keys():
+    for key, bounds in PARAM_BOUNDS.items():
         if random.random() < MUTATION_RATE:
             if isinstance(child[key], float):
                 # Nudge by a random amount

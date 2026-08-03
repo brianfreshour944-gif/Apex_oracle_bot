@@ -13,6 +13,8 @@ import time
 import json
 import subprocess
 from datetime import datetime
+
+sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 from src.logging_config import get_logger
 
 logger = get_logger("kaggle_sync")

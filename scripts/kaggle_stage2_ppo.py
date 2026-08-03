@@ -60,15 +60,15 @@ def main():
     
     models_dir = os.path.join(project_root, "models")
     champion_path = os.path.join(models_dir, "champion_model.pth")
-    ppo_meta_path = os.path.join(models_dir, "ppo_meta.zip")
+    ppo_meta_path = os.path.join(models_dir, "ppo_meta_weights.zip")
     
     if os.path.exists(champion_path):
         shutil.copy(champion_path, os.path.join(kaggle_out, "champion_model.pth"))
         logger.info(f"✅ Saved champion_model.pth -> {kaggle_out}")
         
     if os.path.exists(ppo_meta_path):
-        shutil.copy(ppo_meta_path, os.path.join(kaggle_out, "ppo_meta.zip"))
-        logger.info(f"✅ Saved ppo_meta.zip -> {kaggle_out}")
+        shutil.copy(ppo_meta_path, os.path.join(kaggle_out, "ppo_meta_weights.zip"))
+        logger.info(f"✅ Saved ppo_meta_weights.zip -> {kaggle_out}")
         
     logger.info("=====================================================")
     logger.info("STAGE 2 COMPLETE. Ready for Stage 3 (Live Trading).")

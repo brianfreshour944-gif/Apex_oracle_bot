@@ -14,6 +14,9 @@ import sys
 import os
 import subprocess
 from datetime import datetime
+
+
+sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 from src.logging_config import get_logger
 
 logger = get_logger("nightly_orchestrator")

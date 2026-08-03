@@ -66,7 +66,7 @@ def main():
     
     models_dir = os.path.join(project_root, "models")
     
-    for filename in ["grok_gqa_v9_best.pth", "champion_model.pth", "ppo_meta.zip", "feature_scaler.pkl"]:
+    for filename in ["grok_gqa_v9_best.pth", "champion_model.pth", "ppo_meta_weights.zip", "feature_scaler.pkl"]:
         src = os.path.join(models_dir, filename)
         if os.path.exists(src):
             shutil.copy(src, os.path.join(kaggle_out, filename))
