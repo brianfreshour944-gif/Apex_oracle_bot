@@ -39,6 +39,7 @@ import numpy as np
 
 import json
 import os
+from typing import Dict
 
 def get_active_features():
     path = os.path.join(os.path.dirname(__file__), '..', 'data', 'active_features.json')
@@ -137,13 +138,20 @@ def _z_score(series: pd.Series, window: int = 20, fill: float = 0.0) -> pd.Serie
 
 # ── Main feature function ─────────────────────────────────────────────────────
 
-def add_features(df: pd.DataFrame) -> pd.DataFrame:
+# Per-symbol feature cache: maps symbol -> (last_bar_timestamp, feature_df)
+_FEATURE_CACHE: Dict[str, tuple] = {}
+
+
+def add_features(df: pd.DataFrame, symbol: str = "") -> pd.DataFrame:
     """
     Compute 11 institutional-grade features from OHLCV + VWAP + trade_count bars.
 
     Args:
         df: DataFrame with columns: open, high, low, close, volume, vwap, trade_count
             (vwap falls back to close; trade_count falls back to 1 if missing)
+        symbol: Optional symbol key for caching. When provided and the DataFrame's
+            latest bar timestamp matches the cached timestamp, the cached feature
+            DataFrame is returned instead of recomputing.
 
     Returns:
         DataFrame with exactly FEATURE_COLS columns, all float64, no NaN/inf.
@@ -328,5 +336,16 @@ def add_features(df: pd.DataFrame) -> pd.DataFrame:
         if col not in d.columns:
             d[col] = FEATURE_DEFAULTS.get(col, 0.0)
         d[col] = _sanitize(d[col], fill=FEATURE_DEFAULTS.get(col, 0.0))
+
+    # Cache the result per symbol so subsequent calls with the same
+    # latest bar timestamp return the cached DataFrame instead of
+    # recomputing all 19 rolling-window features.
+    if symbol and not df.empty:
+        latest_ts = df.index[-1] if hasattr(df.index, "__getitem__") else None
+        if latest_ts is not None:
+            cached_ts, cached_df = _FEATURE_CACHE.get(symbol, (None, None))
+            if cached_ts is not None and cached_ts == latest_ts:
+                return cached_df
+            _FEATURE_CACHE[symbol] = (latest_ts, d[MASTER_FEATURE_COLS])
 
     return d[MASTER_FEATURE_COLS]

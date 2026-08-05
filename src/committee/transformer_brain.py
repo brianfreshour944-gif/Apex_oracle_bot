@@ -83,6 +83,24 @@ except ImportError:
 
 _predictor_instance = None
 _predictor_initialized = False
+_data_client_cache = None
+_data_client_cache_key = None
+
+
+def _get_data_client():
+    """Return a cached CryptoHistoricalDataClient, creating one only
+    when the API credentials change. Avoids creating a new client
+    (and its underlying HTTP session) on every inference call."""
+    global _data_client_cache, _data_client_cache_key
+    key = (os.getenv("APCA_API_KEY_ID"), os.getenv("APCA_API_SECRET_KEY"))
+    if _data_client_cache is not None and _data_client_cache_key == key:
+        return _data_client_cache
+    from alpaca.data.historical import CryptoHistoricalDataClient
+    _data_client_cache = CryptoHistoricalDataClient(
+        api_key=key[0], secret_key=key[1]
+    )
+    _data_client_cache_key = key
+    return _data_client_cache
 
 def get_ml_predictor():
     """Lazily loads the PyTorch SafeMLPredictor model."""
@@ -226,7 +244,7 @@ async def transformer_brain(symbol: str, price: float, signal: dict) -> BrainVot
                     if not key or not secret:
                         return None
 
-                    client = CryptoHistoricalDataClient(api_key=key, secret_key=secret)
+                    client = _get_data_client()
                     alpaca_symbol = symbol.replace("-", "/") if "-" in symbol else symbol
                     df_raw = fetch_bars(client, alpaca_symbol, days=2)
                     if df_raw is None or len(df_raw) < 32:
@@ -241,11 +259,7 @@ async def transformer_brain(symbol: str, price: float, signal: dict) -> BrainVot
                 try:
                   if is_live:
                     from src.onchain_data import fetch_derivatives_data
-                    import asyncio
-                    loop = asyncio.new_event_loop()
-                    asyncio.set_event_loop(loop)
-                    deriv_data = loop.run_until_complete(fetch_derivatives_data(symbol))
-                    loop.close()
+                    deriv_data = asyncio.run(fetch_derivatives_data(symbol))
                     
                     df_raw["funding_rate"] = deriv_data.get("funding_rate", 0.0)
                     df_raw["open_interest"] = deriv_data.get("open_interest", 0.0)

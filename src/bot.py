@@ -211,7 +211,7 @@ def get_banned_symbols():
         logger.warning(f"Failed to read banned symbols: {e}")
         return _banned_symbols_cache
 
-async def process_signal_for_symbol(symbol: str, current_price: float, risk_manager: RiskManager, strategy: TradingStrategy, ex: AlpacaExchange) -> None:
+async def process_signal_for_symbol(symbol: str, current_price: float, risk_manager: RiskManager, strategy: TradingStrategy, ex: AlpacaExchange, regime_flag: dict = None, banned_symbols: set = None) -> None:
     """Processes signal for a single symbol asynchronously."""
     try:
         # Get current positions
@@ -293,7 +293,7 @@ async def process_signal_for_symbol(symbol: str, current_price: float, risk_mana
                 elif action_str not in ["PASS", "HOLD", "SKIP"]:
                     action_str = f"{action_str} {v.confidence:.2f}"
                 dashboard.append(f"{v.name.capitalize():<14} {action_str}")
-                
+                 
             dashboard.append("")
             
             committee_action = committee_result.action.upper()
@@ -301,7 +301,7 @@ async def process_signal_for_symbol(symbol: str, current_price: float, risk_mana
                 committee_action = "VETO"
             elif committee_action == "STAND_ASIDE":
                 committee_action = "PASS"
-                
+                 
             dashboard.append(f"Committee...... {committee_action}")
             dashboard.append("")
 
@@ -330,7 +330,8 @@ async def process_signal_for_symbol(symbol: str, current_price: float, risk_mana
         if signal["action"] in ["buy", "sell"]:
             # Ã¢â€â‚¬Ã¢â€â‚¬ REGIME SWITCH CHECK (Only for ENTRY, not EXIT) Ã¢â€â‚¬Ã¢â€â‚¬
             if signal["action"] == "buy":
-                regime_flag = read_regime_flag()
+                if regime_flag is None:
+                    regime_flag = read_regime_flag()
                 if regime_flag.get("pause_oracle", False):
                     dashboard.append("Risk........... VETO")
                     dashboard.append("FINAL.......... NO TRADE")
@@ -340,7 +341,10 @@ async def process_signal_for_symbol(symbol: str, current_price: float, risk_mana
                     return
 
             # Ã¢â€â‚¬Ã¢â€â‚¬ BANNED SYMBOLS CHECK Ã¢â€â‚¬Ã¢â€â‚¬
-            banned = get_banned_symbols()
+            if banned_symbols is None:
+                banned = get_banned_symbols()
+            else:
+                banned = banned_symbols
             if symbol in banned:
                 dashboard.append("Risk........... VETO")
                 dashboard.append("FINAL.......... NO TRADE")
@@ -946,6 +950,8 @@ async def run_trading_bot() -> None:
 
         try:
             while True:
+                regime_flag = read_regime_flag()
+                banned_symbols = get_banned_symbols()
                 for symbol in settings.SYMBOLS:
                     try:
                         latest_bar_df = await ex.get_latest_bar(symbol)
@@ -953,9 +959,22 @@ async def run_trading_bot() -> None:
                             continue
                         
                         current_price = latest_bar_df["close"][0]
-                        
+
+                        # Prune expired cooldown entries to prevent
+                        # the dict from growing without bound.
+                        now_ts = time.time()
+                        expired = [k for k, v in cooldowns.items() if v < now_ts]
+                        for k in expired:
+                            del cooldowns[k]
+
                         # Dispatch signal processing to a background task
-                        task = asyncio.create_task(process_signal_for_symbol(symbol, current_price, risk_manager, strategy, ex))
+                        task = asyncio.create_task(
+                            process_signal_for_symbol(
+                                symbol, current_price, risk_manager, strategy, ex,
+                                regime_flag=regime_flag,
+                                banned_symbols=banned_symbols,
+                            )
+                        )
                         active_tasks.add(task)
                         task.add_done_callback(active_tasks.discard)
                     except Exception as sym_e:

@@ -23,15 +23,13 @@ class TradingStrategy:
         self._regime_cache: Dict[str, Tuple[float, Dict[str, Any]]] = {}
         self._cache_ttl = cache_ttl
         self.backtest = backtest
-        # Tracks which strategy opened the currently-open position per symbol.
-        # Without this, select_best_strategy() is called fresh every cycle and
-        # can hand an open position to a DIFFERENT strategy's exit logic than
-        # the one that opened it -- e.g. Grid opens a position, then Scalping
-        # becomes "best" next cycle and closes it under its own unrelated
-        # 1%-target rule. That produces rapid, incoherent open/close churn
-        # (a new position roughly every LOOP_INTERVAL_SEC) instead of any one
-        # strategy's logic actually playing out.
         self._active_strategy: Dict[str, str] = {}
+        # Cycle-level caches for on-chain and sentiment data so they
+        # are fetched once per cycle instead of once per symbol.
+        self._cycle_derivatives: Dict[str, Dict[str, float]] = {}
+        self._cycle_sentiment: Dict[str, Dict[str, Any]] = {}
+        self._cycle_derivatives_ts: float = 0.0
+        self._cycle_sentiment_ts: float = 0.0
 
     async def analyze_market_regime(self, symbol: str, timeframe: str = "1D", limit: int = 100) -> Dict[str, Any]:
         """Analyze market regime using Hurst exponent, ATR, and RSI with TTL caching."""
@@ -110,42 +108,53 @@ class TradingStrategy:
                 f"Volatility={volatility:.2f}%"
             )
 
-            # Fetch On-Chain Derivatives Data
+            # Fetch On-Chain Derivatives Data (once per cycle, cached)
             if not self.backtest:
-                try:
-                    from src.onchain_data import fetch_derivatives_data
-                    import asyncio
-                    
-                    deriv_data = await fetch_derivatives_data(symbol)
-                    funding_rate = float(deriv_data.get("funding_rate", 0.0))
-                    open_interest = float(deriv_data.get("open_interest", 0.0))
-                    long_short_ratio = float(deriv_data.get("long_short_ratio", 1.0))
-                    bid_ask_imbalance = float(deriv_data.get("bid_ask_imbalance", 0.0))
-                except Exception as e:
-                    logger.warning(f"Failed to fetch derivatives data for {symbol}: {e}")
-                    funding_rate = 0.0
-                    open_interest = 0.0
-                    long_short_ratio = 1.0
-                    bid_ask_imbalance = 0.0
+                now = time.time()
+                if not self._cycle_derivatives or now - self._cycle_derivatives_ts > 300:
+                    self._cycle_derivatives = {}
+                    self._cycle_derivatives_ts = now
+                if symbol not in self._cycle_derivatives:
+                    try:
+                        from src.onchain_data import fetch_derivatives_data
+                        self._cycle_derivatives[symbol] = await fetch_derivatives_data(symbol)
+                    except Exception as e:
+                        logger.warning(f"Failed to fetch derivatives data for {symbol}: {e}")
+                        self._cycle_derivatives[symbol] = {
+                            "funding_rate": 0.0, "open_interest": 0.0,
+                            "long_short_ratio": 1.0, "bid_ask_imbalance": 0.0,
+                        }
+                deriv_data = self._cycle_derivatives[symbol]
+                funding_rate = float(deriv_data.get("funding_rate", 0.0))
+                open_interest = float(deriv_data.get("open_interest", 0.0))
+                long_short_ratio = float(deriv_data.get("long_short_ratio", 1.0))
+                bid_ask_imbalance = float(deriv_data.get("bid_ask_imbalance", 0.0))
             else:
                 funding_rate = 0.0
                 open_interest = 0.0
                 long_short_ratio = 1.0
                 bid_ask_imbalance = 0.0
-                
-            # Fetch News Sentiment Alternative Data
+                 
+            # Fetch News Sentiment Alternative Data (once per cycle, cached)
             if not self.backtest:
-                try:
-                    from src.sentiment_analyzer import extract_sentiment
-                    sentiment_data = await extract_sentiment(symbol)
-                    sentiment_score = float(sentiment_data.get("sentiment_score", 0.0))
-                    event_type = str(sentiment_data.get("event_type", "none"))
-                    sentiment_conf = float(sentiment_data.get("confidence", 0.0))
-                except Exception as e:
-                    logger.warning(f"Failed to fetch sentiment data for {symbol}: {e}")
-                    sentiment_score = 0.0
-                    event_type = "none"
-                    sentiment_conf = 0.0
+                now = time.time()
+                if not self._cycle_sentiment or now - self._cycle_sentiment_ts > 300:
+                    self._cycle_sentiment = {}
+                    self._cycle_sentiment_ts = now
+                if symbol not in self._cycle_sentiment:
+                    try:
+                        from src.sentiment_analyzer import extract_sentiment
+                        self._cycle_sentiment[symbol] = await extract_sentiment(symbol)
+                    except Exception as e:
+                        logger.warning(f"Failed to fetch sentiment data for {symbol}: {e}")
+                        self._cycle_sentiment[symbol] = {
+                            "sentiment_score": 0.0, "event_type": "none",
+                            "confidence": 0.0,
+                        }
+                sentiment_data = self._cycle_sentiment[symbol]
+                sentiment_score = float(sentiment_data.get("sentiment_score", 0.0))
+                event_type = str(sentiment_data.get("event_type", "none"))
+                sentiment_conf = float(sentiment_data.get("confidence", 0.0))
             else:
                 sentiment_score = 0.0
                 event_type = "none"

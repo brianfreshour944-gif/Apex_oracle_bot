@@ -15,15 +15,21 @@ from src.logging_config import get_logger
   
 logger = get_logger("alerts")  
   
-_last_sent = {}  
-  
-def _in_cooldown(key):  
-    now = time.monotonic()  
-    last = _last_sent.get(key, 0.0)  
-    if now - last < settings.ALERT_COOLDOWN_SEC:  
-        return True  
-    _last_sent[key] = now  
-    return False  
+_last_sent = {}
+
+def _in_cooldown(key):
+    now = time.monotonic()
+    last = _last_sent.get(key, 0.0)
+    if now - last < settings.ALERT_COOLDOWN_SEC:
+        return True
+    _last_sent[key] = now
+    # Prune entries older than 2x the cooldown to prevent
+    # unbounded growth of the _last_sent dict.
+    cutoff = now - settings.ALERT_COOLDOWN_SEC * 2
+    expired = [k for k, v in _last_sent.items() if v < cutoff]
+    for k in expired:
+        del _last_sent[k]
+    return False
   
 async def send_alert(message, key="default"):  
     if _in_cooldown(key):  

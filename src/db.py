@@ -163,6 +163,9 @@ _engine = None
 # measured ~7ms of pure event-loop blocking time per decision-snapshot write
 # even when nothing had changed since the previous call.
 _tables_ensured = False
+# In-memory cache for get_open_snapshot() results, keyed by symbol.
+# Invalidated when close_decision_snapshot() is called for that symbol.
+_open_snapshot_cache: Dict[str, Optional[Dict[str, Any]]] = {}
 
 
 def _ensure_indexes() -> None:
@@ -321,9 +324,53 @@ def save_decision_snapshot(
         return False
 
 
-def get_open_snapshot(symbol: str) -> Optional[Dict[str, Any]]:
-    """Return the most recent open decision snapshot for a symbol, as a dict."""
+def save_decision_snapshots_batch(
+    records: List[Dict[str, Any]]
+) -> int:
+    """Persist multiple decision snapshots in a single DB session.
+
+    Each record has the same keys as save_decision_snapshot().
+    Returns the number of snapshots saved."""
+    if not records:
+        return 0
     try:
+        _ensure_tables()
+        with get_db_session() as session:
+            for rec in records:
+                snap = DecisionSnapshot(
+                    decision_id=rec["decision_id"],
+                    symbol=rec["symbol"],
+                    regime=rec.get("regime", "default"),
+                    final_action=rec.get("final_action", "hold"),
+                    confidence=float(rec.get("confidence", 0.0)),
+                    size_multiplier=float(rec.get("size_multiplier", 1.0)),
+                    entry_price=float(rec.get("entry_price", 0.0)),
+                    qty=float(rec.get("qty", 0.0)),
+                    votes_json=json.dumps(rec.get("brain_votes", {}) or {}),
+                    feature_snapshot_json=rec.get("feature_snapshot_json", "{}"),
+                    causal_reasoning_json=rec.get("causal_reasoning_json", "{}"),
+                    status="open",
+                )
+                session.merge(snap)
+            session.commit()
+        return len(records)
+    except Exception as e:
+        logger.warning(f"save_decision_snapshots_batch failed (non-fatal): {e}")
+        return 0
+
+
+def get_open_snapshot(symbol: str) -> Optional[Dict[str, Any]]:
+    """Return the most recent open decision snapshot for a symbol, as a dict.
+
+    Results are cached in-memory per symbol for the duration of the
+    trading cycle. The cache is invalidated when close_decision_snapshot()
+    is called for the same symbol."""
+    try:
+        # Check the in-memory cache first
+        cached = _open_snapshot_cache.get(symbol)
+        if cached is not None:
+            return cached
+
         with get_db_session() as session:
             stmt = (
                 select(DecisionSnapshot)
@@ -334,7 +381,7 @@ def get_open_snapshot(symbol: str) -> Optional[Dict[str, Any]]:
             row = session.execute(stmt).scalars().first()
             if row is None:
                 return None
-            return {
+            result = {
                 "decision_id": row.decision_id,
                 "symbol": row.symbol,
                 "regime": row.regime,
@@ -346,6 +393,8 @@ def get_open_snapshot(symbol: str) -> Optional[Dict[str, Any]]:
                 "feature_snapshot": json.loads(row.feature_snapshot_json or "{}"),
                 "created_at": row.created_at.isoformat() if row.created_at else None,
             }
+            _open_snapshot_cache[symbol] = result
+            return result
     except Exception as e:
         logger.warning(f"get_open_snapshot failed (non-fatal): {e}")
         return None
@@ -361,8 +410,22 @@ def close_decision_snapshot(
     max_favorable_pct: float = 0.0,
     max_adverse_pct: float = 0.0,
 ) -> bool:
-    """Mark a snapshot closed and record its realized outcome."""
+    """Mark a snapshot closed and record its realized outcome.
+
+    Also invalidates the in-memory open-snapshot cache for the
+    affected symbol so that a subsequent get_open_snapshot() call
+    returns the updated (closed) state."""
     try:
+        # Invalidate the in-memory cache for this symbol.
+        # We need to find the symbol first.
+        try:
+            with get_db_session() as session:
+                row = session.get(DecisionSnapshot, decision_id)
+                if row is not None:
+                    _open_snapshot_cache.pop(row.symbol, None)
+        except Exception:
+            pass
+
         with get_db_session() as session:
             row = session.get(DecisionSnapshot, decision_id)
             if row is None:
