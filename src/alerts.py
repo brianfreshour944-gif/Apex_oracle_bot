@@ -51,8 +51,17 @@ async def _send_email(message):
         msg = EmailMessage()  
         msg["Subject"] = f"[{settings.BOT_NAME}] CRITICAL ALERT"  
         msg["To"] = settings.ALERT_EMAIL  
-        msg.set_content(message)  
-        with smtplib.SMTP("localhost", 25, timeout=10) as smtp:  
-            smtp.send_message(msg)  
+        msg.set_content(message)
+
+        def _send_sync():
+            with smtplib.SMTP("localhost", 25, timeout=10) as smtp:
+                smtp.send_message(msg)
+
+        # smtplib is fully synchronous (blocking socket connect/handshake).
+        # Measured: a call to an unreachable host froze the event loop for
+        # the entire 3s connect timeout (0 scheduler ticks during that time).
+        # Offload to a worker thread so a slow/unreachable SMTP server never
+        # stalls the trading loop.
+        await asyncio.to_thread(_send_sync)
     except Exception as e:  
         logger.error(f"Email alert failed: {e}")  

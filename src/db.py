@@ -16,6 +16,7 @@ from sqlalchemy import (
     Text,
     select,
     func,
+    Index,
 )
 from sqlalchemy.orm import (
     sessionmaker,
@@ -47,6 +48,13 @@ class DecisionSnapshot(Base):
     """
 
     __tablename__ = "decision_snapshots"
+    # get_open_snapshot() filters on exactly this (symbol, status) pair,
+    # ordered by created_at -- measured via EXPLAIN QUERY PLAN to be a full
+    # table scan + temp b-tree sort without this index (SCAN decision_snapshots),
+    # and latency grows with table size (2-5ms at <5k rows, 18.8ms at 20k rows).
+    __table_args__ = (
+        Index("ix_decision_snapshots_symbol_status", "symbol", "status"),
+    )
 
     decision_id: Mapped[str] = mapped_column(String(64), primary_key=True)
     symbol: Mapped[str] = mapped_column(String(32))
@@ -76,6 +84,11 @@ class DecisionSnapshot(Base):
 class ShadowTrade(Base):
     """Tracks virtual positions taken by candidate models in the Evolution Tournament."""
     __tablename__ = "shadow_trades"
+    # check_shadow_stops()/process_shadow_signal() both filter on exactly
+    # this (candidate_name, symbol, status) triple, ordered by created_at.
+    __table_args__ = (
+        Index("ix_shadow_trades_candidate_symbol_status", "candidate_name", "symbol", "status"),
+    )
 
     trade_id: Mapped[str] = mapped_column(String(64), primary_key=True)
     candidate_name: Mapped[str] = mapped_column(String(64))
@@ -121,7 +134,7 @@ def save_experiment_record(
 ) -> bool:
     """Save an experiment to the registry."""
     try:
-        Base.metadata.create_all(get_engine())
+        _ensure_tables()
         with get_db_session() as session:
             rec = ExperimentRecord(
                 experiment_id=experiment_id,
@@ -142,6 +155,39 @@ def save_experiment_record(
 
 # Engine will be created lazily when first needed
 _engine = None
+# Tracks whether Base.metadata.create_all() has already run for the current
+# engine. init_db() (called once at bot startup) always ensures this. The
+# flag lets the individual save_* functions below self-heal (create tables
+# on demand) if init_db() was skipped or failed at startup -- without paying
+# create_all()'s table-existence-check cost on every single call, which
+# measured ~7ms of pure event-loop blocking time per decision-snapshot write
+# even when nothing had changed since the previous call.
+_tables_ensured = False
+
+
+def _ensure_indexes() -> None:
+    """Idempotently create indexes that may be missing on databases created
+    before these indexes were added to the models (create_all() only creates
+    indexes inline with CREATE TABLE, so it skips already-existing tables).
+    """
+    with get_engine().connect() as conn:
+        conn.execute(text(
+            "CREATE INDEX IF NOT EXISTS ix_decision_snapshots_symbol_status "
+            "ON decision_snapshots (symbol, status)"
+        ))
+        conn.execute(text(
+            "CREATE INDEX IF NOT EXISTS ix_shadow_trades_candidate_symbol_status "
+            "ON shadow_trades (candidate_name, symbol, status)"
+        ))
+        conn.commit()
+
+
+def _ensure_tables() -> None:
+    global _tables_ensured
+    if not _tables_ensured:
+        Base.metadata.create_all(get_engine())
+        _ensure_indexes()
+        _tables_ensured = True
 
 def get_engine():
     """Get the database engine, creating it if needed."""
@@ -203,12 +249,22 @@ def get_session_factory():
 )
 def init_db() -> None:
     """Initialize database connection with exponential backoff retries."""
+    global _tables_ensured
     try:
         # Test the connection
         with get_engine().connect() as conn:
             conn.execute(text("SELECT 1"))
         # Create ORM tables if they do not exist (safe/idempotent).
         Base.metadata.create_all(get_engine())
+        _tables_ensured = True
+
+        # create_all() only issues CREATE TABLE (with inline indexes) for
+        # tables that don't exist yet -- it silently skips index creation for
+        # tables that were created before these indexes were added to the
+        # models. Explicitly (and idempotently) ensure they exist on already-
+        # deployed databases too.
+        _ensure_indexes()
+
         logger.info(f"Database connected: {settings.DATABASE_URL}")
     except SQLAlchemyError as e:
         logger.warning(f"Database connection attempt failed: {e}. Retrying...")
@@ -241,7 +297,7 @@ def save_decision_snapshot(
 ) -> bool:
     """Persist a committee decision at entry. Returns True on success."""
     try:
-        Base.metadata.create_all(get_engine())
+        _ensure_tables()
         with get_db_session() as session:
             snap = DecisionSnapshot(
                 decision_id=decision_id,

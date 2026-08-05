@@ -18,28 +18,44 @@ logger = get_logger("attribution")
 
 async def analyze_closed_trade(decision_id: str) -> Optional[Dict[str, Any]]:
     """Analyzes a single closed trade to provide causal attribution."""
-    
-    with get_db_session() as session:
-        row = session.get(DecisionSnapshot, decision_id)
-        if row is None or row.status != "closed":
-            logger.warning(f"Attribution failed: Trade {decision_id} not found or not closed.")
-            return None
-            
-        symbol = row.symbol
-        pnl = row.realized_pnl
-        ret_pct = row.return_pct
-        action = row.final_action
-        
-        try:
-            votes = json.loads(row.votes_json)
-        except Exception:
-            votes = {}
-            
-        try:
-            causal = json.loads(row.causal_reasoning_json)
-        except Exception:
-            causal = {}
-            
+
+    def _load_snapshot():
+        with get_db_session() as session:
+            row = session.get(DecisionSnapshot, decision_id)
+            if row is None or row.status != "closed":
+                return None
+            return {
+                "symbol": row.symbol,
+                "pnl": row.realized_pnl,
+                "ret_pct": row.return_pct,
+                "action": row.final_action,
+                "votes_json": row.votes_json,
+                "causal_reasoning_json": row.causal_reasoning_json,
+            }
+
+    # get_db_session()/session.get() is a synchronous SQLAlchemy call; run it
+    # off the event loop so this fire-and-forget attribution task can't stall
+    # other symbols' concurrent processing while it waits on the DB.
+    loaded = await asyncio.to_thread(_load_snapshot)
+    if loaded is None:
+        logger.warning(f"Attribution failed: Trade {decision_id} not found or not closed.")
+        return None
+
+    symbol = loaded["symbol"]
+    pnl = loaded["pnl"]
+    ret_pct = loaded["ret_pct"]
+    action = loaded["action"]
+
+    try:
+        votes = json.loads(loaded["votes_json"])
+    except Exception:
+        votes = {}
+
+    try:
+        causal = json.loads(loaded["causal_reasoning_json"])
+    except Exception:
+        causal = {}
+
     # Build prompt for LLM
     prompt = f"""
     You are the Chief Quantitative Researcher at an algorithmic trading firm.

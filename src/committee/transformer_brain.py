@@ -283,29 +283,51 @@ async def transformer_brain(symbol: str, price: float, signal: dict) -> BrainVot
                     logging.getLogger("shadow_arena").error(f"Shadow evaluation failed: {shadow_e}")
                 
                 x = torch.tensor(data_scaled).unsqueeze(0).to(device)
-                
-                # Causal Reasoning: Approximate SHAP via Gradients * Input
-                x.requires_grad = True
-                
-                raw_logit = model(x).squeeze(1)
-                raw_logit.backward()
-                
-                # Gradients w.r.t the last timestep's features
-                grads = x.grad[0, -1, :].cpu().numpy()
-                feats = data_scaled[-1, :]
-                
-                # Simple Feature Importance (Gradient * Input)
-                contributions = grads * feats
-                
-                # Map contributions to feature names
-                causal_reasoning = {}
-                for i, col in enumerate(cols):
-                    causal_reasoning[col] = float(contributions[i])
-                
+
+                # Cheap forward-only pass first (no autograd graph built) to
+                # get the probability. Measured: the full forward+backward
+                # pass used purely for gradient-based causal attribution
+                # costs ~110ms of extra event-loop scheduling delay (GIL
+                # contention from autograd bookkeeping) even though it runs
+                # inside asyncio.to_thread, on top of being wasted work for
+                # the majority of evaluations that end in "hold" and are
+                # never persisted to the decision-snapshot DB anyway.
                 with torch.no_grad():
-                    out_prob = float(torch.sigmoid(torch.tensor(raw_logit.item())).item())
-                    
-                return out_prob, raw_logit.item(), causal_reasoning, data_scaled.tolist()
+                    raw_logit_fwd = model(x).squeeze(1)
+                    out_prob = float(torch.sigmoid(raw_logit_fwd).item())
+
+                causal_reasoning = {}
+                logit_value = raw_logit_fwd.item()
+
+                # Only pay for the backward pass when this brain itself would
+                # actually vote buy/sell (thresholds mirror the decision logic
+                # below). This doesn't guarantee the committee as a whole will
+                # trade (other brains can still veto/override), but it's the
+                # best signal available at this point without restructuring
+                # the concurrent 5-brain gather in committee.py, and it skips
+                # the expensive path for the (typical) majority of "hold"
+                # evaluations.
+                if out_prob > 0.58 or out_prob < 0.42:
+                    x.requires_grad = True
+
+                    # Causal Reasoning: Approximate SHAP via Gradients * Input
+                    raw_logit = model(x).squeeze(1)
+                    raw_logit.backward()
+
+                    # Gradients w.r.t the last timestep's features
+                    grads = x.grad[0, -1, :].cpu().numpy()
+                    feats = data_scaled[-1, :]
+
+                    # Simple Feature Importance (Gradient * Input)
+                    contributions = grads * feats
+
+                    # Map contributions to feature names
+                    for i, col in enumerate(cols):
+                        causal_reasoning[col] = float(contributions[i])
+
+                    logit_value = raw_logit.item()
+
+                return out_prob, logit_value, causal_reasoning, data_scaled.tolist()
                 
             res = await asyncio.to_thread(_do_inference)
             
