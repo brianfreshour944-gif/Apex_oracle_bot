@@ -6,7 +6,7 @@ from typing import Any, Dict, List, Optional
 import asyncio
 import time
 import datetime
-from tenacity import retry, stop_after_attempt, wait_exponential
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception
 
 import polars as pl
 
@@ -23,8 +23,26 @@ from alpaca.trading.enums import OrderSide, TimeInForce, OrderStatus
 from alpaca.data.historical.crypto import CryptoHistoricalDataClient
 from alpaca.data.requests import CryptoBarsRequest, CryptoLatestBarRequest
 from alpaca.data.timeframe import TimeFrame, TimeFrameUnit
+from alpaca.common.exceptions import APIError
 
 logger = get_logger(__name__)
+
+
+def _is_rate_limit_error(exception: Exception) -> bool:
+    """Return True if the exception is an Alpaca 429 rate-limit error."""
+    if isinstance(exception, APIError):
+        return getattr(exception, "status_code", 0) == 429
+    return False
+
+
+def _retry_on_rate_limit(exception: Exception) -> bool:
+    """Retry predicate: retry on rate-limit errors with longer backoff."""
+    return _is_rate_limit_error(exception)
+
+
+class RateLimitError(Exception):
+    """Raised when Alpaca rate limit is exceeded and all retries are exhausted."""
+    pass
 
 
 @runtime_checkable
@@ -53,6 +71,10 @@ class AlpacaExchange:
         self.circuit_breaker = CircuitBreaker("alpaca_exchange")
         # Internal lock for mimicking rate limiter if needed, though SDK handles some
         self._lock = asyncio.Lock()
+        # Rate-limit tracking
+        self._rate_limit_remaining = 200
+        self._rate_limit_reset = 0.0
+        self._rate_limit_hits = 0
 
     async def load(self) -> None:
         """Initialize the exchange client and verify credentials."""
@@ -84,7 +106,7 @@ class AlpacaExchange:
         self.data_client = None
         logger.info("Alpaca client closed")
 
-    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
+    @retry(retry=retry_if_exception(_retry_on_rate_limit), stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
     async def get_account(self) -> Dict[str, Any]:
         """Get account information (formatted to dict for compatibility)."""
         if not self.trading_client:
@@ -116,7 +138,7 @@ class AlpacaExchange:
                 return TimeFrame(val, TimeFrameUnit.Day)
         return TimeFrame.Day
 
-    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
+    @retry(retry=retry_if_exception(_retry_on_rate_limit), stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
     async def get_bars(self, symbol: str, timeframe: str = "1D", limit: int = 100) -> pl.DataFrame:
         """Get crypto market data using alpaca-py and convert to Polars."""
         if not self.data_client:
@@ -168,7 +190,7 @@ class AlpacaExchange:
             
         return pl.DataFrame()
 
-    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
+    @retry(retry=retry_if_exception(_retry_on_rate_limit), stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
     async def get_latest_bar(self, symbol: str) -> pl.DataFrame:
         """Get the latest bar for a crypto symbol."""
         if not self.data_client:

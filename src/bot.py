@@ -109,7 +109,7 @@ async def _record_committee_outcome(symbol: str, exit_price: float, exit_reason:
                 return_pct=return_pct
             )
 
-        # Ã¢â€�?â‚¬Ã¢â€�?â‚¬ Trigger Causal Attribution Ã¢â€�?â‚¬Ã¢â€�?â‚¬
+        # Ã¢â€�?â‚¬Ã¢â€�?â‚¬ Trigger Causal Attribution Ã¢â€�?â‚¬Ã¢â€�?â‚¬
         async def _run_attribution():
             try:
                 from src.attribution import analyze_closed_trade
@@ -212,14 +212,16 @@ def get_banned_symbols():
         logger.warning(f"Failed to read banned symbols: {e}")
         return _banned_symbols_cache
 
-async def process_signal_for_symbol(symbol: str, current_price: float, risk_manager: RiskManager, strategy: TradingStrategy, ex: AlpacaExchange, regime_flag: dict = None, banned_symbols: set = None) -> None:
+async def process_signal_for_symbol(symbol: str, current_price: float, risk_manager: RiskManager, strategy: TradingStrategy, ex: AlpacaExchange, positions: list = None, regime_flag: dict = None, banned_symbols: set = None) -> None:
     """Processes signal for a single symbol asynchronously."""
     # Get or create lock for this symbol
     lock = _symbol_locks.setdefault(symbol, asyncio.Lock())
     async with lock:
         try:
-            # Get current positions
-            positions = await ex.get_positions()
+            # Use pre-fetched positions from the main cycle if available,
+            # otherwise fetch fresh (fallback for direct calls).
+            if positions is None:
+                positions = await ex.get_positions()
             position_dict = {p["symbol"].replace("/", ""): p for p in positions}
             current_position = position_dict.get(symbol.replace("/", ""))
     
@@ -270,11 +272,11 @@ async def process_signal_for_symbol(symbol: str, current_price: float, risk_mana
             if signal["action"] == "close":
                 pass # proceed directly to close logic below
             else:
-                # Ã¢â€�?â‚¬Ã¢â€�?â‚¬ 5-BRAIN ENSEMBLE COMMITTEE EVALUATION Ã¢â€�?â‚¬Ã¢â€�?â‚¬
+                # Ã¢â€�?â‚¬Ã¢â€�?â‚¬ 5-BRAIN ENSEMBLE COMMITTEE EVALUATION Ã¢â€�?â‚¬Ã¢â€�?â‚¬
                 from src.committee.committee import run_committee
                 committee_result = await run_committee(symbol, current_price, signal)
     
-                # Ã¢â€�?â‚¬Ã¢â€�?â‚¬ BUILD REGIME DASHBOARD Ã¢â€�?â‚¬Ã¢â€�?â‚¬
+                # Ã¢â€�?â‚¬Ã¢â€�?â‚¬ BUILD REGIME DASHBOARD Ã¢â€�?â‚¬Ã¢â€�?â‚¬
                 dashboard = []
                 dashboard.append("==============================")
                 dashboard.append(f"{symbol}")
@@ -332,7 +334,7 @@ async def process_signal_for_symbol(symbol: str, current_price: float, risk_mana
                 signal["confidence"] = committee_result.score
     
             if signal["action"] in ["buy", "sell"]:
-                # Ã¢â€�?â‚¬Ã¢â€�?â‚¬ REGIME SWITCH CHECK (Only for ENTRY, not EXIT) Ã¢â€�?â‚¬Ã¢â€�?â‚¬
+                # Ã¢â€�?â‚¬Ã¢â€�?â‚¬ REGIME SWITCH CHECK (Only for ENTRY, not EXIT) Ã¢â€�?â‚¬Ã¢â€�?â‚¬
                 if signal["action"] == "buy":
                     if regime_flag is None:
                         regime_flag = read_regime_flag()
@@ -344,7 +346,7 @@ async def process_signal_for_symbol(symbol: str, current_price: float, risk_mana
                         print("\n".join(dashboard), flush=True)
                         return
     
-                # Ã¢â€�?â‚¬Ã¢â€�?â‚¬ BANNED SYMBOLS CHECK Ã¢â€�?â‚¬Ã¢â€�?â‚¬
+                # Ã¢â€�?â‚¬Ã¢â€�?â‚¬ BANNED SYMBOLS CHECK Ã¢â€�?â‚¬Ã¢â€�?â‚¬
                 if banned_symbols is None:
                     banned = get_banned_symbols()
                 else:
@@ -909,7 +911,7 @@ async def run_trading_bot() -> None:
         # Helper: log any unhandled exception from a background task before
         # removing it from active_tasks. Without this, a crashing killswitch /
         # heartbeat / analyzer silently disappears with no log entry and never
-        # restarts Ã¢â‚¬â€�? leaving safety mechanisms offline.
+        # restarts Ã¢â‚¬â€�? leaving safety mechanisms offline.
         def _on_task_done(task: asyncio.Task) -> None:
             active_tasks.discard(task)
             if not task.cancelled():
@@ -980,25 +982,35 @@ async def run_trading_bot() -> None:
             while True:
                 regime_flag = read_regime_flag()
                 banned_symbols = get_banned_symbols()
-                for symbol in settings.SYMBOLS:
+
+                # Fetch all latest bars concurrently instead of sequentially
+                bar_tasks = {symbol: ex.get_latest_bar(symbol) for symbol in settings.SYMBOLS}
+                bar_results = await asyncio.gather(*bar_tasks.values(), return_exceptions=True)
+
+                now_ts = time.time()
+                expired = [k for k, v in cooldowns.items() if v < now_ts]
+                for k in expired:
+                    del cooldowns[k]
+
+                # Fetch positions once per cycle (was fetched redundantly per symbol)
+                positions = await ex.get_positions()
+
+                for symbol, bar_result in zip(settings.SYMBOLS, bar_results):
                     try:
-                        latest_bar_df = await ex.get_latest_bar(symbol)
+                        if isinstance(bar_result, Exception):
+                            logger.error(f"[MAIN_LOOP] Error fetching bar for {symbol}: {bar_result}")
+                            continue
+                        latest_bar_df = bar_result
                         if latest_bar_df.is_empty():
                             continue
-                        
-                        current_price = latest_bar_df["close"][0]
 
-                        # Prune expired cooldown entries to prevent
-                        # the dict from growing without bound.
-                        now_ts = time.time()
-                        expired = [k for k, v in cooldowns.items() if v < now_ts]
-                        for k in expired:
-                            del cooldowns[k]
+                        current_price = latest_bar_df["close"][0]
 
                         # Dispatch signal processing to a background task
                         task = asyncio.create_task(
                             process_signal_for_symbol(
                                 symbol, current_price, risk_manager, strategy, ex,
+                                positions=positions,
                                 regime_flag=regime_flag,
                                 banned_symbols=banned_symbols,
                             )
@@ -1006,8 +1018,8 @@ async def run_trading_bot() -> None:
                         active_tasks.add(task)
                         task.add_done_callback(active_tasks.discard)
                     except Exception as sym_e:
-                        logger.error(f"[MAIN_LOOP] Error polling {symbol}: {sym_e}")
-                        
+                        logger.error(f"[MAIN_LOOP] Error processing {symbol}: {sym_e}")
+
                 # Wait for the next evaluation cycle
                 await asyncio.sleep(settings.LOOP_INTERVAL_SEC)
 
