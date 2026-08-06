@@ -279,6 +279,18 @@ class AlpacaExchange:
                 status = poll_info.get("status")
                 if status in (OrderStatus.FILLED.value, OrderStatus.CANCELED.value, OrderStatus.EXPIRED.value, OrderStatus.REJECTED.value, "filled", "canceled", "expired", "rejected"):
                     logger.info(f"Order {order_id} reached final status: {status}")
+                    if status == OrderStatus.FILLED.value or status == "filled":
+                        try:
+                            filled_order = await asyncio.to_thread(self.trading_client.get_order_by_id, order_id)
+                            order_info["filled_avg_price"] = float(filled_order.filled_avg_price) if filled_order.filled_avg_price else 0.0
+                            order_info["filled_qty"] = float(filled_order.filled_qty) if filled_order.filled_qty else 0.0
+                            order_info["commission"] = float(filled_order.commission) if filled_order.commission else 0.0
+                            order_info["slippage"] = 0.0
+                        except Exception:
+                            order_info["filled_avg_price"] = 0.0
+                            order_info["filled_qty"] = 0.0
+                            order_info["commission"] = 0.0
+                            order_info["slippage"] = 0.0
                     return poll_info
             except Exception as e:
                 logger.warning(f"Error polling order {order_id}: {e}")

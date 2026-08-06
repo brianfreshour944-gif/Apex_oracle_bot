@@ -109,7 +109,7 @@ async def _record_committee_outcome(symbol: str, exit_price: float, exit_reason:
                 return_pct=return_pct
             )
 
-        # Ã¢â€â‚¬Ã¢â€â‚¬ Trigger Causal Attribution Ã¢â€â‚¬Ã¢â€â‚¬
+        # Ã¢â€�?â‚¬Ã¢â€�?â‚¬ Trigger Causal Attribution Ã¢â€�?â‚¬Ã¢â€�?â‚¬
         async def _run_attribution():
             try:
                 from src.attribution import analyze_closed_trade
@@ -213,295 +213,322 @@ def get_banned_symbols():
 
 async def process_signal_for_symbol(symbol: str, current_price: float, risk_manager: RiskManager, strategy: TradingStrategy, ex: AlpacaExchange, regime_flag: dict = None, banned_symbols: set = None) -> None:
     """Processes signal for a single symbol asynchronously."""
-    try:
-        # Get current positions
-        positions = await ex.get_positions()
-        position_dict = {p["symbol"].replace("/", ""): p for p in positions}
-        current_position = position_dict.get(symbol.replace("/", ""))
+    # Get or create lock for this symbol
+    lock = _symbol_limits.setdefault(symbol, asyncio.Lock())
+    async with lock:
+        try:
+            # Get current positions
+            positions = await ex.get_positions()
+            position_dict = {p["symbol"].replace("/", ""): p for p in positions}
+            current_position = position_dict.get(symbol.replace("/", ""))
+    
+            # Cooldown check: block a fresh entry right after this symbol closed a
+            # position, but never block evaluation of an EXISTING position's exit
+            # logic (a position we're already holding must always be free to close).
+            if not current_position:
+                now_ts = time.time()
+                cooldown_until = cooldowns.get(symbol, 0)
+                if now_ts < cooldown_until:
+                    remaining = int(cooldown_until - now_ts)
+                    logger.debug(f"[{symbol}] On entry cooldown, {remaining}s remaining -- skipping")
+                    return
+    
+            # Trailing Stop Check
+            if current_position:
+                avg_entry_price = float(current_position.get("avg_entry_price", 0))
+                qty = float(current_position.get("qty", 0))
+                trailing_action = risk_manager.check_trailing_stop(symbol, current_price, avg_entry_price, qty)
+                
+                if trailing_action == "close":
+                    side = "sell" if qty > 0 else "buy"
+                    qty_abs = abs(qty)
+                    order_result = await ex.create_order(
+                        symbol=symbol,
+                        qty=qty_abs,
+                        side=side,
+                        type="market"
+                    )
+                    logger.info(f"Trailing Stop Executed: {symbol}")
+                    await send_telegram_alert(f"Ã°Å¸Å¡Â¨ <b>Trailing Stop Triggered</b>\nSymbol: {symbol}\nClosed {qty} @ ${current_price:.2f}")
+                    cooldowns[symbol] = time.time() + settings.COOLDOWN_SECONDS_BUY
+                    await _record_committee_outcome(symbol, current_price, exit_reason="trailing_stop")
+                    return  # Skip standard signals
+    
+            # Generate trading signal
+            signal = await strategy.generate_trading_signal(
+                symbol,
+                current_price,
+                current_position
+            )
+    
+            logger.debug("[SCAN] Signal for {symbol} @ ${current_price:.2f}: {action} (regime: {regime}, RSI: {rsi:.2f})",
+                         symbol=symbol, current_price=current_price, action=signal["action"],
+                         regime=signal["regime"], rsi=signal["rsi"])
+    
+            # Bypass committee for hard exits (SL/TP)
+            if signal["action"] == "close":
+                pass # proceed directly to close logic below
+            else:
+                # Ã¢â€�?â‚¬Ã¢â€�?â‚¬ 5-BRAIN ENSEMBLE COMMITTEE EVALUATION Ã¢â€�?â‚¬Ã¢â€�?â‚¬
+                from src.committee.committee import run_committee
+                committee_result = await run_committee(symbol, current_price, signal)
+    
+                # Ã¢â€�?â‚¬Ã¢â€�?â‚¬ BUILD REGIME DASHBOARD Ã¢â€�?â‚¬Ã¢â€�?â‚¬
+                dashboard = []
+                dashboard.append("==============================")
+                dashboard.append(f"{symbol}")
+                dashboard.append("")
+                
+                regime_str = signal.get("regime", "UNKNOWN").upper()
+                hurst = signal.get("features", {}).get("hurst", 0.0)
+                atr = signal.get("atr", 0.0)
+                atr_pct = (atr / current_price * 100) if current_price > 0 else 0.0
+                
+                dashboard.append(f"Regime........ {regime_str}")
+                dashboard.append(f"Hurst......... {hurst:.2f}")
+                dashboard.append(f"ATR........... {atr_pct:.1f}%")
+                dashboard.append("")
+                
+                for v in committee_result.votes:
+                    action_str = v.action.upper()
+                    if action_str == "STAND_ASIDE":
+                        action_str = "PASS"
+                    elif action_str not in ["PASS", "HOLD", "SKIP"]:
+                        action_str = f"{action_str} {v.confidence:.2f}"
+                    dashboard.append(f"{v.name.capitalize():<14} {action_str}")
+                     
+                dashboard.append("")
+                
+                committee_action = committee_result.action.upper()
+                if committee_result.vetoed:
+                    committee_action = "VETO"
+                elif committee_action == "STAND_ASIDE":
+                    committee_action = "PASS"
+                     
+                dashboard.append(f"Committee...... {committee_action}")
+                dashboard.append("")
+    
+                if committee_result.vetoed:
+                    dashboard.append("FINAL.......... NO TRADE")
+                    dashboard.append(f"Reason......... {committee_result.veto_reason}")
+                    dashboard.append("==============================")
+                    print("\n".join(dashboard), flush=True)
+                    latest_scan_results[symbol] = {"score": committee_result.score, "action": "VETO", "price": current_price}
+                    return
+    
+                if committee_result.action in ["stand_aside", "skip", "hold"]:
+                    dashboard.append("FINAL.......... NO TRADE")
+                    dashboard.append("Reason......... Committee Consensus")
+                    dashboard.append("==============================")
+                    print("\n".join(dashboard), flush=True)
+                    latest_scan_results[symbol] = {"score": committee_result.score, "action": committee_result.action.upper(), "price": current_price}
+                    return
+    
+                latest_scan_results[symbol] = {"score": committee_result.score, "action": committee_result.action.upper(), "price": current_price}
+    
+                # Override original signal action & confidence with committee's consensus decision
+                signal["action"] = committee_result.action
+                signal["confidence"] = committee_result.score
+    
+            if signal["action"] in ["buy", "sell"]:
+                # Ã¢â€�?â‚¬Ã¢â€�?â‚¬ REGIME SWITCH CHECK (Only for ENTRY, not EXIT) Ã¢â€�?â‚¬Ã¢â€�?â‚¬
+                if signal["action"] == "buy":
+                    if regime_flag is None:
+                        regime_flag = read_regime_flag()
+                    if regime_flag.get("pause_oracle", False):
+                        dashboard.append("Risk........... VETO")
+                        dashboard.append("FINAL.......... NO TRADE")
+                        dashboard.append("Reason......... Oracle Paused (Regime Switch)")
+                        dashboard.append("==============================")
+                        print("\n".join(dashboard), flush=True)
+                        return
+    
+                # Ã¢â€�?â‚¬Ã¢â€�?â‚¬ BANNED SYMBOLS CHECK Ã¢â€�?â‚¬Ã¢â€�?â‚¬
+                if banned_symbols is None:
+                    banned = get_banned_symbols()
+                else:
+                    banned = banned_symbols
+                if symbol in banned:
+                    dashboard.append("Risk........... VETO")
+                    dashboard.append("FINAL.......... NO TRADE")
+                    dashboard.append("Reason......... Symbol Banned")
+                    dashboard.append("==============================")
+                    print("\n".join(dashboard), flush=True)
+                    return
+    
+                # Check position limit before entering
+                # Reuse the `positions` list already fetched at the top of this
+                # function (bot.py:213) instead of letting update_account_status()
+                # fetch it again -- measured: this redundancy previously cost 2-3x
+                # get_positions()/get_account() calls per symbol per cycle.
+                risk_status = await risk_manager.update_account_status(positions=positions)
+                if risk_status["status"] == "position_limit_exceeded":
+                    dashboard.append("Risk........... VETO")
+                    dashboard.append("FINAL.......... NO TRADE")
+                    dashboard.append("Reason......... Position limit reached")
+                    dashboard.append("==============================")
+                    print("\n".join(dashboard), flush=True)
+                    return
+                if risk_status["status"] == "exposure_limit_exceeded":
+                    dashboard.append("Risk........... VETO")
+                    dashboard.append("FINAL.......... NO TRADE")
+                    dashboard.append("Reason......... Exposure cap reached")
+                    dashboard.append("==============================")
+                    print("\n".join(dashboard), flush=True)
+                    return
+    
+                # Calculate position size
+                position_size, sizing_status = risk_manager.calculate_position_size(
+                    symbol,
+                    current_price,
+                    signal["regime"],
+                    atr=signal.get("atr"),
+                    confidence=signal.get("confidence", 1.0)
+                )
+    
+                if sizing_status != "ok":
+                    dashboard.append("Risk........... VETO")
+                    dashboard.append("FINAL.......... NO TRADE")
+                    dashboard.append(f"Reason......... {sizing_status}")
+                    dashboard.append("==============================")
+                    print("\n".join(dashboard), flush=True)
+                    return
+                    
+                dashboard.append("Risk........... PASS")
+                dashboard.append("")
+                dashboard.append(f"FINAL.......... EXECUTE {signal['action'].upper()}")
+                dashboard.append("==============================")
+                print("\n".join(dashboard), flush=True)
+                    
+                # Apply Regime Switch Multiplier if buying
+                if signal["action"] == "buy":
+                    multiplier = regime_flag.get("oracle_multiplier", 1.0)
+                    position_size = position_size * multiplier
+    
+                # Apply Committee Confidence Sizing Multiplier (Higher confidence = Larger trade size)
+                committee_mult = getattr(committee_result, "size_multiplier", 1.0)
+                position_size = position_size * committee_mult
+                position_size = round(position_size, 6)
+                logger.info(f"Ã°Å¸â€œÅ  Applied Committee Sizing Multiplier ({committee_mult:.2f}x based on score {committee_result.score:.2f}) Ã¢â€ â€™ Final Qty: {position_size}")
+    
+                # Atomically check and reserve exposure to prevent a race condition
+                # where concurrently-evaluated symbols could each pass an individual
+                # exposure check before any of their sibling orders have settled.
+                # This may approve a SMALLER notional than requested (capped to
+                # remaining headroom) rather than an all-or-nothing veto, so
+                # available capacity actually gets used instead of sitting idle.
+                notional = current_price * position_size
+                # Pass the current_exposure already computed by update_account_status()
+                # above so this doesn't re-fetch account/positions a third time AND
+                # so the exposure lock's critical section is pure in-memory
+                # arithmetic instead of holding the lock across a network round
+                # trip (measured: this previously serialized ~2.85s across 15
+                # concurrently-evaluated symbols in the same cycle).
+                approved_notional, reserve_reason = await risk_manager.check_and_reserve_exposure(
+                    notional, current_exposure=risk_status.get("current_exposure")
+                )
+                if approved_notional <= 0:
+                    logger.warning(f"[{symbol}] Order vetoed: {reserve_reason}")
+                    return
+    
+                if approved_notional < notional:
+                    scale = approved_notional / notional
+                    original_size = position_size
+                    position_size = round(position_size * scale, 6)
+                    logger.info(f"[{symbol}] Position size reduced to fit exposure headroom: {position_size} (was {original_size}, ${approved_notional:.2f} of ${notional:.2f} requested)")
+                    if position_size <= 0:
+                        logger.warning(f"[{symbol}] Order vetoed: scaled position size rounded to zero")
+                        return
+    
+                # Place order
+                order_result = await ex.create_order(
+                    symbol=symbol,
+                    qty=position_size,
+                    side=signal["action"],
+                    type="market"
+                )
+    
+                filled_price = order_result.get("filled_avg_price", 0.0)
+                commission = order_result.get("commission", 0.0)
+                if filled_price > 0:
+                    expected_price = current_price
+                    slippage_bps = abs(filled_price - expected_price) / expected_price * 10000
+                    if slippage_bps > 1.0:
+                        logger.warning(f"[SLIPPAGE] {symbol} {signal['action']}: expected=${expected_price:.2f} actual=${filled_price:.2f} slippage={slippage_bps:.1f}bps commission=${commission:.4f}")
+                    else:
+                        logger.info(f"[FILL] {symbol} {signal['action']}: filled=${filled_price:.2f} commission=${commission:.4f}")
+                    if commission > 0:
+                        logger.info(f"[FEE] {symbol} {signal['action']}: commission=${commission:.4f}")
 
-        # Cooldown check: block a fresh entry right after this symbol closed a
-        # position, but never block evaluation of an EXISTING position's exit
-        # logic (a position we're already holding must always be free to close).
-        if not current_position:
-            now_ts = time.time()
-            cooldown_until = cooldowns.get(symbol, 0)
-            if now_ts < cooldown_until:
-                remaining = int(cooldown_until - now_ts)
-                logger.debug(f"[{symbol}] On entry cooldown, {remaining}s remaining -- skipping")
-                return
-
-        # Trailing Stop Check
-        if current_position:
-            avg_entry_price = float(current_position.get("avg_entry_price", 0))
-            qty = float(current_position.get("qty", 0))
-            trailing_action = risk_manager.check_trailing_stop(symbol, current_price, avg_entry_price, qty)
-            
-            if trailing_action == "close":
+                logger.info(f"[TRADE] Order executed: {signal['action'].upper()} {position_size} {symbol} @ ${current_price:.2f}")
+                logger.debug(f"[TRADE] Order result: {order_result}")
+                await send_telegram_alert(f"Ã°Å¸â€œË† <b>Order Executed</b>\nSymbol: {symbol}\nAction: {signal['action'].upper()}\nQty: {position_size}\nPrice: ${current_price:.2f}")
+    
+                # Persist committee decision snapshot for the adaptive meta-learner
+                # (fail-safe; closed out with realized PnL when the position exits).
+                try:
+                    from src.db import save_decision_snapshot
+                    await asyncio.to_thread(
+                        save_decision_snapshot,
+                        decision_id=committee_result.decision_id,
+                        symbol=symbol,
+                        regime=signal.get("regime", "default"),
+                        final_action=signal["action"],
+                        confidence=committee_result.score,
+                        size_multiplier=getattr(committee_result, "size_multiplier", 1.0),
+                        entry_price=current_price,
+                        qty=position_size,
+                        brain_votes={v.name: v.action for v in committee_result.votes},
+                        feature_snapshot_json=json.dumps({
+                            "atr": signal.get("atr"),
+                            "rsi": signal.get("rsi"),
+                            "macd": signal.get("macd"),
+                            "selected_strategy": signal.get("selected_strategy"),
+                        }),
+                        causal_reasoning_json=json.dumps({
+                            v.name: getattr(v, "causal_reasoning", None) 
+                            for v in committee_result.votes if getattr(v, "causal_reasoning", None)
+                        })
+                    )
+                except Exception as db_e:
+                    logger.warning(f"Decision snapshot persist failed for {symbol} (non-fatal): {db_e}")
+    
+            elif signal["action"] == "close" and current_position:
+    
+                # Close existing position
+                qty = float(current_position["qty"])
                 side = "sell" if qty > 0 else "buy"
                 qty_abs = abs(qty)
+    
                 order_result = await ex.create_order(
                     symbol=symbol,
                     qty=qty_abs,
                     side=side,
                     type="market"
                 )
-                logger.info(f"Trailing Stop Executed: {symbol}")
-                await send_telegram_alert(f"Ã°Å¸Å¡Â¨ <b>Trailing Stop Triggered</b>\nSymbol: {symbol}\nClosed {qty} @ ${current_price:.2f}")
+    
+                filled_price = order_result.get("filled_avg_price", 0.0)
+                commission = order_result.get("commission", 0.0)
+                if filled_price > 0:
+                    expected_price = current_price
+                    slippage_bps = abs(filled_price - expected_price) / expected_price * 10000
+                    if slippage_bps > 1.0:
+                        logger.warning(f"[SLIPPAGE] {symbol} close: expected=${expected_price:.2f} actual=${filled_price:.2f} slippage={slippage_bps:.1f}bps commission=${commission:.4f}")
+                    else:
+                        logger.info(f"[FILL] {symbol} close: filled=${filled_price:.2f} commission=${commission:.4f}")
+                    if commission > 0:
+                        logger.info(f"[FEE] {symbol} close: commission=${commission:.4f}")
+
+                logger.info(f"[TRADE] Position closed: {symbol} (was {qty}) - reason: {signal.get('reason', 'unknown')}")
+                logger.debug(f"[TRADE] Close order result: {order_result}")
+                await send_telegram_alert(f"Ã°Å¸â€œâ€° <b>Position Closed</b>\nSymbol: {symbol}\nReason: {signal.get('reason', 'unknown')}")
                 cooldowns[symbol] = time.time() + settings.COOLDOWN_SECONDS_BUY
-                await _record_committee_outcome(symbol, current_price, exit_reason="trailing_stop")
-                return  # Skip standard signals
-
-        # Generate trading signal
-        signal = await strategy.generate_trading_signal(
-            symbol,
-            current_price,
-            current_position
-        )
-
-        logger.debug("[SCAN] Signal for {symbol} @ ${current_price:.2f}: {action} (regime: {regime}, RSI: {rsi:.2f})",
-                     symbol=symbol, current_price=current_price, action=signal["action"],
-                     regime=signal["regime"], rsi=signal["rsi"])
-
-        # Bypass committee for hard exits (SL/TP)
-        if signal["action"] == "close":
-            pass # proceed directly to close logic below
-        else:
-            # Ã¢â€â‚¬Ã¢â€â‚¬ 5-BRAIN ENSEMBLE COMMITTEE EVALUATION Ã¢â€â‚¬Ã¢â€â‚¬
-            from src.committee.committee import run_committee
-            committee_result = await run_committee(symbol, current_price, signal)
-
-            # Ã¢â€â‚¬Ã¢â€â‚¬ BUILD REGIME DASHBOARD Ã¢â€â‚¬Ã¢â€â‚¬
-            dashboard = []
-            dashboard.append("==============================")
-            dashboard.append(f"{symbol}")
-            dashboard.append("")
-            
-            regime_str = signal.get("regime", "UNKNOWN").upper()
-            hurst = signal.get("features", {}).get("hurst", 0.0)
-            atr = signal.get("atr", 0.0)
-            atr_pct = (atr / current_price * 100) if current_price > 0 else 0.0
-            
-            dashboard.append(f"Regime........ {regime_str}")
-            dashboard.append(f"Hurst......... {hurst:.2f}")
-            dashboard.append(f"ATR........... {atr_pct:.1f}%")
-            dashboard.append("")
-            
-            for v in committee_result.votes:
-                action_str = v.action.upper()
-                if action_str == "STAND_ASIDE":
-                    action_str = "PASS"
-                elif action_str not in ["PASS", "HOLD", "SKIP"]:
-                    action_str = f"{action_str} {v.confidence:.2f}"
-                dashboard.append(f"{v.name.capitalize():<14} {action_str}")
-                 
-            dashboard.append("")
-            
-            committee_action = committee_result.action.upper()
-            if committee_result.vetoed:
-                committee_action = "VETO"
-            elif committee_action == "STAND_ASIDE":
-                committee_action = "PASS"
-                 
-            dashboard.append(f"Committee...... {committee_action}")
-            dashboard.append("")
-
-            if committee_result.vetoed:
-                dashboard.append("FINAL.......... NO TRADE")
-                dashboard.append(f"Reason......... {committee_result.veto_reason}")
-                dashboard.append("==============================")
-                print("\n".join(dashboard), flush=True)
-                latest_scan_results[symbol] = {"score": committee_result.score, "action": "VETO", "price": current_price}
-                return
-
-            if committee_result.action in ["stand_aside", "skip", "hold"]:
-                dashboard.append("FINAL.......... NO TRADE")
-                dashboard.append("Reason......... Committee Consensus")
-                dashboard.append("==============================")
-                print("\n".join(dashboard), flush=True)
-                latest_scan_results[symbol] = {"score": committee_result.score, "action": committee_result.action.upper(), "price": current_price}
-                return
-
-            latest_scan_results[symbol] = {"score": committee_result.score, "action": committee_result.action.upper(), "price": current_price}
-
-            # Override original signal action & confidence with committee's consensus decision
-            signal["action"] = committee_result.action
-            signal["confidence"] = committee_result.score
-
-        if signal["action"] in ["buy", "sell"]:
-            # Ã¢â€â‚¬Ã¢â€â‚¬ REGIME SWITCH CHECK (Only for ENTRY, not EXIT) Ã¢â€â‚¬Ã¢â€â‚¬
-            if signal["action"] == "buy":
-                if regime_flag is None:
-                    regime_flag = read_regime_flag()
-                if regime_flag.get("pause_oracle", False):
-                    dashboard.append("Risk........... VETO")
-                    dashboard.append("FINAL.......... NO TRADE")
-                    dashboard.append("Reason......... Oracle Paused (Regime Switch)")
-                    dashboard.append("==============================")
-                    print("\n".join(dashboard), flush=True)
-                    return
-
-            # Ã¢â€â‚¬Ã¢â€â‚¬ BANNED SYMBOLS CHECK Ã¢â€â‚¬Ã¢â€â‚¬
-            if banned_symbols is None:
-                banned = get_banned_symbols()
-            else:
-                banned = banned_symbols
-            if symbol in banned:
-                dashboard.append("Risk........... VETO")
-                dashboard.append("FINAL.......... NO TRADE")
-                dashboard.append("Reason......... Symbol Banned")
-                dashboard.append("==============================")
-                print("\n".join(dashboard), flush=True)
-                return
-
-            # Check position limit before entering
-            # Reuse the `positions` list already fetched at the top of this
-            # function (bot.py:213) instead of letting update_account_status()
-            # fetch it again -- measured: this redundancy previously cost 2-3x
-            # get_positions()/get_account() calls per symbol per cycle.
-            risk_status = await risk_manager.update_account_status(positions=positions)
-            if risk_status["status"] == "position_limit_exceeded":
-                dashboard.append("Risk........... VETO")
-                dashboard.append("FINAL.......... NO TRADE")
-                dashboard.append("Reason......... Position limit reached")
-                dashboard.append("==============================")
-                print("\n".join(dashboard), flush=True)
-                return
-            if risk_status["status"] == "exposure_limit_exceeded":
-                dashboard.append("Risk........... VETO")
-                dashboard.append("FINAL.......... NO TRADE")
-                dashboard.append("Reason......... Exposure cap reached")
-                dashboard.append("==============================")
-                print("\n".join(dashboard), flush=True)
-                return
-
-            # Calculate position size
-            position_size, sizing_status = risk_manager.calculate_position_size(
-                symbol,
-                current_price,
-                signal["regime"],
-                atr=signal.get("atr"),
-                confidence=signal.get("confidence", 1.0)
-            )
-
-            if sizing_status != "ok":
-                dashboard.append("Risk........... VETO")
-                dashboard.append("FINAL.......... NO TRADE")
-                dashboard.append(f"Reason......... {sizing_status}")
-                dashboard.append("==============================")
-                print("\n".join(dashboard), flush=True)
-                return
-                
-            dashboard.append("Risk........... PASS")
-            dashboard.append("")
-            dashboard.append(f"FINAL.......... EXECUTE {signal['action'].upper()}")
-            dashboard.append("==============================")
-            print("\n".join(dashboard), flush=True)
-                
-            # Apply Regime Switch Multiplier if buying
-            if signal["action"] == "buy":
-                multiplier = regime_flag.get("oracle_multiplier", 1.0)
-                position_size = position_size * multiplier
-
-            # Apply Committee Confidence Sizing Multiplier (Higher confidence = Larger trade size)
-            committee_mult = getattr(committee_result, "size_multiplier", 1.0)
-            position_size = position_size * committee_mult
-            position_size = round(position_size, 6)
-            logger.info(f"Ã°Å¸â€œÅ  Applied Committee Sizing Multiplier ({committee_mult:.2f}x based on score {committee_result.score:.2f}) Ã¢â€ â€™ Final Qty: {position_size}")
-
-            # Atomically check and reserve exposure to prevent a race condition
-            # where concurrently-evaluated symbols could each pass an individual
-            # exposure check before any of their sibling orders have settled.
-            # This may approve a SMALLER notional than requested (capped to
-            # remaining headroom) rather than an all-or-nothing veto, so
-            # available capacity actually gets used instead of sitting idle.
-            notional = current_price * position_size
-            # Pass the current_exposure already computed by update_account_status()
-            # above so this doesn't re-fetch account/positions a third time AND
-            # so the exposure lock's critical section is pure in-memory
-            # arithmetic instead of holding the lock across a network round
-            # trip (measured: this previously serialized ~2.85s across 15
-            # concurrently-evaluated symbols in the same cycle).
-            approved_notional, reserve_reason = await risk_manager.check_and_reserve_exposure(
-                notional, current_exposure=risk_status.get("current_exposure")
-            )
-            if approved_notional <= 0:
-                logger.warning(f"[{symbol}] Order vetoed: {reserve_reason}")
-                return
-
-            if approved_notional < notional:
-                scale = approved_notional / notional
-                original_size = position_size
-                position_size = round(position_size * scale, 6)
-                logger.info(f"[{symbol}] Position size reduced to fit exposure headroom: {position_size} (was {original_size}, ${approved_notional:.2f} of ${notional:.2f} requested)")
-                if position_size <= 0:
-                    logger.warning(f"[{symbol}] Order vetoed: scaled position size rounded to zero")
-                    return
-
-            # Place order
-            order_result = await ex.create_order(
-                symbol=symbol,
-                qty=position_size,
-                side=signal["action"],
-                type="market"
-            )
-
-            logger.info(f"[TRADE] Order executed: {signal['action'].upper()} {position_size} {symbol} @ ${current_price:.2f}")
-            logger.debug(f"[TRADE] Order result: {order_result}")
-            await send_telegram_alert(f"Ã°Å¸â€œË† <b>Order Executed</b>\nSymbol: {symbol}\nAction: {signal['action'].upper()}\nQty: {position_size}\nPrice: ${current_price:.2f}")
-
-            # Persist committee decision snapshot for the adaptive meta-learner
-            # (fail-safe; closed out with realized PnL when the position exits).
-            try:
-                from src.db import save_decision_snapshot
-                await asyncio.to_thread(
-                    save_decision_snapshot,
-                    decision_id=committee_result.decision_id,
-                    symbol=symbol,
-                    regime=signal.get("regime", "default"),
-                    final_action=signal["action"],
-                    confidence=committee_result.score,
-                    size_multiplier=getattr(committee_result, "size_multiplier", 1.0),
-                    entry_price=current_price,
-                    qty=position_size,
-                    brain_votes={v.name: v.action for v in committee_result.votes},
-                    feature_snapshot_json=json.dumps({
-                        "atr": signal.get("atr"),
-                        "rsi": signal.get("rsi"),
-                        "macd": signal.get("macd"),
-                        "selected_strategy": signal.get("selected_strategy"),
-                    }),
-                    causal_reasoning_json=json.dumps({
-                        v.name: getattr(v, "causal_reasoning", None) 
-                        for v in committee_result.votes if getattr(v, "causal_reasoning", None)
-                    })
-                )
-            except Exception as db_e:
-                logger.warning(f"Decision snapshot persist failed for {symbol} (non-fatal): {db_e}")
-
-        elif signal["action"] == "close" and current_position:
-
-            # Close existing position
-            qty = float(current_position["qty"])
-            side = "sell" if qty > 0 else "buy"
-            qty_abs = abs(qty)
-
-            order_result = await ex.create_order(
-                symbol=symbol,
-                qty=qty_abs,
-                side=side,
-                type="market"
-            )
-
-            logger.info(f"[TRADE] Position closed: {symbol} (was {qty}) - reason: {signal.get('reason', 'unknown')}")
-            logger.debug(f"[TRADE] Close order result: {order_result}")
-            await send_telegram_alert(f"Ã°Å¸â€œâ€° <b>Position Closed</b>\nSymbol: {symbol}\nReason: {signal.get('reason', 'unknown')}")
-            cooldowns[symbol] = time.time() + settings.COOLDOWN_SECONDS_BUY
-            await _record_committee_outcome(symbol, current_price, exit_reason=signal.get('reason', 'unknown'))
-
-    except Exception as e:
-        logger.error(f"Error processing {symbol}: {e}")
-
-
+                await _record_committee_outcome(symbol, current_price, exit_reason=signal.get('reason', 'unknown'))
+    
+        except Exception as e:
+            logger.error(f"Error processing {symbol}: {e}")
+    
+    
 async def scan_heartbeat_loop() -> None:
     """Background task to print periodic scan summary."""
     global scan_cycle_count, latest_scan_results
@@ -881,7 +908,7 @@ async def run_trading_bot() -> None:
         # Helper: log any unhandled exception from a background task before
         # removing it from active_tasks. Without this, a crashing killswitch /
         # heartbeat / analyzer silently disappears with no log entry and never
-        # restarts Ã¢â‚¬â€ leaving safety mechanisms offline.
+        # restarts Ã¢â‚¬â€�? leaving safety mechanisms offline.
         def _on_task_done(task: asyncio.Task) -> None:
             active_tasks.discard(task)
             if not task.cancelled():

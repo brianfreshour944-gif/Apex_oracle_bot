@@ -162,26 +162,33 @@ class RiskManager:
             account_equity = self.peak_equity if self.peak_equity > 0 else settings.ACCOUNT_BASE
             risk_amount = account_equity * settings.BASE_RISK_PERCENT
 
-            # 2. Volatility Targeting (Equal risk contribution)
-            if atr is not None and atr > 0:
-                stop_distance = atr * getattr(settings, "ATR_STOP_MULTIPLIER", 2.0)
-                position_size = risk_amount / stop_distance
-            else:
-                position_size = risk_amount / current_price
-
-            # Apply regime-specific adjustments
+            # 2. Apply regime-specific adjustments to RISK AMOUNT (not position size),
+            # so the effective dollar risk is transparent and matches the intended percentage.
             if regime == "trending":
-                position_size *= 1.5
+                risk_amount *= 1.5
             elif regime == "mean_reverting":
-                position_size *= 0.8
+                risk_amount *= 0.8
             elif regime == "high_volatility":
-                position_size *= 0.5
+                risk_amount *= 0.5
 
-            # Confidence weighting
+            # Confidence weighting applied to risk amount so the effective risk
+            # is base_risk * conf_weight, not an opaque position-size inflation.
             conf_weight = np.clip(confidence, 0.5, 1.5)
-            position_size *= conf_weight
+            risk_amount *= conf_weight
 
-            # 3. Correlation Matrix & Portfolio VaR
+            # 3. Volatility Targeting (Equal risk contribution)
+            # Use the actual stop-loss percentage distance for sizing so that
+            # the position size matches the real SL trigger distance.
+            stop_distance = current_price * settings.STOP_LOSS_PCT
+            if atr is not None and atr > 0:
+                atr_stop_distance = atr * getattr(settings, "ATR_STOP_MULTIPLIER", 2.0)
+                # Use the smaller of ATR-based and %-based stop distances
+                # so the tighter stop governs the actual risk.
+                stop_distance = min(stop_distance, atr_stop_distance)
+
+            position_size = risk_amount / stop_distance
+
+            # 4. Correlation Matrix & Portfolio VaR
             if returns_matrix and len(returns_matrix) > 1:
                 keys = list(returns_matrix.keys())
                 
@@ -203,7 +210,7 @@ class RiskManager:
                             logger.info(f"Portfolio Optimizer: {symbol} correlation cluster ({avg_corr:.2f}). VaR constraint -> size x{penalty:.2f}.")
                             position_size *= penalty
 
-            # 4. Maximum Sector/Direction Exposure (Hard Cap)
+            # 5. Maximum Sector/Direction Exposure (Hard Cap)
             position_size = min(position_size, settings.MAX_SINGLE_TRADE_USD / current_price)
             position_size = round(position_size, 6)
 
@@ -228,36 +235,45 @@ class RiskManager:
         """
         Check if a trailing stop should be activated or triggered.
         Returns: 'close' if triggered, 'hold' otherwise.
+        Handles both long and short positions.
         """
         if not settings.TRAILING_STOP_ENABLED or avg_entry_price <= 0:
             return "hold"
 
-        # Note: This logic works best for long positions. 
-        # Short positions would track lowest price. Assuming longs for crypto default.
         is_long = float(qty) > 0
-        if not is_long:
-            return "hold" # Simplified: only trail longs
 
-        # Calculate unrealized PnL %
-        unrealized_pct = (current_price - avg_entry_price) / avg_entry_price
+        if is_long:
+            unrealized_pct = (current_price - avg_entry_price) / avg_entry_price
 
-        # Have we reached the activation threshold?
-        if unrealized_pct >= settings.TRAILING_ACTIVATION_PCT:
-            # Track peak price
-            if symbol not in self.peak_prices or current_price > self.peak_prices[symbol]:
-                self.peak_prices[symbol] = current_price
-                
-        # If we are tracking a peak price, check if we've fallen below the distance
-        if symbol in self.peak_prices:
-            peak = self.peak_prices[symbol]
-            drawdown_from_peak = (peak - current_price) / peak
-            
-            if drawdown_from_peak >= settings.TRAILING_DISTANCE_PCT:
-                logger.info(f"Trailing stop triggered for {symbol}: Peak {peak:.2f}, Current {current_price:.2f}")
-                # Reset peak tracker
-                del self.peak_prices[symbol]
-                return "close"
-                
+            if unrealized_pct >= settings.TRAILING_ACTIVATION_PCT:
+                if symbol not in self.peak_prices or current_price > self.peak_prices[symbol]:
+                    self.peak_prices[symbol] = current_price
+
+            if symbol in self.peak_prices:
+                peak = self.peak_prices[symbol]
+                drawdown_from_peak = (peak - current_price) / peak
+
+                if drawdown_from_peak >= settings.TRAILING_DISTANCE_PCT:
+                    logger.info(f"Trailing stop triggered for {symbol}: Peak {peak:.2f}, Current {current_price:.2f}")
+                    del self.peak_prices[symbol]
+                    return "close"
+
+        else:
+            unrealized_pct = (avg_entry_price - current_price) / avg_entry_price
+
+            if unrealized_pct >= settings.TRAILING_ACTIVATION_PCT:
+                if symbol not in self.peak_prices or current_price < self.peak_prices[symbol]:
+                    self.peak_prices[symbol] = current_price
+
+            if symbol in self.peak_prices:
+                trough = self.peak_prices[symbol]
+                drawdown_from_trough = (current_price - trough) / trough
+
+                if drawdown_from_trough >= settings.TRAILING_DISTANCE_PCT:
+                    logger.info(f"Trailing stop triggered for {symbol} (short): Trough {trough:.2f}, Current {current_price:.2f}")
+                    del self.peak_prices[symbol]
+                    return "close"
+
         return "hold"
 
     async def check_killswitch_conditions(self) -> bool:
@@ -334,9 +350,12 @@ class RiskManager:
                 qty_abs = abs(float(qty))
                 market_value = float(position.get("market_value", 0))
                 order_result = await self.exchange.create_order(symbol=symbol, qty=qty_abs, side=side, type="market")
-                current_exposure -= market_value
+                filled_price = order_result.get("filled_avg_price", 0.0)
+                filled_qty = order_result.get("filled_qty", qty_abs)
+                actual_value = filled_price * filled_qty if filled_price > 0 else market_value
+                current_exposure -= actual_value
                 results.append({"symbol": symbol, "closed_qty": qty, "order": order_result})
-                logger.warning(f"Closed {symbol} to reduce exposure (was ${market_value:.2f})")
+                logger.warning(f"Closed {symbol} to reduce exposure (was ${market_value:.2f}, actual=${actual_value:.2f})")
             logger.warning(f"Exposure reduction complete. New exposure: ${current_exposure:.2f} (cap: ${max_portfolio_abs:.2f})")
             return {"status": "exposure_reduced", "results": results, "final_exposure": current_exposure}
         except Exception as e:

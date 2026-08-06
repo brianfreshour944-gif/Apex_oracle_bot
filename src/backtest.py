@@ -7,6 +7,7 @@ This is empirical validation of the deployed strategy - not a placeholder.
 
 from __future__ import annotations
 
+from decimal import Decimal, ROUND_HALF_UP
 import polars as pl
 import numpy as np
 from dataclasses import dataclass, field
@@ -152,8 +153,8 @@ async def run_backtest(
     risk = RiskManager(exchange)
 
     result = BacktestResult(symbol=symbol, start_equity=start_equity, end_equity=start_equity)
-    equity = start_equity
-    result.equity_curve.append(equity)
+    equity = Decimal(str(start_equity))
+    result.equity_curve.append(float(equity))
 
     # Track open position per symbol
     open_pos: Optional[Dict[str, Any]] = None
@@ -208,13 +209,17 @@ async def run_backtest(
         elif final_action == "close" and open_pos is not None:
             qty = open_pos["qty"]
             if open_pos["side"] == "long":
-                pnl = (current_price - entry_price) * qty
+                gross_pnl = (current_price - entry_price) * qty
                 pnl_pct = (current_price - entry_price) / entry_price * 100
             else:
-                pnl = (entry_price - current_price) * qty
+                gross_pnl = (entry_price - current_price) * qty
                 pnl_pct = (entry_price - current_price) / entry_price * 100
 
-            equity += pnl
+            notional = current_price * qty
+            fee = notional * fee_pct
+            slippage = notional * slippage_pct
+            pnl = gross_pnl - fee - slippage
+            equity += Decimal(str(pnl))
             result.trades.append(BacktestTrade(
                 symbol=symbol, side=open_pos["side"], entry_price=entry_price,
                 exit_price=current_price, qty=qty, entry_time=entry_time,
@@ -223,7 +228,7 @@ async def run_backtest(
             logger.info(f"[BT] CLOSE {symbol} @ {current_price:.2f} pnl={pnl:.2f} ({pnl_pct:.2f}%) reason={signal.get('reason')}")
             open_pos = None
 
-        result.equity_curve.append(equity)
+        result.equity_curve.append(float(equity))
 
     # Close any remaining position at the last price (mark-to-market)
     if open_pos is not None:
@@ -231,22 +236,21 @@ async def run_backtest(
         last_price = float(last_row["close"])
         qty = open_pos["qty"]
         if open_pos["side"] == "long":
-            pnl = (last_price - entry_price) * qty
+            gross_pnl = (last_price - entry_price) * qty
             pnl_pct = (last_price - entry_price) / entry_price * 100
         else:
-            pnl = (entry_price - last_price) * qty
+            gross_pnl = (entry_price - last_price) * qty
             pnl_pct = (entry_price - last_price) / entry_price * 100
-        equity += pnl
-        result.trades.append(BacktestTrade(
-            symbol=symbol, side=open_pos["side"], entry_price=entry_price,
-            exit_price=last_price, qty=qty, entry_time=entry_time,
-            exit_time=str(last_row["t"]), pnl=pnl, pnl_pct=pnl_pct, reason="end_of_backtest",
-        ))
-        result.equity_curve[-1] = equity
+        notional = last_price * qty
+        fee = notional * fee_pct
+        slippage = notional * slippage_pct
+        pnl = gross_pnl - fee - slippage
+        equity += Decimal(str(pnl))
+        result.equity_curve[-1] = float(equity)
 
     # Compute metrics
-    result.end_equity = equity
-    result.total_return_pct = (equity - start_equity) / start_equity * 100
+    result.end_equity = float(equity)
+    result.total_return_pct = (equity - Decimal(str(start_equity))) / Decimal(str(start_equity)) * 100
     result.n_trades = len(result.trades)
     result.n_wins = sum(1 for t in result.trades if t.pnl > 0)
     result.n_losses = sum(1 for t in result.trades if t.pnl <= 0)
