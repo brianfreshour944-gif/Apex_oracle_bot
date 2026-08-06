@@ -26,6 +26,7 @@ class RiskManager:
         # exposure-cap check before any of their sibling orders have actually
         # settled on the exchange.
         self._exposure_lock = asyncio.Lock()
+        self._equity_lock = asyncio.Lock()
         self._reserved_exposure = []  # list of (notional_amount, reserved_at) tuples
 
     async def update_account_status(
@@ -54,12 +55,13 @@ class RiskManager:
             cash = float(account.get("cash", 0))
             portfolio_value = float(account.get("portfolio_value", 0))
 
-            # Update peak equity for drawdown calculation
-            if equity > self.peak_equity:
-                self.peak_equity = equity
+            # Update peak equity for drawdown calculation (protected by lock)
+            async with self._equity_lock:
+                if equity > self.peak_equity:
+                    self.peak_equity = equity
 
-            # Calculate drawdown from peak
-            drawdown_pct = ((equity - self.peak_equity) / self.peak_equity) * 100 if self.peak_equity > 0 else 0
+                # Calculate drawdown from peak
+                drawdown_pct = ((equity - self.peak_equity) / self.peak_equity) * 100 if self.peak_equity > 0 else 0
 
             # Check if we've hit max drawdown limit
             if drawdown_pct < settings.MAX_DRAWDOWN_STOP:
@@ -74,33 +76,27 @@ class RiskManager:
             # Reset daily PnL if new day
             now = datetime.now(timezone.utc)
             if now.day != self.last_check_time.day:
-                self.daily_pnl = 0.0
-                self.start_of_day_equity = equity  # FIX: must reset here too --
-                                                     # previously only set once
-                                                     # ever via hasattr, so this
-                                                     # day-boundary check updated
-                                                     # last_check_time but never
-                                                     # actually refreshed the
-                                                     # baseline daily_pnl is
-                                                     # computed from, making the
-                                                     # "daily" limit silently
-                                                     # track cumulative loss
-                                                     # since inception instead
+                async with self._equity_lock:
+                    self.daily_pnl = 0.0
+                    self.start_of_day_equity = equity
                 self.last_check_time = now
 
             # Update daily PnL (actual change since start of day)
             if not hasattr(self, 'start_of_day_equity'):
-                self.start_of_day_equity = equity  # first-ever call only
-            self.daily_pnl = equity - self.start_of_day_equity
+                async with self._equity_lock:
+                    self.start_of_day_equity = equity
+            async with self._equity_lock:
+                self.daily_pnl = equity - self.start_of_day_equity
+                daily_pnl = self.daily_pnl
 
             # Check daily loss limit (scaled to actual equity)
             daily_loss_limit_abs = settings.DAILY_LOSS_LIMIT / 100.0 * equity
-            if self.daily_pnl < daily_loss_limit_abs:
-                logger.critical(f"DAILY LOSS LIMIT HIT: ${self.daily_pnl:.2f} (limit: ${daily_loss_limit_abs:.2f})")
+            if daily_pnl < daily_loss_limit_abs:
+                logger.critical(f"DAILY LOSS LIMIT HIT: ${daily_pnl:.2f} (limit: ${daily_loss_limit_abs:.2f})")
                 return {
                     "status": "killswitch_activated",
                     "reason": "daily_loss_limit_exceeded",
-                    "daily_pnl": self.daily_pnl,
+                    "daily_pnl": daily_pnl,
                     "action": "liquidate_all"
                 }
 
@@ -133,7 +129,7 @@ class RiskManager:
                 "cash": cash,
                 "portfolio_value": portfolio_value,
                 "drawdown_pct": drawdown_pct,
-                "daily_pnl": self.daily_pnl,
+                "daily_pnl": daily_pnl,
                 "open_positions": position_count,
                 "current_exposure": current_exposure
             }

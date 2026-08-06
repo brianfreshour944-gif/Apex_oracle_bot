@@ -150,6 +150,7 @@ scan_cycle_count: int = 0
 # that symbol is blocked, set right after closing a position. See
 # settings.COOLDOWN_SECONDS_BUY for why this exists.
 cooldowns: Dict[str, float] = {}
+_symbol_locks: Dict[str, asyncio.Lock] = {}
 
 import json
 import os as _os
@@ -214,7 +215,7 @@ def get_banned_symbols():
 async def process_signal_for_symbol(symbol: str, current_price: float, risk_manager: RiskManager, strategy: TradingStrategy, ex: AlpacaExchange, regime_flag: dict = None, banned_symbols: set = None) -> None:
     """Processes signal for a single symbol asynchronously."""
     # Get or create lock for this symbol
-    lock = _symbol_limits.setdefault(symbol, asyncio.Lock())
+    lock = _symbol_locks.setdefault(symbol, asyncio.Lock())
     async with lock:
         try:
             # Get current positions
