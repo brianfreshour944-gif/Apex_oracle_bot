@@ -156,10 +156,10 @@ class RLMetaLearner:
         if action_scores:
             best_action = max(action_scores, key=action_scores.get)
             best_conf = action_scores[best_action]
+            confidence = best_conf
             
             if best_conf > conf_thresh:
                 final_action = best_action
-                confidence = best_conf
                 
         explanation = f"RL_PPO[{regime}] {final_action}={confidence:.3f} | sz={pos_size_mult:.2f}x | thresh={conf_thresh:.2f}"
         
