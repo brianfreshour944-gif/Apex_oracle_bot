@@ -29,6 +29,10 @@ logger = get_logger("committee")
 # Default fallback if symbol lacks optimized data
 DEFAULT_SCORE_THRESHOLD = 0.15
 
+# Alias for tests / external imports — the real trade-gating threshold is
+# DEFAULT_SCORE_THRESHOLD (0.15) or the per-symbol adaptive threshold.
+WINNING_SCORE_THRESHOLD = DEFAULT_SCORE_THRESHOLD
+
 import json
 import os
 import time
@@ -108,11 +112,11 @@ REGIME_WEIGHT_MATRIX = {
         "llm": 0.05
     },
     "sideways": {
-        "transformer": 0.20,
-        "quant": 0.45,
+        "transformer": 0.30,
+        "quant": 0.20,
         "momentum": 0.10,
-        "sentinel": 0.10,
-        "llm": 0.15
+        "sentinel": 0.15,
+        "llm": 0.25
     },
     "high_volatility": {
         "transformer": 0.15,
@@ -255,8 +259,9 @@ async def run_committee(symbol: str, price: float, signal: Dict[str, Any]) -> Co
     scores = defaultdict(float)
     active_weight = 0.0
     for v in votes:
-        if v.action not in ["stand_aside", "skip"]:
+        if v.action not in ["stand_aside", "skip", "hold"]:
             scores[v.action] += v.confidence * v.weight
+        if v.action not in ["stand_aside", "skip"]:
             active_weight += v.weight
 
     if active_weight > 0:
@@ -275,11 +280,32 @@ async def run_committee(symbol: str, price: float, signal: Dict[str, Any]) -> Co
     explanation: Optional[str] = None
     winner, score = baseline_winner, baseline_score
 
+    # Check if adaptive learning is ready (min trades gate)
+    learner = get_meta_learner()
+    live_ready = False
+    if learner is not None:
+        live_ready = learner.sample_count_for_regime(regime) >= settings.ADAPTIVE_MIN_TRADES_BEFORE_LIVE
+
+    # Always compute adaptive weights for shadow mode observability
+    shadow_decision = None
+    if learner is not None:
+        try:
+            shadow_decision = learner.combine(raw_votes, regime)
+            adaptive_weights = shadow_decision.weights
+            explanation = shadow_decision.explanation
+        except Exception as e:
+            logger.warning(f"Adaptive combine failed: {e}")
+
+    # Use mathematical adaptive learner if enabled and gate passed
+    if learner is not None and settings.ADAPTIVE_ML_ENABLED and live_ready and shadow_decision:
+        adaptive_used = True
+        winner, score = shadow_decision.action, shadow_decision.confidence
+
+    # Fallback to RL Meta-Learner (PPO) if mathematical learner not ready/failed
     from .rl_meta import RLMetaLearner
     rl_learner = RLMetaLearner()
     
-    # Attempt to use PPO RL Model first
-    if getattr(rl_learner, "model", None) and settings.ADAPTIVE_ML_ENABLED and signal.get("backtest_df") is None:
+    if not adaptive_used and getattr(rl_learner, "model", None) and settings.ADAPTIVE_ML_ENABLED and live_ready and signal.get("backtest_df") is None:
         try:
             # We need to construct the features dict for the RL agent
             features = signal.get("features", {})
@@ -292,38 +318,8 @@ async def run_committee(symbol: str, price: float, signal: Dict[str, Any]) -> Co
             explanation = decision.explanation
             adaptive_used = True
             winner, score = decision.action, decision.confidence
-            
-            # The RL Meta-Learner dynamically controls position size
-            size_mult = getattr(decision, "pos_size_mult", 1.0)
-            
-            return CommitteeResult(
-                action=winner,
-                score=score,
-                size_multiplier=size_mult,
-                entropy=entropy,
-                votes=votes,
-                active_weights=weights,
-                decision_id=decision_id,
-                adaptive_used=adaptive_used,
-                adaptive_weights=adaptive_weights,
-                explanation=explanation,
-            )
         except Exception as e:
-            logger.warning(f"RL Meta-Learner combine failed, falling back to Adaptive: {e}")
-            
-    # Fallback to Mathematical Adaptive Meta-Learner
-    learner = get_meta_learner()
-    if learner is not None:
-        try:
-            decision = learner.combine(raw_votes, regime)
-            adaptive_weights = decision.weights
-            explanation = decision.explanation
-            live_ready = learner.sample_count_for_regime(regime) >= settings.ADAPTIVE_MIN_TRADES_BEFORE_LIVE
-            if settings.ADAPTIVE_ML_ENABLED and live_ready:
-                adaptive_used = True
-                winner, score = decision.action, decision.confidence
-        except Exception as e:  # pragma: no cover - defensive
-            logger.warning(f"Adaptive combine failed, using classic committee: {e}")
+            logger.warning(f"RL Meta-Learner combine failed: {e}")
 
     # Threshold + confidence sizing apply identically regardless of source.
     if not scores and not adaptive_used:

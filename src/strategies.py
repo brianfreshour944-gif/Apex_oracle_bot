@@ -75,6 +75,14 @@ class TradingStrategy:
             # Calculate RSI
             rsi, prev_rsi = self._calculate_rsi(close_arr)
 
+            # Calculate 20-period price z-score (for mean-reversion in chop)
+            price_zscore = 0.0
+            if len(close_arr) >= 20:
+                rolling_mean = np.mean(close_arr[-20:])
+                rolling_std = np.std(close_arr[-20:], ddof=1)
+                if rolling_std > 1e-8:
+                    price_zscore = (close_arr[-1] - rolling_mean) / rolling_std
+
             # Multi-timeframe confirmation check (e.g. EMA slope on bars)
             htf_trend = "neutral"
             if len(close_arr) >= 20:
@@ -166,6 +174,7 @@ class TradingStrategy:
                 "atr": float(atr),
                 "rsi": float(rsi),
                 "prev_rsi": float(prev_rsi),
+                "price_zscore": float(price_zscore),
                 "htf_trend": htf_trend,
                 "confidence": self._calculate_regime_confidence(regime, hurst, atr, rsi),
                 "funding_rate": funding_rate,
@@ -189,6 +198,7 @@ class TradingStrategy:
                 "atr": 0.0,
                 "rsi": 50.0,
                 "prev_rsi": 50.0,
+                "price_zscore": 0.0,
                 "confidence": 0.0
             }
 

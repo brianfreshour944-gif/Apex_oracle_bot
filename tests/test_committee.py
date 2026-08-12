@@ -50,7 +50,7 @@ async def test_committee_sentinel_hard_veto():
     assert result.vetoed is True
     assert result.action == "stand_aside"
     assert result.size_multiplier == 0.0
-    assert "Extreme market volatility" in result.veto_reason
+    assert "Crash regime detected" in result.veto_reason
     print("PASS: test_committee_sentinel_hard_veto")
 
 async def test_committee_low_conviction_stand_aside():
@@ -68,17 +68,22 @@ async def test_committee_low_conviction_stand_aside():
     print("PASS: test_committee_low_conviction_stand_aside")
 
 def test_size_multiplier_logic():
-    """Test size multiplier scaling based on confidence scores."""
+    """Test size multiplier scaling based on confidence scores.
+    
+    Uses explicit reference threshold of 0.60 (legacy test value), decoupled
+    from production's DEFAULT_SCORE_THRESHOLD (0.15).
+    """
+    ref_thresh = 0.60
     # Marginal confidence score (0.60) -> ~0.50x
-    m1 = calculate_confidence_size_multiplier(0.60, 0.0)
+    m1 = calculate_confidence_size_multiplier(0.60, 0.0, ref_thresh)
     assert m1 == 0.50
     
     # Moderate confidence score (0.76) -> ~1.00x
-    m2 = calculate_confidence_size_multiplier(0.76, 0.0)
+    m2 = calculate_confidence_size_multiplier(0.76, 0.0, ref_thresh)
     assert 0.95 <= m2 <= 1.05
     
     # High conviction score (0.92) -> > 1.40x
-    m3 = calculate_confidence_size_multiplier(0.92, 0.0)
+    m3 = calculate_confidence_size_multiplier(0.92, 0.0, ref_thresh)
     assert m3 >= 1.40
     print(f"PASS: test_size_multiplier_logic (0.60->{m1}x, 0.76->{m2}x, 0.92->{m3}x)")
 

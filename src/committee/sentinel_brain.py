@@ -26,6 +26,10 @@ async def sentinel_brain(symbol: str, price: float, signal: dict) -> BrainVote:
         is_veto = True
         action = "stand_aside"
         reason = "Hard Veto: Trading halted"
+    elif regime == "crash":
+        is_veto = True
+        action = "stand_aside"
+        reason = "Hard Veto: Crash regime detected"
     elif price > 0 and atr > 0 and (atr / price) > 0.10:
         # ATR > 10% of price indicates abnormal price swing / gap risk
         # Extreme volatility - Reduce position sizing heavily and demand near unanimous agreement

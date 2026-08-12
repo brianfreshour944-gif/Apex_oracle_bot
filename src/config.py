@@ -182,6 +182,12 @@ class TradingBotSettings(BaseSettings):
         gt=0,
         lt=100
     )
+    BB_ZSCORE_THRESHOLD: float = Field(
+        default=1.5,
+        description="Price z-score threshold for mean-reversion entries in sideways/chop (standard deviations from rolling mean)",
+        gt=0,
+        le=3.0
+    )
 
     # --- Trailing Stop Configuration ---
     TRAILING_STOP_ENABLED: bool = Field(

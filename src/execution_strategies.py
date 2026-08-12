@@ -53,13 +53,21 @@ class MeanReversionStrategy(BaseExecutionStrategy):
     def generate_signal(self, symbol: str, current_price: float, position: Optional[Dict], features: Dict[str, Any]) -> Dict[str, Any]:
         rsi = features.get("rsi", 50.0)
         prev_rsi = features.get("prev_rsi", 50.0)
+        price_zscore = features.get("price_zscore", 0.0)
+        z_thresh = getattr(settings, "BB_ZSCORE_THRESHOLD", 1.5)
 
         if not position:
-            # Added +10 and -10 to make mean reversion trigger more reasonably on 1H timeframe
+            # Primary: RSI oversold/overbought bounce
             if rsi < (settings.RSI_OVERSOLD + 10.0) and rsi > prev_rsi:
                 return {"action": "buy", "reason": f"Mean Reversion: Oversold bounce (RSI {rsi:.1f})"}
             elif rsi > (settings.RSI_OVERBOUGHT - 10.0) and rsi < prev_rsi:
                 return {"action": "sell", "reason": f"Mean Reversion: Overbought rejection (RSI {rsi:.1f})"}
+            # Fallback: price z-score when RSI is neutral (40-60)
+            elif 40.0 <= rsi <= 60.0:
+                if price_zscore <= -z_thresh:
+                    return {"action": "buy", "reason": f"Mean Reversion: Price {price_zscore:.1f}sd below mean, RSI neutral ({rsi:.1f})"}
+                elif price_zscore >= z_thresh:
+                    return {"action": "sell", "reason": f"Mean Reversion: Price {price_zscore:.1f}sd above mean, RSI neutral ({rsi:.1f})"}
         else:
             qty = float(position.get("qty", 0))
             if qty > 0 and rsi > settings.RSI_NEUTRAL_SELL:
