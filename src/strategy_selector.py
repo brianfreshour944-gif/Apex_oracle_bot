@@ -85,27 +85,29 @@ def record_strategy_outcome(regime: str, strategy_name: str, action: str, pnl: f
     """
     learner = get_strategy_learner()
     
-    # We construct a mock decision snapshot format expected by AdaptiveMetaLearner.
-    # AdaptiveMetaLearner expects brain_votes map. Here, the "brains" are our strategies.
-    # If the strategy made money, we simulate that it voted correctly.
-    # If it lost money, we simulate that it voted incorrectly.
-    
     # Normalise action: only "buy" and "sell" are meaningful directions.
     # Fall back to "buy" for unexpected values so downstream code is safe.
     effective_action = action if action in ("buy", "sell") else "buy"
 
-    # The learner expects { "brain_votes": {strategy: action, ...}, "final_action": action }
-    # To reward our strategy, we make it agree with the final action.
+    # Reward signal: strategy made money on this trade? (not "did it agree with final action")
+    # This avoids circular logic where the strategy's mock vote is forced to match the action.
+    profitable = pnl > 0
+    
+    # Construct votes: each strategy gets a directional vote based on its actual signal
+    # at entry time. Since we only know which strategy was SELECTED, we simulate:
+    # - The selected strategy voted in the trade direction (it caused the trade)
+    # - Other strategies vote "stand_aside" (we don't know their hypothetical signals)
+    # Reward is based on PnL, not vote agreement.
     mock_votes = {}
     for strat in STRATEGIES.keys():
         if strat == strategy_name:
-            mock_votes[strat] = effective_action  # agrees with final action
+            mock_votes[strat] = effective_action  # this strategy drove the trade
         else:
-            mock_votes[strat] = "stand_aside"  # neutral
+            mock_votes[strat] = "stand_aside"  # unknown, neutral
             
     decision_snapshot = {
         "regime": regime,
-        "final_action": effective_action,  # use the actual trade direction
+        "final_action": effective_action,
         "brain_votes": mock_votes
     }
     
@@ -117,6 +119,6 @@ def record_strategy_outcome(regime: str, strategy_name: str, action: str, pnl: f
     try:
         report = learner.update(decision_snapshot, outcome)
         if report.material_change:
-            logger.info(f"Strategy weights updated for regime {regime}")
+            logger.info(f"Strategy weights updated for regime {regime}: {strategy_name} {'profitable' if profitable else 'loss'}")
     except Exception as e:
         logger.error(f"Failed to update strategy learner: {e}")

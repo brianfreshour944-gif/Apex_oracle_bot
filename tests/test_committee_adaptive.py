@@ -95,6 +95,7 @@ async def test_adaptive_respects_min_trades_gate(tmp_path):
     settings.ADAPTIVE_ML_ENABLED = True
     settings.ADAPTIVE_STATE_PATH = path
     settings.ADAPTIVE_MIN_TRADES_BEFORE_LIVE = 10_000  # far above seeded samples
+    settings.PPO_MIN_TRADES_BEFORE_LIVE = 10_000  # PPO gate also high
     committee_mod.reset_meta_learner()
 
     result = await run_committee("BTC/USD", 50000.0, BUY_SIGNAL)

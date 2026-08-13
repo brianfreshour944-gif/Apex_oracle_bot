@@ -331,6 +331,12 @@ class TradingBotSettings(BaseSettings):
                     "(below this the learner runs in shadow mode even when enabled)",
         ge=0,
     )
+    PPO_MIN_TRADES_BEFORE_LIVE: int = Field(
+        default=1,
+        description="Realized outcomes required before PPO RL meta-learner drives live decisions. "
+                    "PPO is pre-trained offline via evolutionary pipeline; gate mainly ensures model file exists.",
+        ge=0,
+    )
 
     # --- Machine Learning Paths ---
     TRANSFORMER_MODEL_PATH: str = Field(

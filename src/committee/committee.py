@@ -283,8 +283,11 @@ async def run_committee(symbol: str, price: float, signal: Dict[str, Any]) -> Co
     # Check if adaptive learning is ready (min trades gate)
     learner = get_meta_learner()
     live_ready = False
+    ppo_ready = False
     if learner is not None:
         live_ready = learner.sample_count_for_regime(regime) >= settings.ADAPTIVE_MIN_TRADES_BEFORE_LIVE
+        # PPO gate: just needs model loaded and minimal trades
+        ppo_ready = learner.sample_count_for_regime(regime) >= settings.PPO_MIN_TRADES_BEFORE_LIVE
 
     # Always compute adaptive weights for shadow mode observability
     shadow_decision = None
@@ -305,7 +308,7 @@ async def run_committee(symbol: str, price: float, signal: Dict[str, Any]) -> Co
     from .rl_meta import RLMetaLearner
     rl_learner = RLMetaLearner()
     
-    if not adaptive_used and getattr(rl_learner, "model", None) and settings.ADAPTIVE_ML_ENABLED and live_ready and signal.get("backtest_df") is None:
+    if not adaptive_used and getattr(rl_learner, "model", None) and settings.ADAPTIVE_ML_ENABLED and ppo_ready and signal.get("backtest_df") is None:
         try:
             # We need to construct the features dict for the RL agent
             features = signal.get("features", {})
