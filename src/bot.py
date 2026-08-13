@@ -81,6 +81,32 @@ async def _record_committee_outcome(symbol: str, exit_price: float, exit_reason:
         if risk_manager is not None:
             risk_manager.peak_prices.pop(symbol, None)
 
+        # Append to the Transformer's live replay buffer, if this trade's
+        # entry captured a tensor state. Matches the exact {"tensor": ...,
+        # "label": ...} schema generate_replay_dataset.py produces from
+        # backtest data, so retrain_transformer.py trains on both real and
+        # simulated experience without any format handling on its end.
+        # Fail-safe and fully decoupled from trading: any error here is
+        # logged and swallowed, never allowed to affect risk/exits.
+        try:
+            import os
+            tensor_state = snap.get("tensor_state")
+            if tensor_state is not None:
+                live_buffer_path = os.path.join(
+                    os.path.dirname(__file__), "..", "data", "live_experiences.jsonl"
+                )
+                os.makedirs(os.path.dirname(live_buffer_path), exist_ok=True)
+                label = 1.0 if realized_pnl > 0 else 0.0
+                record = json.dumps({"tensor": tensor_state, "label": label})
+
+                def _append_live_experience():
+                    with open(live_buffer_path, "a") as f:
+                        f.write(record + "\n")
+
+                await asyncio.to_thread(_append_live_experience)
+        except Exception as e:
+            logger.warning(f"Failed to append live trade to Transformer replay buffer (non-fatal): {e}")
+
         learner = get_meta_learner()
         if learner is not None:
             report = learner.update(
@@ -491,6 +517,10 @@ async def process_signal_for_symbol(symbol: str, current_price: float, risk_mana
                         causal_reasoning_json=json.dumps({
                             v.name: getattr(v, "causal_reasoning", None) 
                             for v in committee_result.votes if getattr(v, "causal_reasoning", None)
+                        }),
+                        tensor_state_json=json.dumps({
+                            v.name: getattr(v, "tensor_state", None) 
+                            for v in committee_result.votes if getattr(v, "tensor_state", None)
                         })
                     )
                 except Exception as db_e:
@@ -743,6 +773,104 @@ async def run_periodic_research() -> None:
             logger.error(f"Error running Automatic Research: {e}")
             await asyncio.sleep(3600)
 
+async def run_periodic_transformer_replay() -> None:
+    """Background task to fine-tune the Transformer on the replay buffer daily.
+
+    Distinct from run_periodic_automl (Saturday 2 AM, a full from-scratch
+    retrain-and-tournament against 180 days of fresh market data). This is
+    the lightweight (10-epoch) continuous replay fine-tune -
+    retrain_transformer.py - which trains on data/historical_experiences.jsonl
+    (backtest-simulated) AND data/live_experiences.jsonl (real closed trades,
+    appended by _record_committee_outcome above). This is what actually lets
+    the Transformer learn from forward-testing results, not just backtests.
+    Scheduled at 1 AM daily, ahead of the heavier Saturday/Sunday jobs.
+    """
+    import sys
+    import os
+    from datetime import datetime, timedelta
+
+    script_path = os.path.join(os.path.dirname(__file__), '..', 'scripts', 'retrain_transformer.py')
+
+    while True:
+        try:
+            now = datetime.now()
+            target_time = now.replace(hour=1, minute=0, second=0, microsecond=0)
+            if now >= target_time:
+                target_time += timedelta(days=1)
+
+            sleep_seconds = (target_time - now).total_seconds()
+            logger.info(f"Transformer replay fine-tune scheduled for {target_time} (in {sleep_seconds/3600:.1f} hours)")
+
+            await asyncio.sleep(sleep_seconds)
+
+            logger.info("Running Transformer replay fine-tune...")
+            process = await asyncio.create_subprocess_exec(
+                sys.executable, script_path,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+            stdout, stderr = await process.communicate()
+
+            if process.returncode == 0:
+                logger.info(f"Transformer replay fine-tune completed successfully:\n{stdout.decode().strip()}")
+            else:
+                logger.error(f"Transformer replay fine-tune failed with code {process.returncode}:\n{stderr.decode().strip()}")
+
+        except Exception as e:
+            logger.error(f"Error running Transformer replay fine-tune: {e}")
+            await asyncio.sleep(3600)
+
+async def run_periodic_ppo_retrain() -> None:
+    """Background task to retrain the PPO Meta-Learner every Sunday morning.
+
+    evolutionary_ppo_trainer.py is the only script that actually produces a
+    new PPO model for rl_meta.py to load - without this scheduled, the RL
+    meta-learner stays frozen at whatever it was last manually trained on,
+    indefinitely, even though the mathematical AdaptiveMetaLearner and
+    strategy selector are both learning from every closed live trade.
+    Scheduled at 6 AM (2 hours after run_periodic_research's 4 AM slot) to
+    avoid both heavy jobs contending for CPU/data-fetch at the same time.
+    """
+    import sys
+    import os
+    from datetime import datetime, timedelta
+
+    script_path = os.path.join(os.path.dirname(__file__), '..', 'scripts', 'evolutionary_ppo_trainer.py')
+
+    while True:
+        try:
+            now = datetime.now()
+            # Calculate days until Sunday (6 = Sunday)
+            days_ahead = 6 - now.weekday()
+            if days_ahead < 0 or (days_ahead == 0 and now.hour >= 6):
+                days_ahead += 7
+
+            # Target 6 AM on Sunday
+            target_time = now + timedelta(days=days_ahead)
+            target_time = target_time.replace(hour=6, minute=0, second=0, microsecond=0)
+
+            sleep_seconds = (target_time - now).total_seconds()
+            logger.info(f"PPO Meta-Learner retraining scheduled for {target_time} (in {sleep_seconds/3600:.1f} hours)")
+
+            await asyncio.sleep(sleep_seconds)
+
+            logger.info("Running Evolutionary PPO Trainer...")
+            process = await asyncio.create_subprocess_exec(
+                sys.executable, script_path,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+            stdout, stderr = await process.communicate()
+
+            if process.returncode == 0:
+                logger.info(f"PPO Meta-Learner retraining completed successfully:\n{stdout.decode().strip()}")
+            else:
+                logger.error(f"PPO Meta-Learner retraining failed with code {process.returncode}:\n{stderr.decode().strip()}")
+
+        except Exception as e:
+            logger.error(f"Error running PPO Meta-Learner retraining: {e}")
+            await asyncio.sleep(3600)
+
 async def run_periodic_post_mortem() -> None:
     """Background task to run the Post-Mortem AI every Saturday morning."""
     import sys
@@ -962,6 +1090,18 @@ async def run_trading_bot() -> None:
         active_tasks.add(research_task)
         research_task.add_done_callback(_on_task_done)
         logger.info("Periodic Automatic Research task started")
+
+        # Start periodic PPO Meta-Learner retraining
+        ppo_retrain_task = asyncio.create_task(run_periodic_ppo_retrain(), name="ppo_retrain")
+        active_tasks.add(ppo_retrain_task)
+        ppo_retrain_task.add_done_callback(_on_task_done)
+        logger.info("Periodic PPO Meta-Learner retraining task started")
+
+        # Start periodic Transformer replay fine-tune
+        transformer_replay_task = asyncio.create_task(run_periodic_transformer_replay(), name="transformer_replay")
+        active_tasks.add(transformer_replay_task)
+        transformer_replay_task.add_done_callback(_on_task_done)
+        logger.info("Periodic Transformer replay fine-tune task started")
 
         # Start periodic Post-Mortem AI
         post_mortem_task = asyncio.create_task(run_periodic_post_mortem(), name="post_mortem")

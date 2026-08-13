@@ -67,6 +67,7 @@ class DecisionSnapshot(Base):
     votes_json: Mapped[str] = mapped_column(Text, default="{}")  # {brain: action}
     feature_snapshot_json: Mapped[str] = mapped_column(Text, default="{}")
     causal_reasoning_json: Mapped[str] = mapped_column(Text, default="{}") # {feature: contribution}
+    tensor_state_json: Mapped[str] = mapped_column(Text, default="{}") # {brain: tensor_state}
     status: Mapped[str] = mapped_column(String(16), default="open")  # open|closed
     exit_reason: Mapped[Optional[str]] = mapped_column(String(48), nullable=True, default=None)
     max_favorable_pct: Mapped[float] = mapped_column(Float, default=0.0)
@@ -296,7 +297,8 @@ def save_decision_snapshot(
     qty: float,
     brain_votes: Dict[str, str],
     feature_snapshot_json: str = "{}",
-    causal_reasoning_json: str = "{}"
+    causal_reasoning_json: str = "{}",
+    tensor_state_json: str = "{}"
 ) -> bool:
     """Persist a committee decision at entry. Returns True on success."""
     try:
@@ -314,6 +316,7 @@ def save_decision_snapshot(
                 votes_json=json.dumps(brain_votes or {}),
                 feature_snapshot_json=feature_snapshot_json,
                 causal_reasoning_json=causal_reasoning_json,
+                tensor_state_json=tensor_state_json,
                 status="open",
             )
             session.merge(snap)
@@ -349,6 +352,7 @@ def save_decision_snapshots_batch(
                     votes_json=json.dumps(rec.get("brain_votes", {}) or {}),
                     feature_snapshot_json=rec.get("feature_snapshot_json", "{}"),
                     causal_reasoning_json=rec.get("causal_reasoning_json", "{}"),
+                    tensor_state_json=rec.get("tensor_state_json", "{}"),
                     status="open",
                 )
                 session.merge(snap)
@@ -357,6 +361,48 @@ def save_decision_snapshots_batch(
     except Exception as e:
         logger.warning(f"save_decision_snapshots_batch failed (non-fatal): {e}")
         return 0
+
+
+def get_closed_decision_snapshots(limit: int = 2000, symbol: Optional[str] = None) -> List[Dict[str, Any]]:
+    """Return closed decision snapshots (real live/paper trade outcomes), most
+    recent first, in the exact shape MetaDecisionEnv expects (see
+    scripts/evolutionary_ppo_trainer.py's synthetic snapshot construction).
+
+    This is what lets the PPO Meta-Learner train on genuine forward-test
+    results alongside its synthetic backtest data, rather than exclusively
+    on backtests. Read-only and purely additive: never touches trading.
+    """
+    try:
+        with get_db_session() as session:
+            stmt = (
+                select(DecisionSnapshot)
+                .where(DecisionSnapshot.status == "closed")
+            )
+            if symbol:
+                stmt = stmt.where(DecisionSnapshot.symbol == symbol)
+            stmt = stmt.order_by(DecisionSnapshot.closed_at.desc()).limit(limit)
+
+            rows = session.execute(stmt).scalars().all()
+            results = []
+            for row in rows:
+                try:
+                    results.append({
+                        "symbol": row.symbol,
+                        "regime": row.regime,
+                        "final_action": row.final_action,
+                        "confidence": row.confidence,
+                        "brain_votes": json.loads(row.votes_json or "{}"),
+                        "features": json.loads(row.feature_snapshot_json or "{}"),
+                        "entry_time": row.created_at.isoformat() if row.created_at else None,
+                        "exit_time": row.closed_at.isoformat() if row.closed_at else None,
+                        "realized_pnl": row.realized_pnl,
+                    })
+                except Exception as e:
+                    logger.warning(f"Skipping malformed decision snapshot {row.decision_id}: {e}")
+            return results
+    except Exception as e:
+        logger.warning(f"get_closed_decision_snapshots failed (non-fatal): {e}")
+        return []
 
 
 def get_open_snapshot(symbol: str) -> Optional[Dict[str, Any]]:
@@ -391,6 +437,7 @@ def get_open_snapshot(symbol: str) -> Optional[Dict[str, Any]]:
                 "qty": row.qty,
                 "brain_votes": json.loads(row.votes_json or "{}"),
                 "feature_snapshot": json.loads(row.feature_snapshot_json or "{}"),
+                "tensor_state": json.loads(row.tensor_state_json or "{}").get("transformer"),
                 "created_at": row.created_at.isoformat() if row.created_at else None,
             }
             _open_snapshot_cache[symbol] = result

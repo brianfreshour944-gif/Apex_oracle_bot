@@ -312,6 +312,21 @@ async def main():
             current_model = candidate
             logger.info(f"🏆 NEW CHAMPION: {current_model}")
             
+    # Include real closed live/paper trade outcomes alongside the synthetic
+    # backtest-survived snapshots above, so the PPO Meta-Learner also learns
+    # from actual forward-test results, not exclusively from backtests.
+    # MetaDecisionEnv doesn't care about the data's origin - it just replays
+    # whatever snapshot list it's given - so this is purely additive.
+    try:
+        from src.db import get_closed_decision_snapshots
+        live_snapshots = get_closed_decision_snapshots(limit=2000)
+        if live_snapshots:
+            logger.info(f"Adding {len(live_snapshots)} real closed live/paper trades to PPO training buffer "
+                        f"(alongside {len(surviving_snapshots)} synthetic backtest-survived trades).")
+            surviving_snapshots.extend(live_snapshots)
+    except Exception as e:
+        logger.warning(f"Failed to load live trade snapshots for PPO training (continuing with backtest-only data): {e}")
+
     if surviving_snapshots:
         logger.info(f"Training PPO Meta-Learner on {len(surviving_snapshots)} surviving trades...")
         from src.committee.rl_env import MetaDecisionEnv

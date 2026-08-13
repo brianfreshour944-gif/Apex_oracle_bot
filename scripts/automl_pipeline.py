@@ -51,9 +51,16 @@ DAYS_HISTORY   = 180
 PATIENCE       = 5
 
 # Paths
+# NOTE: model/scaler outputs MUST match settings.TRANSFORMER_MODEL_PATH /
+# TRANSFORMER_SCALER_PATH (src/config.py, both default to "models/...") -
+# transformer_brain.py loads from there. This previously pointed at
+# DATA_DIR ("data/...") instead, a different directory that
+# transformer_brain.py never reads from, so a "winning" retrain here
+# silently never reached the live model.
 DATA_DIR       = os.path.join(os.path.dirname(__file__), '..', 'data')
-PROD_MODEL_OUT = os.path.join(DATA_DIR, "grok_gqa_v9_best.pth")
-PROD_SCALER_OUT= os.path.join(DATA_DIR, "feature_scaler.pkl")
+MODELS_DIR     = os.path.join(os.path.dirname(__file__), '..', 'models')
+PROD_MODEL_OUT = os.path.join(MODELS_DIR, "grok_gqa_v9_best.pth")
+PROD_SCALER_OUT= os.path.join(MODELS_DIR, "feature_scaler.pkl")
 
 TRAIN_SYMBOLS = [
     "BTC/USD", "ETH/USD", "SOL/USD", "DOGE/USD",
