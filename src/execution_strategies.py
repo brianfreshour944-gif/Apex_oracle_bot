@@ -104,9 +104,16 @@ class MomentumStrategy(BaseExecutionStrategy):
                 return {"action": "sell", "reason": f"Momentum: Strong bearish acceleration (RSI ROC {rsi_roc:.1f})"}
         else:
             qty = float(position.get("qty", 0))
-            if qty > 0 and rsi_roc < -2.0:
+            # Exit threshold now matches entry magnitude (was -2.0 vs a +5.0
+            # entry bar - a much weaker trigger). A single bar's RSI rate of
+            # change decelerating slightly after a burst is normal noise,
+            # not a reversal; requiring comparable evidence to what opened
+            # the position prevents closing out within one cycle on a move
+            # that never actually reversed (confirmed against real trades
+            # where price hadn't moved at all before the close fired).
+            if qty > 0 and rsi_roc < -5.0:
                 return {"action": "close", "reason": "Momentum: Loss of bullish momentum"}
-            elif qty < 0 and rsi_roc > 2.0:
+            elif qty < 0 and rsi_roc > 5.0:
                 return {"action": "close", "reason": "Momentum: Loss of bearish momentum"}
 
         return {"action": "hold", "reason": "No momentum signal"}
