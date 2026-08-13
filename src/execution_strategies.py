@@ -70,10 +70,18 @@ class MeanReversionStrategy(BaseExecutionStrategy):
                     return {"action": "sell", "reason": f"Mean Reversion: Price {price_zscore:.1f}sd above mean, RSI neutral ({rsi:.1f})"}
         else:
             qty = float(position.get("qty", 0))
-            if qty > 0 and rsi > settings.RSI_NEUTRAL_SELL:
-                return {"action": "close", "reason": f"Mean Reversion: Target RSI reached ({rsi:.1f})"}
-            elif qty < 0 and rsi < settings.RSI_NEUTRAL_BUY:
-                return {"action": "close", "reason": f"Mean Reversion: Target RSI reached ({rsi:.1f})"}
+            # Require BOTH the RSI recovery AND actual price reversion
+            # toward the mean (z-score no longer meaningfully on the entry
+            # side) before exiting. RSI alone let z-score-fallback entries
+            # (which can start with RSI already at 50-54, since that's the
+            # whole point of the neutral-band fallback) close out again on
+            # the very next cycle after a trivial 1-2 point RSI tick, with
+            # no real price movement - producing rapid buy/sell churn that
+            # loses money on spread alone.
+            if qty > 0 and rsi > settings.RSI_NEUTRAL_SELL and price_zscore > -0.5:
+                return {"action": "close", "reason": f"Mean Reversion: Target RSI reached ({rsi:.1f}), price reverted"}
+            elif qty < 0 and rsi < settings.RSI_NEUTRAL_BUY and price_zscore < 0.5:
+                return {"action": "close", "reason": f"Mean Reversion: Target RSI reached ({rsi:.1f}), price reverted"}
 
         return {"action": "hold", "reason": "No mean reversion signal"}
 
