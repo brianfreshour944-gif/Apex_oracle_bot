@@ -326,7 +326,7 @@ class TradingBotSettings(BaseSettings):
         le=1,
     )
     ADAPTIVE_MIN_TRADES_BEFORE_LIVE: int = Field(
-        default=10,
+        default=3,
         description="Realized outcomes required before adaptive weights drive live decisions "
                     "(below this the learner runs in shadow mode even when enabled)",
         ge=0,
