@@ -16,6 +16,8 @@ from src.telegram_alerts import send_telegram_alert
 
 logger = get_logger("bot")
 
+_transformer_online_updates = 0
+
 
 async def _record_committee_outcome(symbol: str, exit_price: float, exit_reason: Optional[str] = None) -> None:
     """On position exit, close the open decision snapshot and update the learner.
@@ -114,51 +116,54 @@ async def _record_committee_outcome(symbol: str, exit_price: float, exit_reason:
         try:
             tensor_state = snap.get("tensor_state")
             if tensor_state is not None:
-                def _online_transformer_step():
-                    try:
-                        from src.committee.transformer_brain import get_ml_predictor
-                        import torch
-                        import numpy as np
-                        
-                        predictor = get_ml_predictor()
-                        if predictor is None:
-                            return
-                            
-                        model = predictor["model"]
-                        scaler = predictor["scaler"]
-                        device = predictor["device"]
-                        
-                        # Prepare single sample
-                        data = np.array(tensor_state, dtype=np.float32)
-                        if hasattr(scaler, "feature_names_in_"):
-                            cols = list(scaler.feature_names_in_)
-                        else:
-                            from src.feature_engineering import get_active_features
-                            cols = get_active_features()
-                        
-                        if len(data) > 0 and len(data[0]) == len(cols):
-                            data_scaled = scaler.transform(data).astype(np.float32)
-                            data_scaled = np.nan_to_num(data_scaled, nan=0.0, posinf=0.0, neginf=0.0)
-                            
-                            x = torch.tensor(data_scaled).unsqueeze(0).to(device)
-                            label_tensor = torch.tensor([[1.0 if realized_pnl > 0 else 0.0]], dtype=torch.float32).to(device)
-                            
-                            model.train()
-                            model.zero_grad()
-                            logits = model(x)
-                            loss = torch.nn.functional.binary_cross_entropy_with_logits(logits, label_tensor)
-                            loss.backward()
-                            # Small step: use optimizer with very low lr
-                            with torch.no_grad():
-                                for p in model.parameters():
-                                    if p.grad is not None:
-                                        p.data -= 1e-5 * p.grad
-                            model.eval()
-                    except Exception:
-                        pass  # Swallow all errors
-                
-                # Run in background thread, don't await
-                asyncio.to_thread(_online_transformer_step)
+                 def _online_transformer_step():
+                     try:
+                         from src.committee.transformer_brain import get_ml_predictor
+                         import torch
+                         import numpy as np
+                         
+                         predictor = get_ml_predictor()
+                         if predictor is None:
+                             return
+                             
+                         model = predictor["model"]
+                         scaler = predictor["scaler"]
+                         device = predictor["device"]
+                         
+                         # Prepare single sample
+                         data = np.array(tensor_state, dtype=np.float32)
+                         if hasattr(scaler, "feature_names_in_"):
+                             cols = list(scaler.feature_names_in_)
+                         else:
+                             from src.feature_engineering import get_active_features
+                             cols = get_active_features()
+                         
+                         if len(data) > 0 and len(data[0]) == len(cols):
+                             data_scaled = scaler.transform(data).astype(np.float32)
+                             data_scaled = np.nan_to_num(data_scaled, nan=0.0, posinf=0.0, neginf=0.0)
+                             
+                             x = torch.tensor(data_scaled).unsqueeze(0).to(device)
+                             label_tensor = torch.tensor([[1.0 if realized_pnl > 0 else 0.0]], dtype=torch.float32).to(device)
+                             
+                             model.train()
+                             model.zero_grad()
+                             logits = model(x)
+                             loss = torch.nn.functional.binary_cross_entropy_with_logits(logits, label_tensor)
+                             loss.backward()
+                             # Annealed learning rate
+                             global _transformer_online_updates
+                             lr = 1e-5 * (0.99 ** _transformer_online_updates)
+                             _transformer_online_updates += 1
+                             with torch.no_grad():
+                                 for p in model.parameters():
+                                     if p.grad is not None:
+                                         p.data -= lr * p.grad
+                             model.eval()
+                     except Exception:
+                         pass  # Swallow all errors
+                 
+                 # Run in background thread, don't await
+                 asyncio.to_thread(_online_transformer_step)
         except Exception as e:
             logger.debug(f"Online Transformer step skipped (non-fatal): {e}")
 

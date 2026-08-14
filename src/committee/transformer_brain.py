@@ -201,6 +201,7 @@ async def transformer_brain(symbol: str, price: float, signal: dict) -> BrainVot
 
     causal_reasoning_dict = None
     tensor_state = None
+    transformer_weight = 0.35
     if predictor is not None:
         try:
             import asyncio
@@ -298,17 +299,36 @@ async def transformer_brain(symbol: str, price: float, signal: dict) -> BrainVot
                 
                 x = torch.tensor(data_scaled).unsqueeze(0).to(device)
 
-                # Cheap forward-only pass first (no autograd graph built) to
-                # get the probability. Measured: the full forward+backward
-                # pass used purely for gradient-based causal attribution
-                # costs ~110ms of extra event-loop scheduling delay (GIL
-                # contention from autograd bookkeeping) even though it runs
-                # inside asyncio.to_thread, on top of being wasted work for
-                # the majority of evaluations that end in "hold" and are
-                # never persisted to the decision-snapshot DB anyway.
-                with torch.no_grad():
-                    raw_logit_fwd = model(x).squeeze(1)
-                    out_prob = float(torch.sigmoid(raw_logit_fwd).item())
+            # Cheap forward-only pass first (no autograd graph built) to
+            # get the probability. Measured: the full forward+backward
+            # pass used purely for gradient-based causal attribution
+            # costs ~110ms of extra event-loop scheduling delay (GIL
+            # contention from autograd bookkeeping) even though it runs
+            # inside asyncio.to_thread, on top of being wasted work for
+            # the majority of evaluations that end in "hold" and are
+            # never persisted to the decision-snapshot DB anyway.
+            with torch.no_grad():
+                raw_logit_fwd = model(x).squeeze(1)
+                out_prob = float(torch.sigmoid(raw_logit_fwd).item())
+                
+            # MC-dropout for uncertainty estimation (10 stochastic forward passes)
+            # Only enable dropout during uncertainty estimation if in live mode (not backtest)
+            # to avoid slowing down backtest unnecessarily; but we keep it lightweight.
+            if not is_live:
+                # In backtest, we skip MC-dropout to save time; use fixed weight.
+                uncertainty_weight = 0.35  # base weight
+            else:
+                model.train()  # enable dropout
+                mc_probs = []
+                for _ in range(10):
+                    with torch.no_grad():
+                        mc_logit = model(x).squeeze(1)
+                        mc_prob = float(torch.sigmoid(mc_logit).item())
+                        mc_probs.append(mc_prob)
+                model.eval()  # back to eval mode
+                prob_var = np.var(mc_probs) if len(mc_probs) > 1 else 0.0
+                # Modulate weight: higher variance -> lower weight
+                transformer_weight = 0.35 * (1.0 / (1.0 + prob_var))  # simple inverse scaling
 
                 causal_reasoning = {}
                 logit_value = raw_logit_fwd.item()
@@ -364,7 +384,7 @@ async def transformer_brain(symbol: str, price: float, signal: dict) -> BrainVot
         name="transformer",
         action=action,
         confidence=prob,
-        weight=0.35,
+        weight=transformer_weight,
         regime=regime,
         reason=reason,
         causal_reasoning=causal_reasoning_dict,
