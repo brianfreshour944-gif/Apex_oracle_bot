@@ -185,10 +185,12 @@ async def _record_committee_outcome(symbol: str, exit_price: float, exit_reason:
                      except Exception:
                          pass  # Swallow all errors
                  
-                 # Run in background thread, don't await
-                 asyncio.to_thread(_online_transformer_step)
-        except Exception as e:
-            logger.debug(f"Online Transformer step skipped (non-fatal): {e}")
+# Run in background thread, don't await
+                  task = asyncio.create_task(asyncio.to_thread(_online_transformer_step), name="transformer_online")
+                  _background_tasks.add(task)
+                  task.add_done_callback(_background_tasks.discard)
+         except Exception as e:
+             logger.debug(f"Online Transformer step skipped (non-fatal): {e}")
 
         learner = get_meta_learner()
         if learner is not None:
@@ -243,7 +245,9 @@ async def _record_committee_outcome(symbol: str, exit_price: float, exit_reason:
             except Exception as e:
                 logger.error(f"Attribution engine failed: {e}")
                 
-        asyncio.create_task(_run_attribution())
+        task = asyncio.create_task(_run_attribution(), name="attribution")
+        _background_tasks.add(task)
+        task.add_done_callback(_background_tasks.discard)
 
     except Exception as e:
         logger.error(f"Adaptive outcome recording failed for {symbol} (non-fatal): {e}")
@@ -260,6 +264,10 @@ scan_cycle_count: int = 0
 # settings.COOLDOWN_SECONDS_BUY for why this exists.
 cooldowns: Dict[str, float] = {}
 _symbol_locks: Dict[str, asyncio.Lock] = {}
+# Track background tasks from _record_committee_outcome to prevent GC
+_background_tasks: set[asyncio.Task] = set()
+# Shutdown flag for graceful killswitch handling
+_shutdown_requested: bool = False
 
 import json
 import os as _os
@@ -683,14 +691,15 @@ async def scan_heartbeat_loop() -> None:
 
 async def monitor_killswitch(risk_manager: RiskManager) -> None:
     """Background task to monitor killswitch continuously."""
-    import os
+    global _shutdown_requested
     while True:
         try:
             if await risk_manager.check_killswitch_conditions():
                 logger.critical("KILLSWITCH ACTIVATED - Liquidating all positions")
-                await send_telegram_alert(f"Ã°Å¸â€™â‚¬ <b>KILLSWITCH ACTIVATED</b>\nLiquidating all positions immediately.")
+                await send_telegram_alert(f"🛑 <b>KILLSWITCH ACTIVATED</b>\nLiquidating all positions immediately.")
                 await risk_manager.liquidate_all_positions()
-                os._exit(1)
+                _shutdown_requested = True
+                return  # Exit the task, let main loop handle shutdown
 
             exposure_status = await risk_manager.update_account_status()
             if exposure_status.get("status") == "exposure_limit_exceeded":
@@ -1198,11 +1207,12 @@ async def run_trading_bot() -> None:
         db_maintenance_task.add_done_callback(_on_task_done)
         logger.info("Periodic Database Maintenance task started")
 
-        # Main trading loop
+# Main trading loop
         logger.info(f"Bot initialization complete. Starting stateless REST polling loop for {settings.SYMBOLS} (interval: {settings.LOOP_INTERVAL_SEC}s).")
+        global _shutdown_requested
 
         try:
-            while True:
+            while not _shutdown_requested:
                 regime_flag = read_regime_flag()
                 banned_symbols = get_banned_symbols()
 
@@ -1261,6 +1271,11 @@ async def run_trading_bot() -> None:
             task.cancel()
         if active_tasks:
             await asyncio.gather(*active_tasks, return_exceptions=True)
+        # Clean up _background_tasks from _record_committee_outcome
+        for task in list(_background_tasks):
+            task.cancel()
+        if _background_tasks:
+            await asyncio.gather(*_background_tasks, return_exceptions=True)
         if ex:
             await ex.close()
         logger.info("Shutdown complete.")

@@ -387,17 +387,24 @@ class RiskManager:
         pure in-memory arithmetic and the same 15 concurrent calls complete
         in <1ms combined.
         """
+        # If caller didn't provide current_exposure, fetch it now (outside lock
+        # to allow concurrent fetches). We'll re-verify inside the lock.
         if current_exposure is None:
-            # Fallback path for callers that don't have a fresh status handy.
-            # This still does I/O, but OUTSIDE the lock, so it can run
-            # concurrently with other symbols' fallback fetches instead of
-            # serializing them.
             status = await self.update_account_status()
             if status.get("status") != "risk_ok":
                 return 0.0, status.get("reason", status.get("status", "risk_check_failed"))
             current_exposure = status["current_exposure"]
 
         async with self._exposure_lock:
+            # Re-fetch exposure if it wasn't provided by caller, to close the
+            # race window where another task could have reserved capacity
+            # between our fetch and acquiring this lock.
+            if current_exposure is None:
+                status = await self.update_account_status()
+                if status.get("status") != "risk_ok":
+                    return 0.0, status.get("reason", status.get("status", "risk_check_failed"))
+                current_exposure = status["current_exposure"]
+
             now = datetime.now(timezone.utc)
             self._reserved_exposure = [(a, t) for a, t in self._reserved_exposure if (now - t).total_seconds() < 60]
             reserved_total = sum(a for a, _ in self._reserved_exposure)

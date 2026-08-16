@@ -381,7 +381,7 @@ async def add_multi_timeframe_features(
     
     try:
         bars_df = await exchange.get_bars(symbol, base_timeframe, limit)
-        if bars_df is None or bars_df.empty:
+        if bars_df is None or len(bars_df) == 0:
             return pd.DataFrame()
         
         # Convert polars DataFrame to pandas
