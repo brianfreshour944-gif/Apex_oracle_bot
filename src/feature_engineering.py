@@ -40,6 +40,7 @@ import numpy as np
 import json
 import os
 from typing import Dict
+from scipy.stats import spearmanr, kendalltau
 
 def get_active_features():
     path = os.path.join(os.path.dirname(__file__), '..', 'data', 'active_features.json')
@@ -349,3 +350,59 @@ def add_features(df: pd.DataFrame, symbol: str = "") -> pd.DataFrame:
             _FEATURE_CACHE[symbol] = (latest_ts, d[MASTER_FEATURE_COLS])
 
     return d[MASTER_FEATURE_COLS]
+
+# Cross-asset functions will be added here
+
+
+async def add_multi_timeframe_features(
+    exchange,
+    symbol: str,
+    base_timeframe: str = "1Hour",
+    timeframes: list = None,
+    limit: int = 200
+) -> pd.DataFrame:
+    """
+    Fetch bars for multiple timeframes and compute features for the base timeframe.
+    
+    Args:
+        exchange: AlpacaExchange instance
+        symbol: Trading symbol
+        base_timeframe: Primary timeframe for feature computation
+        timeframes: List of timeframes to fetch (not currently used, for future expansion)
+        limit: Number of bars to fetch
+    
+    Returns:
+        DataFrame with features for the base timeframe
+    """
+    if timeframes is None:
+        timeframes = ["1Min", "5Min", "15Min", "1Hour", "4Hour"]
+    
+    try:
+        bars_df = await exchange.get_bars(symbol, base_timeframe, limit)
+        if bars_df is None or bars_df.empty:
+            return pd.DataFrame()
+        
+        # Convert polars DataFrame to pandas
+        if hasattr(bars_df, 'to_pandas'):
+            bars_df = bars_df.to_pandas()
+        
+        # Ensure required columns exist
+        required_cols = ["open", "high", "low", "close", "volume", "vwap", "trade_count"]
+        for col in required_cols:
+            if col not in bars_df.columns:
+                if col == "vwap":
+                    bars_df[col] = bars_df["close"]
+                elif col == "trade_count":
+                    bars_df[col] = 1.0
+                else:
+                    bars_df[col] = 0.0
+        
+        # Compute features
+        features_df = add_features(bars_df, symbol)
+        return features_df
+        
+    except Exception as e:
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.error(f"Error in add_multi_timeframe_features for {symbol}: {e}")
+        return pd.DataFrame()
