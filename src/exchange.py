@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 import asyncio
 import time
 import datetime
-from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception
+from tenacity import retry, stop_after_attempt, wait_exponential, wait_fixed, retry_if_exception, RetryCallState
 
 import polars as pl
 
@@ -40,6 +40,35 @@ def _retry_on_rate_limit(exception: Exception) -> bool:
     return _is_rate_limit_error(exception)
 
 
+def _rate_limit_wait(retry_state: RetryCallState) -> float:
+    """Wait strategy that respects the Retry-After header when available,
+    otherwise falls back to exponential backoff.
+
+    Alpaca APIError exposes ``_response`` (the raw HTTP response) which may
+    carry a ``Retry-After`` or ``RateLimit-Reset`` header."""
+    exc = retry_state.outcome.exception() if retry_state.outcome else None
+    if exc is not None:
+        resp = getattr(exc, "_response", None)
+        if resp is not None:
+            retry_after = resp.headers.get("Retry-After")
+            if retry_after is not None:
+                try:
+                    return float(retry_after)
+                except (ValueError, TypeError):
+                    pass
+            reset_ts = resp.headers.get("RateLimit-Reset")
+            if reset_ts is not None:
+                try:
+                    import time as _time
+                    offset = float(reset_ts) - _time.time()
+                    if offset > 0:
+                        return min(offset, 60.0)  # cap at 60 s
+                except (ValueError, TypeError):
+                    pass
+    # Fallback: exponential backoff
+    return wait_exponential(multiplier=1, min=4, max=30)(retry_state)
+
+
 class RateLimitError(Exception):
     """Raised when Alpaca rate limit is exceeded and all retries are exhausted."""
     pass
@@ -53,7 +82,7 @@ class BaseExchange(Protocol):
     async def get_account(self) -> Dict[str, Any]: ...
     async def get_bars(self, symbol: str, timeframe: str = "1D", limit: int = 100) -> pl.DataFrame: ...
     async def get_positions(self) -> List[Dict[str, Any]]: ...
-    async def create_order(self, symbol: str, qty: float, side: str, type: str = "market", time_in_force: str = "ioc") -> Dict[str, Any]: ...
+    async def create_order(self, symbol: str, qty: float, side: str, type: str = "market", time_in_force: str = "ioc", client_order_id: Optional[str] = None) -> Dict[str, Any]: ...
 
 
 class AlpacaExchange:
@@ -75,6 +104,12 @@ class AlpacaExchange:
         self._rate_limit_remaining = 200
         self._rate_limit_reset = 0.0
         self._rate_limit_hits = 0
+        # Bar cache: (symbol, timeframe, limit) -> (timestamp, DataFrame)
+        self._bars_cache: Dict[tuple, Tuple[float, pl.DataFrame]] = {}
+        self._bars_cache_ttl: float = 60.0  # cache bars for 60 seconds
+        # Idempotency cache: client_order_id -> (timestamp, order_info)
+        self._order_cache: Dict[str, Tuple[float, Dict[str, Any]]] = {}
+        self._order_cache_ttl: float = 300.0  # cache orders for 5 minutes
 
     async def load(self) -> None:
         """Initialize the exchange client and verify credentials."""
@@ -106,7 +141,7 @@ class AlpacaExchange:
         self.data_client = None
         logger.info("Alpaca client closed")
 
-    @retry(retry=retry_if_exception(_retry_on_rate_limit), stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
+    @retry(retry=retry_if_exception(_retry_on_rate_limit), stop=stop_after_attempt(5), wait=_rate_limit_wait)
     async def get_account(self) -> Dict[str, Any]:
         """Get account information (formatted to dict for compatibility)."""
         if not self.trading_client:
@@ -138,11 +173,19 @@ class AlpacaExchange:
                 return TimeFrame(val, TimeFrameUnit.Day)
         return TimeFrame.Day
 
-    @retry(retry=retry_if_exception(_retry_on_rate_limit), stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
+    @retry(retry=retry_if_exception(_retry_on_rate_limit), stop=stop_after_attempt(5), wait=_rate_limit_wait)
     async def get_bars(self, symbol: str, timeframe: str = "1D", limit: int = 100) -> pl.DataFrame:
         """Get crypto market data using alpaca-py and convert to Polars."""
         if not self.data_client:
             await self.load()
+
+        cache_key = (symbol, timeframe, limit)
+        now = time.time()
+        cached = self._bars_cache.get(cache_key)
+        if cached is not None:
+            cached_ts, cached_df = cached
+            if now - cached_ts < self._bars_cache_ttl and len(cached_df) >= limit:
+                return cached_df
 
         tf = self._parse_timeframe(timeframe)
         
@@ -184,13 +227,17 @@ class AlpacaExchange:
                         "trade_count": int(b.trade_count),
                     })
                 
-                return pl.DataFrame(data_list)
+                df_result = pl.DataFrame(data_list)
+                self._bars_cache[cache_key] = (time.time(), df_result)
+                return df_result
         except Exception as e:
             logger.warning(f"Failed to fetch bars for {symbol}: {e}")
-            
-        return pl.DataFrame()
 
-    @retry(retry=retry_if_exception(_retry_on_rate_limit), stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
+        result = pl.DataFrame()
+        self._bars_cache[cache_key] = (time.time(), result)
+        return result
+
+    @retry(retry=retry_if_exception(_retry_on_rate_limit), stop=stop_after_attempt(5), wait=_rate_limit_wait)
     async def get_latest_bar(self, symbol: str) -> pl.DataFrame:
         """Get the latest bar for a crypto symbol."""
         if not self.data_client:
@@ -217,7 +264,7 @@ class AlpacaExchange:
 
         return pl.DataFrame()
 
-    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
+    @retry(stop=stop_after_attempt(5), wait=wait_exponential(multiplier=1, min=2, max=30))
     async def get_positions(self) -> List[Dict[str, Any]]:
         """Get open positions."""
         if not self.trading_client:
@@ -236,7 +283,7 @@ class AlpacaExchange:
             })
         return result
 
-    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
+    @retry(stop=stop_after_attempt(5), wait=wait_exponential(multiplier=1, min=2, max=30))
     async def get_order(self, order_id: str) -> Dict[str, Any]:
         """Fetch order details by order ID."""
         if not self.trading_client:
@@ -253,7 +300,7 @@ class AlpacaExchange:
             "type": str(order.type.value) if hasattr(order.type, "value") else str(order.type),
         }
 
-    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
+    @retry(stop=stop_after_attempt(5), wait=wait_exponential(multiplier=1, min=2, max=30))
     async def create_order(
         self,
         symbol: str,
@@ -263,31 +310,59 @@ class AlpacaExchange:
         time_in_force: str = "ioc",
         confirm: bool = True,
         confirm_timeout: float = 10.0,
+        client_order_id: Optional[str] = None,
     ) -> Dict[str, Any]:
-        """Create a new order using alpaca-py."""
+        """Create a new order using alpaca-py.
+
+        If ``client_order_id`` is provided and a matching order was already
+        placed recently (within the idempotency window), the cached result
+        is returned instead of re-submitting — preventing double-submits
+        from confirmation timeouts.
+        """
         if not self.trading_client:
             await self.load()
-            
+
+        # --- Idempotency check ---
+        if client_order_id is not None:
+            now = time.time()
+            cached = self._order_cache.get(client_order_id)
+            if cached is not None:
+                ts, order_info = cached
+                if now - ts < self._order_cache_ttl:
+                    logger.info(
+                        f"Order {client_order_id} already placed (idempotent), "
+                        f"returning cached result"
+                    )
+                    return order_info
+
         # Parse enums
         order_side = OrderSide.BUY if side.lower() == "buy" else OrderSide.SELL
         
         # We enforce market orders in this bot, but it can be expanded.
-        request = MarketOrderRequest(
+        order_kwargs = dict(
             symbol=symbol,
             qty=qty,
             side=order_side,
-            time_in_force=TimeInForce.IOC if time_in_force.lower() == "ioc" else TimeInForce.GTC
+            time_in_force=TimeInForce.IOC if time_in_force.lower() == "ioc" else TimeInForce.GTC,
         )
+        if client_order_id is not None:
+            order_kwargs["client_order_id"] = client_order_id
+
+        request = MarketOrderRequest(**order_kwargs)
 
         order = await asyncio.to_thread(self.trading_client.submit_order, request)
         order_id = str(order.id)
-        
+
         order_info = {
             "id": order_id,
             "symbol": str(order.symbol),
             "qty": float(order.qty) if order.qty else 0.0,
             "status": str(order.status.value) if hasattr(order.status, "value") else str(order.status),
         }
+
+        # Cache for idempotency
+        if client_order_id is not None:
+            self._order_cache[client_order_id] = (time.time(), order_info)
 
         if not confirm or not order_id:
             return order_info

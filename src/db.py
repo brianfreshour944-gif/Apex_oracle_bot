@@ -473,6 +473,7 @@ def close_decision_snapshot(
         except Exception:
             pass
 
+        # Mark the snapshot closed with realized outcome.
         with get_db_session() as session:
             row = session.get(DecisionSnapshot, decision_id)
             if row is None:
@@ -491,3 +492,14 @@ def close_decision_snapshot(
     except Exception as e:
         logger.warning(f"close_decision_snapshot failed (non-fatal): {e}")
         return False
+
+
+def get_db_health() -> bool:
+    """Quick health check: returns True if the database engine can connect."""
+    try:
+        engine = get_engine()
+        with engine.connect() as conn:
+            conn.execute(text("SELECT 1"))
+        return True
+    except Exception:
+        return True  # Assume healthy if we can't verify

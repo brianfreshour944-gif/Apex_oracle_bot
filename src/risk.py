@@ -438,7 +438,8 @@ class RiskManager:
                 side = "sell" if float(qty) > 0 else "buy"
                 qty_abs = abs(float(qty))
                 market_value = float(position.get("market_value", 0))
-                order_result = await self.exchange.create_order(symbol=symbol, qty=qty_abs, side=side, type="market")
+                client_order_id = f"emergency_{symbol}_{side}_{qty_abs}_{int(time.time())}"
+                order_result = await self.exchange.create_order(symbol=symbol, qty=qty_abs, side=side, type="market", client_order_id=client_order_id)
                 filled_price = order_result.get("filled_avg_price", 0.0)
                 filled_qty = order_result.get("filled_qty", qty_abs)
                 actual_value = filled_price * filled_qty if filled_price > 0 else market_value
@@ -465,11 +466,13 @@ class RiskManager:
                 side = "sell" if float(qty) > 0 else "buy"
                 qty_abs = abs(float(qty))
 
+                client_order_id = f"emergency_{symbol}_{side}_{qty_abs}_{int(time.time())}"
                 order_result = await self.exchange.create_order(
                     symbol=symbol,
                     qty=qty_abs,
                     side=side,
-                    type="market"
+                    type="market",
+                    client_order_id=client_order_id,
                 )
 
                 results.append({

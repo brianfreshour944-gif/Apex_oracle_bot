@@ -184,13 +184,14 @@ async def _record_committee_outcome(symbol: str, exit_price: float, exit_reason:
                              model.eval()
                      except Exception:
                          pass  # Swallow all errors
-                 
-# Run in background thread, don't await
-                  task = asyncio.create_task(asyncio.to_thread(_online_transformer_step), name="transformer_online")
-                  _background_tasks.add(task)
-                  task.add_done_callback(_background_tasks.discard)
-         except Exception as e:
-             logger.debug(f"Online Transformer step skipped (non-fatal): {e}")
+                  
+
+            # Run in background thread, don't await
+            task = asyncio.create_task(asyncio.to_thread(_online_transformer_step), name="transformer_online")
+            _background_tasks.add(task)
+            task.add_done_callback(_background_tasks.discard)
+        except Exception as e:
+            logger.debug(f"Online Transformer step skipped (non-fatal): {e}")
 
         learner = get_meta_learner()
         if learner is not None:
@@ -362,11 +363,13 @@ async def process_signal_for_symbol(symbol: str, current_price: float, risk_mana
                 if trailing_action == "close":
                     side = "sell" if qty > 0 else "buy"
                     qty_abs = abs(qty)
+                    client_order_id = f"{symbol}_{side}_{qty_abs}_{int(time.time())}"
                     order_result = await ex.create_order(
                         symbol=symbol,
                         qty=qty_abs,
                         side=side,
-                        type="market"
+                        type="market",
+                        client_order_id=client_order_id,
                     )
                     logger.info(f"Trailing Stop Executed: {symbol}")
                     await send_telegram_alert(f"Ã°Å¸Å¡Â¨ <b>Trailing Stop Triggered</b>\nSymbol: {symbol}\nClosed {qty} @ ${current_price:.2f}")
@@ -561,11 +564,13 @@ async def process_signal_for_symbol(symbol: str, current_price: float, risk_mana
                         return
     
                 # Place order
+                client_order_id = f"{symbol}_{signal['action']}_{position_size}_{int(time.time())}"
                 order_result = await ex.create_order(
                     symbol=symbol,
                     qty=position_size,
                     side=signal["action"],
-                    type="market"
+                    type="market",
+                    client_order_id=client_order_id,
                 )
     
                 filled_price = order_result.get("filled_avg_price", 0.0)
@@ -623,12 +628,14 @@ async def process_signal_for_symbol(symbol: str, current_price: float, risk_mana
                 qty = float(current_position["qty"])
                 side = "sell" if qty > 0 else "buy"
                 qty_abs = abs(qty)
-    
+
+                client_order_id = f"{symbol}_{side}_{qty_abs}_{int(time.time())}"
                 order_result = await ex.create_order(
                     symbol=symbol,
                     qty=qty_abs,
                     side=side,
-                    type="market"
+                    type="market",
+                    client_order_id=client_order_id,
                 )
     
                 filled_price = order_result.get("filled_avg_price", 0.0)
