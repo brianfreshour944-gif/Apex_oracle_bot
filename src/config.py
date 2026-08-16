@@ -421,6 +421,35 @@ class TradingBotSettings(BaseSettings):
         ge=0,
     )
 
+    # --- Committee / Adaptive Validation ---
+    DEFAULT_SCORE_THRESHOLD: float = Field(
+        default=0.15,
+        description="Default score threshold below which the committee falls back to 'stand_aside'",
+        ge=0.0,
+        le=1.0,
+    )
+    ADAPTIVE_MIN_VALIDATION_TRADES: int = Field(
+        default=10,
+        description="Minimum realized trades required before a regime's adaptive weights pass validation",
+        ge=0,
+    )
+    ADAPTIVE_MIN_SHARPE: float = Field(
+        default=0.5,
+        description="Minimum Sharpe ratio for adaptive weight validation gate",
+    )
+    ADAPTIVE_MIN_WIN_RATE: float = Field(
+        default=0.52,
+        description="Minimum win rate (52%) for adaptive weight validation gate",
+        ge=0.0,
+        le=1.0,
+    )
+    ADAPTIVE_HOLDOUT_FRACTION: float = Field(
+        default=0.3,
+        description="Fraction of trades held out for validation (30%)",
+        ge=0.0,
+        le=1.0,
+    )
+
     # --- Machine Learning Paths ---
     TRANSFORMER_MODEL_PATH: str = Field(
         default="models/grok_gqa_v9_best.pth",
@@ -535,6 +564,11 @@ ADAPTIVE_LEARNING_RATE = settings.ADAPTIVE_LEARNING_RATE
 ADAPTIVE_MIN_WEIGHT = settings.ADAPTIVE_MIN_WEIGHT
 ADAPTIVE_MAX_WEIGHT = settings.ADAPTIVE_MAX_WEIGHT
 ADAPTIVE_MIN_TRADES_BEFORE_LIVE = settings.ADAPTIVE_MIN_TRADES_BEFORE_LIVE
+DEFAULT_SCORE_THRESHOLD = settings.DEFAULT_SCORE_THRESHOLD
+ADAPTIVE_MIN_VALIDATION_TRADES = settings.ADAPTIVE_MIN_VALIDATION_TRADES
+ADAPTIVE_MIN_SHARPE = settings.ADAPTIVE_MIN_SHARPE
+ADAPTIVE_MIN_WIN_RATE = settings.ADAPTIVE_MIN_WIN_RATE
+ADAPTIVE_HOLDOUT_FRACTION = settings.ADAPTIVE_HOLDOUT_FRACTION
 TX_COST_FEE_BPS = settings.TX_COST_FEE_BPS
 TX_COST_SLIPPAGE_BPS = settings.TX_COST_SLIPPAGE_BPS
 TX_COST_SPREAD_BPS = settings.TX_COST_SPREAD_BPS

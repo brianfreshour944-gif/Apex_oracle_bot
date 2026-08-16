@@ -27,7 +27,7 @@ from .llm_brain import llm_brain
 logger = get_logger("committee")
 
 # Default fallback if symbol lacks optimized data
-DEFAULT_SCORE_THRESHOLD = 0.15
+DEFAULT_SCORE_THRESHOLD = settings.DEFAULT_SCORE_THRESHOLD
 
 # Alias for tests / external imports — the real trade-gating threshold is
 # DEFAULT_SCORE_THRESHOLD (0.15) or the per-symbol adaptive threshold.

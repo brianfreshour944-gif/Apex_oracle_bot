@@ -26,6 +26,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from src.logging_config import get_logger
+from src.config import settings as _settings
 
 logger = get_logger("adaptive_meta")
 
@@ -35,11 +36,11 @@ BRAINS: List[str] = ["transformer", "quant", "momentum", "sentinel", "llm"]
 STATE_VERSION = 1
 _DIRECTIONAL = {"buy", "sell"}
 
-# Validation gate thresholds
-VALIDATION_MIN_TRADES = 10          # Minimum trades before validation can pass
-VALIDATION_MIN_SHARPE = 0.5         # Minimum Sharpe ratio (annualized-ish)
-VALIDATION_MIN_WIN_RATE = 0.52      # Minimum win rate (52%)
-VALIDATION_HOLDOUT_FRACTION = 0.3   # Fraction of trades held out for validation
+# Validation gate thresholds — sourced from settings, with fallbacks for tests
+VALIDATION_MIN_TRADES = getattr(_settings, "ADAPTIVE_MIN_VALIDATION_TRADES", 10)
+VALIDATION_MIN_SHARPE = getattr(_settings, "ADAPTIVE_MIN_SHARPE", 0.5)
+VALIDATION_MIN_WIN_RATE = getattr(_settings, "ADAPTIVE_MIN_WIN_RATE", 0.52)
+VALIDATION_HOLDOUT_FRACTION = getattr(_settings, "ADAPTIVE_HOLDOUT_FRACTION", 0.3)
 
 
 @dataclass
