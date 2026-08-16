@@ -280,12 +280,14 @@ async def run_committee(symbol: str, price: float, signal: Dict[str, Any]) -> Co
     explanation: Optional[str] = None
     winner, score = baseline_winner, baseline_score
 
-    # Check if adaptive learning is ready (min trades gate)
+    # Check if adaptive learning is ready (min trades gate + validation gate)
     learner = get_meta_learner()
     live_ready = False
+    validated_ready = False
     ppo_ready = False
     if learner is not None:
         live_ready = learner.sample_count_for_regime(regime) >= settings.ADAPTIVE_MIN_TRADES_BEFORE_LIVE
+        validated_ready = learner.is_regime_validated(regime)
         # PPO gate: just needs model loaded and minimal trades
         ppo_ready = learner.sample_count_for_regime(regime) >= settings.PPO_MIN_TRADES_BEFORE_LIVE
 
@@ -299,10 +301,13 @@ async def run_committee(symbol: str, price: float, signal: Dict[str, Any]) -> Co
         except Exception as e:
             logger.warning(f"Adaptive combine failed: {e}")
 
-    # Use mathematical adaptive learner if enabled and gate passed
-    if learner is not None and settings.ADAPTIVE_ML_ENABLED and live_ready and shadow_decision:
+    # Use mathematical adaptive learner if enabled and gates passed
+    if learner is not None and settings.ADAPTIVE_ML_ENABLED and live_ready and validated_ready and shadow_decision:
         adaptive_used = True
         winner, score = shadow_decision.action, shadow_decision.confidence
+        logger.info(f"Adaptive learner ACTIVE for regime '{regime}' (trades={learner.sample_count_for_regime(regime)}, validated=True)")
+    elif learner is not None and settings.ADAPTIVE_ML_ENABLED and live_ready and not validated_ready:
+        logger.info(f"Adaptive learner SHADOW for regime '{regime}' (trades={learner.sample_count_for_regime(regime)}, validated=False)")
 
     # Fallback to RL Meta-Learner (PPO) if mathematical learner not ready/failed
     from .rl_meta import RLMetaLearner

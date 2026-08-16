@@ -6,9 +6,10 @@ from typing import Dict, Any, Optional, Tuple
 from datetime import datetime, timezone
 from tenacity import retry, stop_after_attempt, wait_exponential
 
-from src.config import settings
+from src.config import settings, FEATURE_BASE_TIMEFRAME, FEATURE_LOOKBACK_BARS
 from src.logging_config import get_logger
 from src.exchange import AlpacaExchange
+from src.feature_engineering import add_features, add_multi_timeframe_features, DEFAULT_TIMEFRAMES
 
 logger = get_logger(__name__)
 
@@ -40,11 +41,21 @@ class TradingStrategy:
                 return cached_res
 
         try:
-            # Get historical data
-            bars_df = await self.exchange.get_bars(symbol, timeframe, limit)
+            # Get historical data for price-based calculations
+            bars_df_raw = await self.exchange.get_bars(symbol, timeframe, limit)
+            
+            # Get multi-timeframe features for enhanced regime analysis
+            from src.config import FEATURE_BASE_TIMEFRAME, TIMEFRAMES
+            bars_df_features = await add_multi_timeframe_features(
+                self.exchange,
+                symbol,
+                base_timeframe=FEATURE_BASE_TIMEFRAME,
+                timeframes=TIMEFRAMES,
+                limit=limit
+            )
 
-            if len(bars_df) < 20:
-                logger.warning(f"Insufficient data for {symbol}, only {len(bars_df)} bars")
+            if len(bars_df_raw) < 20 or bars_df_features is None or len(bars_df_features) < 20:
+                logger.warning(f"Insufficient data for {symbol}, raw={len(bars_df_raw) if bars_df_raw is not None else 0}, features={len(bars_df_features) if bars_df_features is not None else 0}")
                 res = {
                     "regime": "neutral",
                     "hurst": 0.5,
@@ -56,24 +67,56 @@ class TradingStrategy:
                 self._regime_cache[symbol] = (now, res)
                 return res
 
+            # Extract numpy arrays explicitly (Polars Series -> numpy) from raw data
+            close_arr = bars_df_raw["close"].to_numpy()
+            high_arr = bars_df_raw["high"].to_numpy()
+            low_arr = bars_df_raw["low"].to_numpy()
 
-            # Extract numpy arrays explicitly (Polars Series -> numpy)
-            close_arr = bars_df["close"].to_numpy()
-            high_arr = bars_df["high"].to_numpy()
-            low_arr = bars_df["low"].to_numpy()
-
+            # Extract features from the multi-timeframe DataFrame
+            # Use the most recent bar's feature values
+            latest_features = bars_df_features.iloc[-1]
+            
             # Calculate returns for Hurst exponent
             returns = np.diff(close_arr) / close_arr[:-1]
             returns = returns[~np.isnan(returns)]
 
-            # Calculate Hurst exponent
-            hurst = self._calculate_hurst(returns)
+            # Calculate Hurst exponent from z_return (proxy for momentum/mean-reversion) or from returns
+            # Hurst > 0.5 indicates trending, < 0.5 indicates mean-reverting
+            if 'z_return' in bars_df_features.columns and len(bars_df_features) >= 20:
+                # Use z_return autocorrelation as a proxy for Hurst
+                z_return_series = bars_df_features['z_return']
+                # Calculate rolling autocorrelation of z_return as a proxy for Hurst
+                # This is a simplified approximation - in practice we might use the actual 
+                # Hurst calculation on returns, but for now we'll use feature-based approach
+                roll_autocorr = z_return_series.rolling(10, min_periods=4).apply(
+                    lambda x: x.autocorr(lag=1) if len(x) > 1 else 0.0, raw=False
+                ).fillna(0.0)
+                # Map autocorrelation [-1,1] to Hurst-like value [0,1] 
+                # where -1 -> 0.0 (strong mean reversion), 0 -> 0.5 (random walk), 1 -> 1.0 (strong trend)
+                hurst_raw = float(roll_autocorr.iloc[-1])
+                hurst = max(0.0, min(1.0, (hurst_raw + 1.0) / 2.0))
+            else:
+                # Fallback to traditional Hurst calculation on returns
+                hurst = self._calculate_hurst(returns)
 
-            # Calculate ATR (pass numpy arrays)
-            atr = self._calculate_atr(high_arr, low_arr, close_arr)
+            # Get ATR from features (if available and reliable) or calculate from price data
+            if 'atr' in latest_features and not np.isnan(latest_features['atr']):
+                atr = float(latest_features['atr'])
+            else:
+                # Fallback to calculating from price data
+                atr = self._calculate_atr(high_arr, low_arr, close_arr)
 
-            # Calculate RSI
-            rsi, prev_rsi = self._calculate_rsi(close_arr)
+            # Get RSI from features (if available and reliable) or calculate from price data
+            if 'rsi' in latest_features and not np.isnan(latest_features['rsi']):
+                rsi = float(latest_features['rsi'])
+                # For prev_rsi, we need the second-to-last value
+                if len(bars_df_features) >= 2 and 'rsi' in bars_df_features.columns:
+                    prev_rsi = float(bars_df_features['rsi'].iloc[-2])
+                else:
+                    prev_rsi = rsi
+            else:
+                # Fallback to calculating from price data
+                rsi, prev_rsi = self._calculate_rsi(close_arr)
 
             # Calculate 20-period price z-score (for mean-reversion in chop)
             price_zscore = 0.0
@@ -87,7 +130,7 @@ class TradingStrategy:
             htf_trend = "neutral"
             if len(close_arr) >= 20:
                 # Use pandas for robust EWM to avoid Polars version API drift
-                ema20 = float(bars_df["close"].to_pandas().ewm(span=20).mean().iloc[-1])
+                ema20 = float(bars_df_raw["close"].to_pandas().ewm(span=20).mean().iloc[-1])
                 htf_trend = "bullish" if close_arr[-1] > ema20 else "bearish"
 
             # Classify regime

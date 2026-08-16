@@ -140,6 +140,61 @@ class TradingBotSettings(BaseSettings):
         ge=0
     )
 
+    # --- Transaction Cost Model ---
+    # Used by calculate_position_size to adjust effective risk and filter trades
+    # that would have negative expected value after costs.
+    TX_COST_FEE_BPS: float = Field(
+        default=5.0,
+        description="Exchange commission fee in basis points (1 bp = 0.01%)",
+        ge=0,
+        le=100,
+    )
+    TX_COST_SLIPPAGE_BPS: float = Field(
+        default=3.0,
+        description="Expected market order slippage in basis points",
+        ge=0,
+        le=500,
+    )
+    TX_COST_SPREAD_BPS: float = Field(
+        default=2.0,
+        description="Typical bid-ask spread in basis points (half-spread for market orders)",
+        ge=0,
+        le=200,
+    )
+    TX_COST_MIN_EDGE_BPS: float = Field(
+        default=10.0,
+        description="Minimum expected edge (bps) after costs to allow a trade. "
+                    "Trades with expected profit < this threshold are rejected.",
+        ge=0,
+        le=500,
+    )
+    TX_COST_USE_DYNAMIC: bool = Field(
+        default=True,
+        description="If True, use recent realized slippage/spread from exchange instead of static defaults.",
+    )
+
+    # --- Multi-Timeframe Feature Engineering ---
+    FEATURE_TIMEFRAMES: str = Field(
+        default="1Min,5Min,15Min,1Hour,4Hour",
+        description="Comma-separated list of timeframes for multi-timeframe feature engineering",
+    )
+    FEATURE_BASE_TIMEFRAME: str = Field(
+        default="1Hour",
+        description="Base timeframe for feature alignment (all other timeframes aligned to this)",
+    )
+    FEATURE_LOOKBACK_BARS: int = Field(
+        default=200,
+        description="Number of bars to fetch per timeframe for feature computation",
+        ge=50,
+        le=2000,
+    )
+
+    @computed_field
+    @property
+    def TIMEFRAMES(self) -> List[str]:
+        """Parsed list of feature timeframes."""
+        return [s.strip() for s in self.FEATURE_TIMEFRAMES.split(",") if s.strip()]
+
     # --- Regime Classification Thresholds ---
     HURST_TREND_UP: float = Field(
         default=0.60,
@@ -188,6 +243,34 @@ class TradingBotSettings(BaseSettings):
         gt=0,
         le=3.0
     )
+
+    # --- Cross-Asset Correlation / Lead-Lag Features ---
+    CROSS_ASSET_PAIRS: str = Field(
+        default="BTC/USD,ETH/USD,SOL/USD",
+        description="Comma-separated list of symbols for cross-asset analysis (first symbol is base)",
+    )
+    CROSS_ASSET_LOOKBACK: int = Field(
+        default=50,
+        description="Number of bars to use for correlation/lead-lag calculations",
+        ge=10,
+        le=500,
+    )
+    CROSS_ASSET_MAX_LAG: int = Field(
+        default=5,
+        description="Maximum lag (in bars) to check for lead-lag relationships",
+        ge=1,
+        le=20,
+    )
+    CROSS_ASSET_METHOD: str = Field(
+        default="pearson",
+        description="Correlation method: 'pearson', 'spearman', or 'kendall'",
+    )
+
+    @computed_field
+    @property
+    def CROSS_ASSET_LIST(self) -> List[str]:
+        """Parsed list of cross-asset symbols."""
+        return [s.strip() for s in self.CROSS_ASSET_PAIRS.split(",") if s.strip()]
 
     # --- Trailing Stop Configuration ---
     TRAILING_STOP_ENABLED: bool = Field(
@@ -326,7 +409,7 @@ class TradingBotSettings(BaseSettings):
         le=1,
     )
     ADAPTIVE_MIN_TRADES_BEFORE_LIVE: int = Field(
-        default=3,
+        default=30,
         description="Realized outcomes required before adaptive weights drive live decisions "
                     "(below this the learner runs in shadow mode even when enabled)",
         ge=0,
@@ -452,4 +535,18 @@ ADAPTIVE_LEARNING_RATE = settings.ADAPTIVE_LEARNING_RATE
 ADAPTIVE_MIN_WEIGHT = settings.ADAPTIVE_MIN_WEIGHT
 ADAPTIVE_MAX_WEIGHT = settings.ADAPTIVE_MAX_WEIGHT
 ADAPTIVE_MIN_TRADES_BEFORE_LIVE = settings.ADAPTIVE_MIN_TRADES_BEFORE_LIVE
+TX_COST_FEE_BPS = settings.TX_COST_FEE_BPS
+TX_COST_SLIPPAGE_BPS = settings.TX_COST_SLIPPAGE_BPS
+TX_COST_SPREAD_BPS = settings.TX_COST_SPREAD_BPS
+TX_COST_MIN_EDGE_BPS = settings.TX_COST_MIN_EDGE_BPS
+TX_COST_USE_DYNAMIC = settings.TX_COST_USE_DYNAMIC
+FEATURE_TIMEFRAMES = settings.FEATURE_TIMEFRAMES
+FEATURE_BASE_TIMEFRAME = settings.FEATURE_BASE_TIMEFRAME
+FEATURE_LOOKBACK_BARS = settings.FEATURE_LOOKBACK_BARS
+TIMEFRAMES = settings.TIMEFRAMES
+CROSS_ASSET_PAIRS = settings.CROSS_ASSET_PAIRS
+CROSS_ASSET_LOOKBACK = settings.CROSS_ASSET_LOOKBACK
+CROSS_ASSET_MAX_LAG = settings.CROSS_ASSET_MAX_LAG
+CROSS_ASSET_METHOD = settings.CROSS_ASSET_METHOD
+CROSS_ASSET_LIST = settings.CROSS_ASSET_LIST
 log_config = settings.log_config

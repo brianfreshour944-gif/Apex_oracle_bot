@@ -12,6 +12,7 @@ Design goals: pragmatic, production-safe, stdlib-only, fail-safe.
 - Per-regime updates never bleed into other regimes.
 - State persists atomically as versioned JSON; corrupt/missing state falls back
   to equal weights instead of crashing.
+- Validation gate: per-regime weights only go live after positive Sharpe & win-rate on holdout.
 """
 
 from __future__ import annotations
@@ -33,6 +34,12 @@ BRAINS: List[str] = ["transformer", "quant", "momentum", "sentinel", "llm"]
 
 STATE_VERSION = 1
 _DIRECTIONAL = {"buy", "sell"}
+
+# Validation gate thresholds
+VALIDATION_MIN_TRADES = 10          # Minimum trades before validation can pass
+VALIDATION_MIN_SHARPE = 0.5         # Minimum Sharpe ratio (annualized-ish)
+VALIDATION_MIN_WIN_RATE = 0.52      # Minimum win rate (52%)
+VALIDATION_HOLDOUT_FRACTION = 0.3   # Fraction of trades held out for validation
 
 
 @dataclass
@@ -88,6 +95,9 @@ class UpdateReport:
     max_delta: float = 0.0
     old_weights: Dict[str, float] = field(default_factory=dict)
     new_weights: Dict[str, float] = field(default_factory=dict)
+    # Weight drift vs equal-weight baseline
+    drift_vs_equal: Dict[str, float] = field(default_factory=dict)
+    drift_l2_norm: float = 0.0
 
 
 def _equal_weights() -> Dict[str, float]:
@@ -127,6 +137,10 @@ class AdaptiveMetaLearner:
         self.regime_sample_count: Dict[str, int] = {}
         self.weights: Dict[str, Dict[str, float]] = {}
         self.performance: Dict[str, Dict[str, BrainPerformance]] = {}
+        # Per-regime returns history for validation (Sharpe, win-rate)
+        self.regime_returns: Dict[str, List[float]] = {}
+        # Validation status per regime
+        self.regime_validated: Dict[str, bool] = {}
 
         if self.state_path:
             self.load()
@@ -158,6 +172,18 @@ class AdaptiveMetaLearner:
             if all(self.min_weight - 1e-9 <= v <= self.max_weight + 1e-9 for v in w.values()):
                 break
         return w
+
+    def _compute_drift_vs_equal(self, weights: Dict[str, float]) -> tuple[Dict[str, float], float]:
+        """Compute weight drift vs equal-weight baseline.
+        
+        Returns:
+            - per-brain drift (weight - equal_weight)
+            - L2 norm of drift vector
+        """
+        equal_w = 1.0 / len(BRAINS)
+        drift = {b: weights.get(b, equal_w) - equal_w for b in BRAINS}
+        l2_norm = math.sqrt(sum(d * d for d in drift.values()))
+        return drift, l2_norm
 
     # ---- combine --------------------------------------------------------
 
@@ -246,6 +272,10 @@ class AdaptiveMetaLearner:
         regime = str(decision_snapshot.get("regime", "default"))
         final_action = str(decision_snapshot.get("final_action", decision_snapshot.get("action", "hold")))
         pnl = self._extract_pnl(realized_outcome)
+        # Extract return_pct for validation tracking
+        return_pct = 0.0
+        if isinstance(realized_outcome, dict):
+            return_pct = float(realized_outcome.get("return_pct", realized_outcome.get("return", 0.0)))
         label = 1 if pnl > 0 else (0 if pnl < 0 else -1)
 
         report = UpdateReport(regime=regime, label=label)
@@ -264,6 +294,10 @@ class AdaptiveMetaLearner:
             report.new_weights = old
             self._save_safely()
             return report
+
+        # Record return for validation gate (even if we don't update weights)
+        if return_pct != 0.0:
+            self._record_return(regime, return_pct)
 
         raw = dict(self._regime_weights(regime))
         perf_regime = self.performance.setdefault(regime, {})
@@ -289,6 +323,13 @@ class AdaptiveMetaLearner:
         self.weights[regime] = new
         report.new_weights = new
         report.max_delta = max((abs(new[b] - old.get(b, 0.0)) for b in new), default=0.0)
+        
+        # Compute drift vs equal-weight baseline
+        report.drift_vs_equal, report.drift_l2_norm = self._compute_drift_vs_equal(new)
+        
+        # Log significant drift
+        if report.drift_l2_norm > 0.15:
+            logger.warning(f"Regime '{regime}' weight drift L2={report.drift_l2_norm:.3f} vs equal: {report.drift_vs_equal}")
 
         self.sample_count += 1
         self.regime_sample_count[regime] = self.regime_sample_count.get(regime, 0) + 1
@@ -301,6 +342,86 @@ class AdaptiveMetaLearner:
         to gate whether a given regime's learned weights are trustworthy --
         see the constructor comment on `regime_sample_count`."""
         return self.regime_sample_count.get(regime, 0)
+
+    # ---- validation gate --------------------------------------------------
+
+    def _record_return(self, regime: str, return_pct: float) -> None:
+        """Record a trade return for validation metrics."""
+        if regime not in self.regime_returns:
+            self.regime_returns[regime] = []
+        self.regime_returns[regime].append(return_pct)
+        # Keep only recent returns (max 500 per regime)
+        if len(self.regime_returns[regime]) > 500:
+            self.regime_returns[regime] = self.regime_returns[regime][-500:]
+
+    def _compute_sharpe(self, returns: List[float]) -> float:
+        """Compute Sharpe ratio from returns (simple, not annualized)."""
+        if len(returns) < 2:
+            return 0.0
+        mean_r = sum(returns) / len(returns)
+        var_r = sum((r - mean_r) ** 2 for r in returns) / (len(returns) - 1)
+        std_r = math.sqrt(var_r) if var_r > 0 else 0.0
+        if std_r == 0:
+            return 0.0
+        return mean_r / std_r
+
+    def _compute_win_rate(self, returns: List[float]) -> float:
+        """Compute win rate from returns."""
+        if not returns:
+            return 0.0
+        wins = sum(1 for r in returns if r > 0)
+        return wins / len(returns)
+
+    def is_regime_validated(self, regime: str) -> bool:
+        """Check if a regime has passed the validation gate.
+        
+        Uses holdout validation: last VALIDATION_HOLDOUT_FRACTION of trades
+        must have positive Sharpe and win-rate above threshold.
+        """
+        returns = self.regime_returns.get(regime, [])
+        min_trades = VALIDATION_MIN_TRADES
+        
+        if len(returns) < min_trades:
+            return False
+        
+        # Use holdout portion for validation
+        holdout_start = int(len(returns) * (1 - VALIDATION_HOLDOUT_FRACTION))
+        holdout_returns = returns[holdout_start:]
+        
+        if len(holdout_returns) < 5:  # Need at least 5 holdout trades
+            return False
+        
+        sharpe = self._compute_sharpe(holdout_returns)
+        win_rate = self._compute_win_rate(holdout_returns)
+        
+        validated = sharpe >= VALIDATION_MIN_SHARPE and win_rate >= VALIDATION_MIN_WIN_RATE
+        self.regime_validated[regime] = validated
+        
+        if validated:
+            logger.info(f"Regime '{regime}' PASSED validation: Sharpe={sharpe:.3f}, WinRate={win_rate:.3f} (n={len(holdout_returns)})")
+        else:
+            logger.debug(f"Regime '{regime}' not validated: Sharpe={sharpe:.3f}, WinRate={win_rate:.3f} (n={len(holdout_returns)})")
+        
+        return validated
+
+    def get_regime_validation_metrics(self, regime: str) -> Dict[str, Any]:
+        """Get validation metrics for a regime (for observability)."""
+        returns = self.regime_returns.get(regime, [])
+        if not returns:
+            return {"validated": False, "sharpe": 0.0, "win_rate": 0.0, "n_trades": 0, "n_holdout": 0}
+        
+        holdout_start = int(len(returns) * (1 - VALIDATION_HOLDOUT_FRACTION))
+        holdout_returns = returns[holdout_start:]
+        
+        return {
+            "validated": self.regime_validated.get(regime, False),
+            "sharpe": self._compute_sharpe(holdout_returns),
+            "win_rate": self._compute_win_rate(holdout_returns),
+            "n_trades": len(returns),
+            "n_holdout": len(holdout_returns),
+            "all_sharpe": self._compute_sharpe(returns),
+            "all_win_rate": self._compute_win_rate(returns),
+        }
 
     # ---- persistence ----------------------------------------------------
 
@@ -315,6 +436,8 @@ class AdaptiveMetaLearner:
             "min_weight": self.min_weight,
             "max_weight": self.max_weight,
             "weights": self.weights,
+            "regime_returns": self.regime_returns,
+            "regime_validated": self.regime_validated,
             "performance": {
                 regime: {
                     name: {
@@ -390,6 +513,25 @@ class AdaptiveMetaLearner:
                 for regime, vec in raw_weights.items()
                 if isinstance(vec, dict)
             }
+            # Load validation tracking fields (backward compatible)
+            raw_returns = state.get("regime_returns", {})
+            if isinstance(raw_returns, dict):
+                self.regime_returns = {
+                    str(regime): [float(r) for r in rets if isinstance(r, (int, float))]
+                    for regime, rets in raw_returns.items()
+                    if isinstance(rets, list)
+                }
+            else:
+                self.regime_returns = {}
+            
+            raw_validated = state.get("regime_validated", {})
+            if isinstance(raw_validated, dict):
+                self.regime_validated = {
+                    str(regime): bool(v) for regime, v in raw_validated.items()
+                }
+            else:
+                self.regime_validated = {}
+            
             self.performance = {}
             for regime, brains in (state.get("performance", {}) or {}).items():
                 if not isinstance(brains, dict):
@@ -418,14 +560,26 @@ class AdaptiveMetaLearner:
         self.regime_sample_count = {}
         self.weights = {}
         self.performance = {}
+        self.regime_returns = {}
+        self.regime_validated = {}
 
     # ---- observability --------------------------------------------------
 
     def snapshot(self) -> Dict[str, Any]:
         """Lightweight view for metrics/telemetry."""
+        drift_info = {}
+        for regime, weights in self.weights.items():
+            drift, l2 = self._compute_drift_vs_equal(weights)
+            drift_info[regime] = {"drift": drift, "l2_norm": l2}
+        
         return {
             "version": self.version,
             "sample_count": self.sample_count,
             "last_update": self.last_update,
             "weights": {r: dict(v) for r, v in self.weights.items()},
+            "validation": {
+                regime: self.get_regime_validation_metrics(regime)
+                for regime in self.regime_returns.keys()
+            },
+            "drift_vs_equal": drift_info,
         }

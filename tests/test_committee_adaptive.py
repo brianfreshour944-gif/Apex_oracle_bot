@@ -44,10 +44,14 @@ def _seed_state(path, regime="uptrend"):
     # Asymmetric: transformer keeps voting the profitable direction, the rest
     # vote against it -> transformer's weight rises above the others.
     votes = {"transformer": "buy", "quant": "sell", "momentum": "sell", "sentinel": "sell", "llm": "sell"}
-    for _ in range(30):
+    # Varying returns to get non-zero Sharpe for validation gate
+    returns = [2.0, 1.5, 2.5, 1.0, 3.0, 2.0, 1.5, 2.5, 1.0, 3.0,
+               2.0, 1.5, 2.5, 1.0, 3.0, 2.0, 1.5, 2.5, 1.0, 3.0,
+               2.0, 1.5, 2.5, 1.0, 3.0, 2.0, 1.5, 2.5, 1.0, 3.0]
+    for ret in returns:
         learner.update(
             {"regime": regime, "final_action": "buy", "brain_votes": votes},
-            {"net_pnl": 100.0},
+            {"net_pnl": 100.0, "return_pct": ret},
         )
     learner.save()
     return learner

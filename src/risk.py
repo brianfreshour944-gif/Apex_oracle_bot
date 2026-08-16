@@ -11,6 +11,13 @@ from src.exchange import AlpacaExchange
 
 logger = get_logger(__name__)
 
+# Default transaction cost model (used as fallback when dynamic not available)
+DEFAULT_TX_COSTS = {
+    "fee_bps": 5.0,
+    "slippage_bps": 3.0,
+    "spread_bps": 2.0,
+}
+
 class RiskManager:
     """Modern risk management with position sizing and drawdown protection."""
 
@@ -28,6 +35,44 @@ class RiskManager:
         self._exposure_lock = asyncio.Lock()
         self._equity_lock = asyncio.Lock()
         self._reserved_exposure = []  # list of (notional_amount, reserved_at) tuples
+        # Transaction cost tracking for dynamic model
+        self._realized_tx_costs: Dict[str, Dict[str, float]] = {}  # symbol -> {fee_bps, slippage_bps, spread_bps}
+
+    def get_transaction_costs(self, symbol: str) -> Dict[str, float]:
+        """Get transaction cost estimates for a symbol.
+        
+        Uses dynamic model (recent realized costs) if enabled and available,
+        otherwise falls back to static defaults from settings.
+        
+        Returns dict with: fee_bps, slippage_bps, spread_bps, total_bps
+        """
+        if settings.TX_COST_USE_DYNAMIC and symbol in self._realized_tx_costs:
+            costs = self._realized_tx_costs[symbol]
+            total = costs["fee_bps"] + costs["slippage_bps"] + costs["spread_bps"]
+            return {**costs, "total_bps": total}
+        
+        # Fallback to static defaults
+        fee = getattr(settings, "TX_COST_FEE_BPS", DEFAULT_TX_COSTS["fee_bps"])
+        slippage = getattr(settings, "TX_COST_SLIPPAGE_BPS", DEFAULT_TX_COSTS["slippage_bps"])
+        spread = getattr(settings, "TX_COST_SPREAD_BPS", DEFAULT_TX_COSTS["spread_bps"])
+        return {"fee_bps": fee, "slippage_bps": slippage, "spread_bps": spread, "total_bps": fee + slippage + spread}
+
+    def record_fill_costs(self, symbol: str, fee_bps: float, slippage_bps: float, spread_bps: float = None) -> None:
+        """Record realized transaction costs for dynamic model updates.
+        
+        Called after each order fill to update the dynamic cost model.
+        Uses exponential moving average to blend old and new observations.
+        """
+        if symbol not in self._realized_tx_costs:
+            self._realized_tx_costs[symbol] = {"fee_bps": fee_bps, "slippage_bps": slippage_bps, "spread_bps": spread_bps or 0.0}
+        else:
+            # EMA with alpha=0.3 (moderate adaptation)
+            alpha = 0.3
+            old = self._realized_tx_costs[symbol]
+            old["fee_bps"] = (1 - alpha) * old["fee_bps"] + alpha * fee_bps
+            old["slippage_bps"] = (1 - alpha) * old["slippage_bps"] + alpha * slippage_bps
+            if spread_bps is not None:
+                old["spread_bps"] = (1 - alpha) * old.get("spread_bps", 0.0) + alpha * spread_bps
 
     async def update_account_status(
         self,
@@ -151,8 +196,15 @@ class RiskManager:
         atr: Optional[float] = None,
         confidence: float = 1.0,
         returns_matrix: Optional[Dict[str, np.ndarray]] = None,
+        expected_return_pct: float = 0.0,
     ) -> Tuple[float, str]:
-        """Portfolio Optimization: Volatility Parity, Correlation VaR, and Cash Allocation."""
+        """Portfolio Optimization: Volatility Parity, Correlation VaR, and Cash Allocation.
+        
+        Now includes transaction cost model:
+        - Round-trip costs = 2 * (fee + slippage + half_spread) in bps
+        - Effective risk reduced by expected costs
+        - Trades rejected if expected edge < TX_COST_MIN_EDGE_BPS
+        """
         try:
             # 1. Dynamic Cash Allocation (base risk scales with actual equity, not hardcoded base)
             account_equity = self.peak_equity if self.peak_equity > 0 else settings.ACCOUNT_BASE
@@ -172,7 +224,36 @@ class RiskManager:
             conf_weight = np.clip(confidence, 0.5, 1.5)
             risk_amount *= conf_weight
 
-            # 3. Volatility Targeting (Equal risk contribution)
+            # 3. Transaction Cost Model - Get costs and adjust effective risk
+            tx_costs = self.get_transaction_costs(symbol)
+            total_cost_bps = tx_costs["total_bps"]  # fee + slippage + spread (one-way)
+            round_trip_cost_bps = 2.0 * total_cost_bps  # entry + exit
+            
+            # Expected return in bps (from strategy signal if provided, else from profit target)
+            if expected_return_pct > 0:
+                expected_edge_bps = expected_return_pct * 10000  # Convert to bps
+            else:
+                expected_edge_bps = settings.PROFIT_TARGET_PCT * 10000  # Use take-profit as proxy
+            
+            # Net edge after round-trip costs
+            net_edge_bps = expected_edge_bps - round_trip_cost_bps
+            
+            # Check minimum edge threshold
+            min_edge_bps = getattr(settings, "TX_COST_MIN_EDGE_BPS", 10.0)
+            if net_edge_bps < min_edge_bps:
+                logger.warning(
+                    f"Trade rejected for {symbol}: net edge {net_edge_bps:.1f}bps < min {min_edge_bps:.1f}bps "
+                    f"(expected={expected_edge_bps:.1f}, round_trip_cost={round_trip_cost_bps:.1f})"
+                )
+                return 0.0, f"rejected: insufficient edge after costs ({net_edge_bps:.1f}bps < {min_edge_bps:.1f}bps)"
+
+            # 4. Adjust effective risk by expected transaction costs
+            # The risk amount is reduced by the expected cost as a fraction of position
+            cost_fraction = round_trip_cost_bps / 10000  # Convert bps to fraction
+            effective_risk_amount = risk_amount * (1.0 - cost_fraction)
+            effective_risk_amount = max(effective_risk_amount, risk_amount * 0.5)  # Floor at 50% of original
+
+            # 5. Volatility Targeting (Equal risk contribution)
             # Use the actual stop-loss percentage distance for sizing so that
             # the position size matches the real SL trigger distance.
             stop_distance = current_price * settings.STOP_LOSS_PCT
@@ -182,9 +263,9 @@ class RiskManager:
                 # so the tighter stop governs the actual risk.
                 stop_distance = min(stop_distance, atr_stop_distance)
 
-            position_size = risk_amount / stop_distance
+            position_size = effective_risk_amount / stop_distance
 
-            # 4. Correlation Matrix & Portfolio VaR
+            # 6. Correlation Matrix & Portfolio VaR
             if returns_matrix and len(returns_matrix) > 1:
                 keys = list(returns_matrix.keys())
                 
@@ -206,7 +287,7 @@ class RiskManager:
                             logger.info(f"Portfolio Optimizer: {symbol} correlation cluster ({avg_corr:.2f}). VaR constraint -> size x{penalty:.2f}.")
                             position_size *= penalty
 
-            # 5. Maximum Sector/Direction Exposure (Hard Cap)
+            # 7. Maximum Sector/Direction Exposure (Hard Cap)
             position_size = min(position_size, settings.MAX_SINGLE_TRADE_USD / current_price)
             position_size = round(position_size, 6)
 
@@ -220,6 +301,11 @@ class RiskManager:
                 )
                 return 0.0, "error: NaN position size (confidence was NaN)"
 
+            logger.debug(
+                f"Position sizing {symbol}: risk=${risk_amount:.2f} effective=${effective_risk_amount:.2f} "
+                f"costs={total_cost_bps:.1f}bps round_trip={round_trip_cost_bps:.1f}bps "
+                f"edge={expected_edge_bps:.1f}bps net={net_edge_bps:.1f}bps size={position_size:.6f}"
+            )
             return position_size, "ok"
 
         except Exception as e:

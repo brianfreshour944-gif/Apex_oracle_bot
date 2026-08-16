@@ -1,6 +1,7 @@
 """Main trading bot implementation."""
 
 import asyncio
+import math
 import time
 from datetime import datetime, timezone
 from typing import Dict, Any, Optional
@@ -17,6 +18,11 @@ from src.telegram_alerts import send_telegram_alert
 logger = get_logger("bot")
 
 _transformer_online_updates = 0
+_transformer_online_lr_schedule = "cosine"  # "cosine" | "constant" | "linear"
+_transformer_online_lr_base = 1e-5
+_transformer_online_lr_min = 1e-6
+_transformer_online_warmup_steps = 100
+_transformer_online_total_steps = 10000
 
 
 async def _record_committee_outcome(symbol: str, exit_price: float, exit_reason: Optional[str] = None) -> None:
@@ -109,7 +115,7 @@ async def _record_committee_outcome(symbol: str, exit_price: float, exit_reason:
         except Exception as e:
             logger.warning(f"Failed to append live trade to Transformer replay buffer (non-fatal): {e}")
 
-        # Online Transformer gradient step: one step on the just-closed trade's
+# Online Transformer gradient step: one step on the just-closed trade's
         # tensor state. This provides continuous learning between daily full
         # retrain_transformer.py runs. Fail-safe: runs in background thread,
         # never blocks trading, errors swallowed.
@@ -125,7 +131,7 @@ async def _record_committee_outcome(symbol: str, exit_price: float, exit_reason:
                          predictor = get_ml_predictor()
                          if predictor is None:
                              return
-                             
+                         
                          model = predictor["model"]
                          scaler = predictor["scaler"]
                          device = predictor["device"]
@@ -150,9 +156,26 @@ async def _record_committee_outcome(symbol: str, exit_price: float, exit_reason:
                              logits = model(x)
                              loss = torch.nn.functional.binary_cross_entropy_with_logits(logits, label_tensor)
                              loss.backward()
-                             # Annealed learning rate
-                             global _transformer_online_updates
-                             lr = 1e-5 * (0.99 ** _transformer_online_updates)
+                             
+                             # Learning rate schedule with warmup + cosine annealing
+                             global _transformer_online_updates, _transformer_online_lr_schedule, _transformer_online_lr_base, _transformer_online_lr_min, _transformer_online_warmup_steps, _transformer_online_total_steps
+                             
+                             step = _transformer_online_updates
+                             
+                             if step < _transformer_online_warmup_steps:
+                                 # Linear warmup
+                                 lr = _transformer_online_lr_base * (step + 1) / _transformer_online_warmup_steps
+                             else:
+                                 progress = min((step - _transformer_online_warmup_steps) / (_transformer_online_total_steps - _transformer_online_warmup_steps), 1.0)
+                                 if _transformer_online_lr_schedule == "cosine":
+                                     # Cosine annealing to min LR
+                                     lr = _transformer_online_lr_min + 0.5 * (_transformer_online_lr_base - _transformer_online_lr_min) * (1 + math.cos(math.pi * progress))
+                                 elif _transformer_online_lr_schedule == "linear":
+                                     # Linear decay to min LR
+                                     lr = _transformer_online_lr_base - (_transformer_online_lr_base - _transformer_online_lr_min) * progress
+                                 else:  # constant
+                                     lr = _transformer_online_lr_base
+                             
                              _transformer_online_updates += 1
                              with torch.no_grad():
                                  for p in model.parameters():
