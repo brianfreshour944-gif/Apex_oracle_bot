@@ -353,6 +353,8 @@ def add_features(df: pd.DataFrame, symbol: str = "") -> pd.DataFrame:
 
 # Cross-asset functions will be added here
 
+DEFAULT_TIMEFRAMES = ["1Min", "5Min", "15Min", "1Hour", "4Hour"]
+
 
 async def add_multi_timeframe_features(
     exchange,
