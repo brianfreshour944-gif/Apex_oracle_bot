@@ -196,11 +196,14 @@ async def run_committee(symbol: str, price: float, signal: Dict[str, Any]) -> Co
     Returns:
         CommitteeResult containing final action, weighted score, size_multiplier, and vote audit logs.
     """
+    import time as _time
+    _t0 = _time.monotonic()
+
     regime = signal.get("regime", "default")
     
     # Check for hard exits (Stop Loss / Take Profit) BEFORE voting
     if signal.get("action") == "close":
-        return CommitteeResult(
+        result = CommitteeResult(
             action="close",
             score=1.0,
             size_multiplier=0.0,
@@ -209,6 +212,12 @@ async def run_committee(symbol: str, price: float, signal: Dict[str, Any]) -> Co
             active_weights={},
             explanation=signal.get("reason", "Price-based exit condition")
         )
+        try:
+            from src.metrics import record_committee_latency
+            record_committee_latency(symbol, _time.monotonic() - _t0)
+        except Exception:
+            pass
+        return result
         
     weights = REGIME_WEIGHT_MATRIX.get(regime, REGIME_WEIGHT_MATRIX["default"])
     symbol_threshold = get_symbol_threshold(symbol)
@@ -351,7 +360,7 @@ async def run_committee(symbol: str, price: float, signal: Dict[str, Any]) -> Co
         final_action = winner
         size_mult = calculate_confidence_size_multiplier(score, entropy, symbol_threshold)
 
-    return CommitteeResult(
+    result = CommitteeResult(
         action=final_action,
         score=score,
         size_multiplier=size_mult,
@@ -363,3 +372,13 @@ async def run_committee(symbol: str, price: float, signal: Dict[str, Any]) -> Co
         adaptive_weights=adaptive_weights,
         explanation=explanation,
     )
+
+    # Publish Prometheus metrics (best-effort, never blocks trading)
+    try:
+        from src.metrics import record_committee_latency, record_committee_weights
+        record_committee_latency(symbol, _time.monotonic() - _t0)
+        record_committee_weights(symbol, result.votes, result.action, result.score)
+    except Exception:
+        pass
+
+    return result

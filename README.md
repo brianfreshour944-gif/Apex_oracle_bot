@@ -142,7 +142,89 @@ Current brain weights, model version, sample count, and last-update time are
 exported to Prometheus (`bot_adaptive_*`), and a Telegram alert fires when a
 regime's weights change materially.
 
+### Committee Latency & Decision Metrics
+
+| Metric | Type | Description |
+| :--- | :--- | :--- |
+| `committee_decision_seconds` | Histogram | Latency of each `run_committee()` call, labeled by symbol |
+| `committee_brain_weight` | Gauge | Per-brain weight in each committee decision, labeled by brain/action/symbol |
+| `committee_score` | Histogram | Distribution of final committee scores, labeled by action (buy/sell/hold) |
+
 ---
+
+## 🧠 5-Brain Committee Architecture
+
+The decision engine is an ensemble of five specialized "brains" that vote on
+each trading decision. Their votes are combined using **regime-dependent weighting**
+and an optional **adaptive meta-learner** that learns which brains to trust
+per regime from realized P&L.
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                      run_committee()                         │
+│                                                             │
+│  ┌──────────┐  ┌───────┐  ┌──────────┐  ┌───────┐  ┌──────┐ │
+│  │Transformer│  │Quant  │  │Momentum  │  │Sentinel│  │LLM   │ │
+│  │(PyTorch)  │  │(Stat- │  │(Trend/   │  │(Crash │  │(Qual-│ │
+│  │Grok GQA   │  │ arbitrage) │ Momentum)│  │ veto) │  │ itative)│ │
+│  │v9)        │  │        │  │          │  │        │  │        │ │
+│  └────┬─────┘  └────┬───┘  └────┬─────┘  └────┬───┘  └────┬─┘ │
+│       │            │            │            │            │   │
+│       └────────────┴────────────┴────────────┴────────────┘   │
+│                          │                                    │
+│           ┌──────────────▼──────────────┐                    │
+│           │  Dynamic Weight Matrix      │                    │
+│           │  (per regime: bull/bear/    │                    │
+│           │   trending/sideways/etc.)    │                    │
+│           └──────────────┬──────────────┘                    │
+│                          │                                    │
+│           ┌──────────────▼──────────────┐                    │
+│           │  Adaptive Meta-Learner      │                    │
+│           │  (shadow mode by default)    │                    │
+│           └──────────────┬──────────────┘                    │
+│                          │                                    │
+│           ┌──────────────▼──────────────┐                    │
+│           │  Final Decision +           │                    │
+│           │  Position Sizing Multiplier │                    │
+│           └─────────────────────────────┘                    │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### Brain Details
+
+| Brain | Module | Type | Weight | Description |
+| :--- | :--- | :--- | :--- | :--- |
+| **Transformer** | `transformer_brain.py` | PyTorch GQA | 15–40% | Grok GQA v9 model for directional probability. Loaded lazily, runs in background thread. Includes MC-dropout uncertainty estimation and SHAP-style gradient attribution. |
+| **Quant** | `quant_brain.py` | Statistical arb | 15–30% | Mean-reversion signal based on z-score of price relative to Bollinger Bands. |
+| **Momentum** | `momentum_brain.py` | Trend following | 10–30% | Trend-following signal using rolling momentum and MACD. |
+| **Sentinel** | `sentinel_brain.py` | Hard veto | 5–40% | Market regime filter and hard veto for crash/volatility events. Can force "stand_aside" when market stress is detected. |
+| **LLM** | `llm_brain.py` | Qualitative | 5–25% | Rule-assisted qualitative review layer (stub; can be connected to Gemini/Groq/Claude for full reasoning). |
+
+### Voting & Weighting
+
+1. **Concurrent execution**: All 5 brains run concurrently via `asyncio.gather`
+   (the transformer brain uses `asyncio.to_thread` for PyTorch inference).
+2. **Regime weight matrix**: Each market regime (bull, bear, trending, sideways,
+   high_volatility, low_volatility, neutral) has a static weight distribution
+   defined in `REGIME_WEIGHT_MATRIX`.
+3. **Adaptive override**: The optional `AdaptiveMetaLearner` computes learned
+   weights per regime from historical outcomes. When `ADAPTIVE_ML_ENABLED=true`
+   and both validation and warm-up gates pass, learned weights replace the static
+   matrix; otherwise the classic matrix is used with learned weights logged as
+   shadow.
+4. **Entropy penalty**: Vote disagreement (Shannon entropy across brain actions)
+   reduces the position size multiplier by up to 25%.
+5. **Hard vetoes**: Sentinel can force `stand_aside` regardless of other votes
+   when confidence ≥ 0.85 and the signal is `stand_aside`.
+
+### Entry Criteria
+
+| Criterion | Threshold |
+| :--- | :--- |
+| `score` (weighted) | ≥ per-symbol adaptive threshold (default 0.15) |
+| `winner` action | Must be `buy` or `sell` (not `stand_aside`/`skip`/`hold`) |
+| Net edge after costs | ≥ `TX_COST_MIN_EDGE_BPS` (default 10 bps round-trip) |
+| Risk checks | `RiskManager` exposure, drawdown, and daily loss gates must pass |
 
 ## 📈 Backtesting & Parameter Sweeps
 

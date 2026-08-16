@@ -125,6 +125,72 @@ def _generate_synthetic_bars(
     })
 
 
+async def fetch_real_bars(
+    symbol: str,
+    days: int = 365,
+    timeframe: str = "1h",
+) -> Optional[pl.DataFrame]:
+    """Fetch real historical OHLCV bars from Alpaca's crypto data API.
+
+    Falls back to yfinance if Alpaca credentials are unavailable.
+    Returns None if no data source is available.
+
+    The symbol format expected by Alpaca is ``BTC/USD``; yfinance uses ``BTC-USD``.
+    """
+    import datetime
+
+    # Try Alpaca first
+    try:
+        from src.exchange import AlpacaExchange
+        ex = AlpacaExchange()
+        await ex.load()
+        bars = await ex.get_bars(symbol, timeframe=timeframe, limit=days * 24)
+        if bars is not None and len(bars) > 0:
+            # Rename timestamp -> t for BacktestExchange compatibility
+            if "timestamp" in bars.columns:
+                bars = bars.rename({"timestamp": "t"})
+            elif "t" not in bars.columns:
+                # Add a placeholder time column if missing
+                bars = bars.with_columns(pl.lit(datetime.datetime.utcnow().isoformat()).alias("t"))
+            logger.info(f"Fetched {len(bars)} real bars for {symbol} from Alpaca")
+            return bars
+    except Exception as e:
+        logger.debug(f"Alpaca fetch failed for {symbol}: {e}")
+
+    # Fallback: yfinance
+    try:
+        import yfinance as yf
+        yf_symbol = symbol.replace("/", "-")
+        df = yf.Ticker(yf_symbol).history(period=f"{days}d", interval=timeframe)
+        if df.empty:
+            return None
+        df = df.reset_index()
+        rename_map = {}
+        if "Datetime" in df.columns:
+            rename_map["Datetime"] = "t"
+        elif "Date" in df.columns:
+            rename_map["Date"] = "t"
+        if "Open" in df.columns:
+            rename_map["Open"] = "open"
+        if "High" in df.columns:
+            rename_map["High"] = "high"
+        if "Low" in df.columns:
+            rename_map["Low"] = "low"
+        if "Close" in df.columns:
+            rename_map["Close"] = "close"
+        if "Volume" in df.columns:
+            rename_map["Volume"] = "volume"
+        df = df.rename(rename_map)
+        df["t"] = df["t"].astype(str)
+        bars = pl.from_pandas(df)
+        logger.info(f"Fetched {len(bars)} real bars for {symbol} from yfinance")
+        return bars
+    except Exception as e:
+        logger.warning(f"yfinance fetch also failed for {symbol}: {e}")
+
+    return None
+
+
 async def run_backtest(
     symbol: str = "BTC/USD",
     n_bars: int = 400,
@@ -146,7 +212,13 @@ async def run_backtest(
     """
 
     if bars is None:
-        bars = _generate_synthetic_bars(symbol, n=n_bars, seed=seed, regime=regime)
+        # Try to fetch real historical data first; fall back to synthetic
+        days = max(n_bars // 24, 30)  # estimate days from bar count (assuming 1h bars)
+        real_bars = await fetch_real_bars(symbol, days=days)
+        if real_bars is not None and len(real_bars) >= n_bars:
+            bars = real_bars.head(n_bars)
+        else:
+            bars = _generate_synthetic_bars(symbol, n=n_bars, seed=seed, regime=regime)
     exchange = BacktestExchange({symbol: bars})
 
     strategy = TradingStrategy(exchange, cache_ttl=0.0, backtest=True)

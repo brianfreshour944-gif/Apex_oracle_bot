@@ -6,7 +6,7 @@ from __future__ import annotations
 import asyncio  
 import time  
 from enum import Enum  
-from typing import Callable, Optional, TypeVar  
+from typing import Any, Awaitable, Callable, Optional, TypeVar  
   
 from src.config import settings  
 from src.logging_config import get_logger  
@@ -40,7 +40,7 @@ class CircuitBreaker:
             self._state = CircuitState.HALF_OPEN  
             logger.warning(f"Circuit {self.name!r} -^> HALF_OPEN")  
   
-    async def call(self, func, *args, **kwargs):  
+    async def call(self, func: Callable[..., Awaitable[Any]], *args: Any, **kwargs: Any) -> Any:
         async with self._lock:  
             self._maybe_transition()  
             if self._state == CircuitState.OPEN:  

@@ -24,6 +24,9 @@ if _PROM_AVAILABLE:
     OPEN_POSITIONS = Gauge("bot_open_positions", "Number of open positions")
     CIRCUIT_STATE = Gauge("bot_circuit_state", "Circuit breaker state", ["name"])
     REGIME_COUNTS = Counter("bot_regime_total", "Signals by regime", ["regime"])
+    COMMITTEE_DURATION = Histogram("committee_decision_seconds", "Latency of committee.run_committee call", ["symbol"])
+    COMMITTEE_WEIGHT = Gauge("committee_brain_weight", "Per-brain weight in committee decision", ["brain", "action", "symbol"])
+    COMMITTEE_SCORE = Histogram("committee_score", "Distribution of committee scores", ["action"], buckets=[0.0, 0.15, 0.3, 0.5, 0.7, 0.85, 1.0])
     ADAPTIVE_BRAIN_WEIGHT = Gauge("bot_adaptive_brain_weight", "Adaptive per-brain weight", ["brain", "regime"])
     ADAPTIVE_MODEL_VERSION = Gauge("bot_adaptive_model_version", "Adaptive learner state version")
     ADAPTIVE_SAMPLE_COUNT = Gauge("bot_adaptive_sample_count", "Realized outcomes learned from")
@@ -45,11 +48,14 @@ else:
             pass 
         def observe(self, *a, **k): 
             pass 
+        def labels(self, *a, **k):
+            return self
         def time(self, *a, **k): 
             return _NullCtx() 
     _m = _Noop()
     LOOP_DURATION = CYCLES_TOTAL = ERRORS_TOTAL = REGIME_COUNTS = _m
     ORDERS_TOTAL = DRAWDOWN = EQUITY = OPEN_POSITIONS = CIRCUIT_STATE = _m
+    COMMITTEE_DURATION = COMMITTEE_WEIGHT = COMMITTEE_SCORE = _m
     ADAPTIVE_BRAIN_WEIGHT = ADAPTIVE_MODEL_VERSION = _m
     ADAPTIVE_SAMPLE_COUNT = ADAPTIVE_LAST_UPDATE = _m
  
@@ -75,6 +81,26 @@ def update_circuit(name, state):
     if _PROM_AVAILABLE:
         mapping = {"closed": 0, "open": 1, "half_open": 2}
         CIRCUIT_STATE.labels(name=name).set(mapping.get(state, -1))
+
+
+def record_committee_latency(symbol: str, duration: float):
+    """Record how long a committee decision took."""
+    if _PROM_AVAILABLE:
+        COMMITTEE_DURATION.labels(symbol=symbol).observe(duration)
+
+
+def record_committee_weights(symbol: str, votes, action: str, score: float):
+    """Publish per-brain weights and the score distribution for a committee decision."""
+    if not _PROM_AVAILABLE:
+        return
+    try:
+        for v in votes:
+            COMMITTEE_WEIGHT.labels(
+                brain=v.name, action=action, symbol=symbol
+            ).set(float(v.weight))
+        COMMITTEE_SCORE.labels(action=action).observe(float(score))
+    except Exception as e:
+        logger.debug(f"record_committee_weights failed: {e}")
 
 
 def update_adaptive_metrics(snapshot):
