@@ -7,7 +7,7 @@ Performs live model inference if PyTorch & model weights exist, with graceful fa
 import os
 import numpy as np
 import threading
-from typing import Optional
+from typing import Optional, List
 from .models import BrainVote
 from src.config import settings
 
@@ -19,12 +19,11 @@ SCALER_PATH = settings.TRANSFORMER_SCALER_PATH
 # across symbols evaluated concurrently via asyncio.create_task()
 _model_inference_lock = threading.Lock()
 
-try:
-    import torch
-    import torch.nn as nn
-    import torch.nn.functional as F
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
 
-    class GQA_TransformerBlock(nn.Module):
+class GQA_TransformerBlock(nn.Module):
         def __init__(self, embed_dim=128, num_q_heads=8, num_kv_heads=2, dropout=0.1):
             super().__init__()
             self.num_q_heads = num_q_heads
@@ -61,7 +60,7 @@ try:
             x = residual + self.ffn(norm_x)
             return x
 
-    class GrokGQA_Transformer(nn.Module):
+class GrokGQA_Transformer(nn.Module):
         def __init__(self, input_dim=11, seq_len=32, embed_dim=128, num_layers=4, num_q_heads=8, num_kv_heads=2, dropout=0.1):
             super().__init__()
             self.input_projection = nn.Linear(input_dim, embed_dim)
@@ -83,8 +82,6 @@ try:
             x = self.norm(x)
             x = self.output_head(x[:, -1, :])
             return x
-except ImportError:
-    pass
 
 _predictor_instance = None
 _predictor_initialized = False

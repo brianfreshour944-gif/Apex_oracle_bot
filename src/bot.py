@@ -1,7 +1,7 @@
-"""Main trading bot implementation."""
-
 import asyncio
+import json
 import math
+import os as _os
 import time
 from datetime import datetime, timezone
 from typing import Dict, Any, Optional
@@ -274,9 +274,6 @@ _symbol_locks: Dict[str, asyncio.Lock] = {}
 _background_tasks: set[asyncio.Task] = set()
 # Shutdown flag for graceful killswitch handling
 _shutdown_requested: bool = False
-
-import json
-import os as _os
 
 _REGIME_FLAG_PATH = "data/regime_flag.txt"
 _regime_flag_cache: Dict[str, Any] = {}
@@ -563,25 +560,16 @@ async def process_signal_for_symbol(symbol: str, current_price: float, risk_mana
                 if approved_notional <= 0:
                     logger.warning(f"[{symbol}] Order vetoed: {reserve_reason}")
                     return
-    
-                if approved_notional < notional:
-                    scale = approved_notional / notional
-                    original_size = position_size
-                    position_size = round(position_size * scale, 6)
-                    logger.info(f"[{symbol}] Position size reduced to fit exposure headroom: {position_size} (was {original_size}, ${approved_notional:.2f} of ${notional:.2f} requested)")
-                    if position_size <= 0:
-                        logger.warning(f"[{symbol}] Order vetoed: scaled position size rounded to zero")
-                        return
-    
-                if approved_notional < notional:
-                    scale = approved_notional / notional
-                    original_size = position_size
-                    position_size = round(position_size * scale, 6)
-                    logger.info(f"[{symbol}] Position size reduced to fit exposure headroom: {position_size} (was {original_size}, ${approved_notional:.2f} of ${notional:.2f} requested)")
-                    if position_size <= 0:
-                        logger.warning(f"[{symbol}] Order vetoed: scaled position size rounded to zero")
-                        return
      
+                if approved_notional < notional:
+                    scale = approved_notional / notional
+                    original_size = position_size
+                    position_size = round(position_size * scale, 6)
+                    logger.info(f"[{symbol}] Position size reduced to fit exposure headroom: {position_size} (was {original_size}, ${approved_notional:.2f} of ${notional:.2f} requested)")
+                    if position_size <= 0:
+                        logger.warning(f"[{symbol}] Order vetoed: scaled position size rounded to zero")
+                        return
+      
                 # Position pyramid/scale-in gates: prevent unlimited re-buying
                 # of an already-open position without meaningful improvement
                 if signal["action"] == "buy":
