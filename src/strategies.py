@@ -51,7 +51,8 @@ class TradingStrategy:
                 symbol,
                 base_timeframe=FEATURE_BASE_TIMEFRAME,
                 timeframes=TIMEFRAMES,
-                limit=limit
+                limit=limit,
+                bars_df=bars_df_raw
             )
 
             if len(bars_df_raw) < 20 or bars_df_features is None or len(bars_df_features) < 20:

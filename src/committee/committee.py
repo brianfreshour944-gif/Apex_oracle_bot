@@ -322,7 +322,7 @@ async def run_committee(symbol: str, price: float, signal: Dict[str, Any]) -> Co
     from .rl_meta import RLMetaLearner
     rl_learner = RLMetaLearner()
     
-    if not adaptive_used and getattr(rl_learner, "model", None) and settings.ADAPTIVE_ML_ENABLED and ppo_ready and signal.get("backtest_df") is None:
+    if not adaptive_used and getattr(rl_learner, "model", None) and settings.ADAPTIVE_ML_ENABLED and ppo_ready and validated_ready and signal.get("backtest_df") is None:
         try:
             # We need to construct the features dict for the RL agent
             features = signal.get("features", {})

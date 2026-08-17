@@ -6,6 +6,7 @@ Performs live model inference if PyTorch & model weights exist, with graceful fa
 
 import os
 import numpy as np
+import threading
 from typing import Optional
 from .models import BrainVote
 from src.config import settings
@@ -13,6 +14,10 @@ from src.config import settings
 # Path to PyTorch model & feature scaler
 MODEL_PATH = settings.TRANSFORMER_MODEL_PATH
 SCALER_PATH = settings.TRANSFORMER_SCALER_PATH
+
+# Thread lock to protect shared model state (train/eval mode) from concurrent access
+# across symbols evaluated concurrently via asyncio.create_task()
+_model_inference_lock = threading.Lock()
 
 try:
     import torch
@@ -289,7 +294,7 @@ async def transformer_brain(symbol: str, price: float, signal: dict) -> BrainVot
                 data_scaled = scaler.transform(data).astype(np.float32)
                 data_scaled = np.nan_to_num(data_scaled, nan=0.0, posinf=0.0, neginf=0.0)
                 
-                # Let the shadow arena candidates process the raw dataframe using their own scaler
+# Let the shadow arena candidates process the raw dataframe using their own scaler
                 try:
                     from src.shadow_arena import evaluate_candidates
                     evaluate_candidates(symbol, price, df_feat)
@@ -299,40 +304,44 @@ async def transformer_brain(symbol: str, price: float, signal: dict) -> BrainVot
                 
                 x = torch.tensor(data_scaled).unsqueeze(0).to(device)
 
-                # Cheap forward-only pass first (no autograd graph built) to
-                # get the probability. Measured: the full forward+backward
-                # pass used purely for gradient-based causal attribution
-                # costs ~110ms of extra event-loop scheduling delay (GIL
-                # contention from autograd bookkeeping) even though it runs
-                # inside asyncio.to_thread, on top of being wasted work for
-                # the majority of evaluations that end in "hold" and are
-                # never persisted to the decision-snapshot DB anyway.
-                with torch.no_grad():
-                    raw_logit_fwd = model(x).squeeze(1)
-                    out_prob = float(torch.sigmoid(raw_logit_fwd).item())
-                    
-                # MC-dropout for uncertainty estimation (10 stochastic forward passes)
-                # Only enable dropout during uncertainty estimation if in live mode (not backtest)
-                # to avoid slowing down backtest unnecessarily; but we keep it lightweight.
-                if not is_live:
-                    # In backtest, we skip MC-dropout to save time; use fixed weight.
-                    uncertainty_weight = 0.35  # base weight
-                else:
-                    model.train()  # enable dropout
-                    mc_probs = []
-                    for _ in range(10):
-                        with torch.no_grad():
-                            mc_logit = model(x).squeeze(1)
-                            mc_prob = float(torch.sigmoid(mc_logit).item())
-                            mc_probs.append(mc_prob)
-                    model.eval()  # back to eval mode
-                    prob_var = np.var(mc_probs) if len(mc_probs) > 1 else 0.0
-                    # Modulate weight: higher variance -> lower weight
-                    transformer_weight = 0.35 * (1.0 / (1.0 + prob_var))  # simple inverse scaling
-    
+                # Protect all model state access (forward, train/eval mode, backward)
+                # with a lock to prevent concurrent access from corrupting model state
+                # across concurrently evaluated symbols.
+                with _model_inference_lock:
+                    # Cheap forward-only pass first (no autograd graph built) to
+                    # get the probability. Measured: the full forward+backward
+                    # pass used purely for gradient-based causal attribution
+                    # costs ~110ms of extra event-loop scheduling delay (GIL
+                    # contention from autograd bookkeeping) even though it runs
+                    # inside asyncio.to_thread, on top of being wasted work for
+                    # the majority of evaluations that end in "hold" and are
+                    # never persisted to the decision-snapshot DB anyway.
+                    with torch.no_grad():
+                        raw_logit_fwd = model(x).squeeze(1)
+                        out_prob = float(torch.sigmoid(raw_logit_fwd).item())
+
+                    # MC-dropout for uncertainty estimation (10 stochastic forward passes)
+                    # Only enable dropout during uncertainty estimation if in live mode (not backtest)
+                    # to avoid slowing down backtest unnecessarily; but we keep it lightweight.
+                    if not is_live:
+                        # In backtest, we skip MC-dropout to save time; use fixed weight.
+                        transformer_weight = 0.35  # base weight
+                    else:
+                        model.train()  # enable dropout
+                        mc_probs = []
+                        for _ in range(10):
+                            with torch.no_grad():
+                                mc_logit = model(x).squeeze(1)
+                                mc_prob = float(torch.sigmoid(mc_logit).item())
+                                mc_probs.append(mc_prob)
+                        model.eval()  # back to eval mode
+                        prob_var = np.var(mc_probs) if len(mc_probs) > 1 else 0.0
+                        # Modulate weight: higher variance -> lower weight
+                        transformer_weight = 0.35 * (1.0 / (1.0 + prob_var))  # simple inverse scaling
+
                     causal_reasoning = {}
                     logit_value = raw_logit_fwd.item()
-    
+
                     # Only pay for the backward pass when this brain itself would
                     # actually vote buy/sell (thresholds mirror the decision logic
                     # below). This doesn't guarantee the committee as a whole will
@@ -343,24 +352,24 @@ async def transformer_brain(symbol: str, price: float, signal: dict) -> BrainVot
                     # evaluations.
                     if out_prob > 0.58 or out_prob < 0.42:
                         x.requires_grad = True
-    
+
                         # Causal Reasoning: Approximate SHAP via Gradients * Input
                         raw_logit = model(x).squeeze(1)
                         raw_logit.backward()
-    
+
                         # Gradients w.r.t the last timestep's features
                         grads = x.grad[0, -1, :].cpu().numpy()
                         feats = data_scaled[-1, :]
-    
+
                         # Simple Feature Importance (Gradient * Input)
                         contributions = grads * feats
-    
+
                         # Map contributions to feature names
                         for i, col in enumerate(cols):
                             causal_reasoning[col] = float(contributions[i])
-    
+
                         logit_value = raw_logit.item()
-    
+
                     return out_prob, logit_value, causal_reasoning, data_scaled.tolist()
                 
             res = await asyncio.to_thread(_do_inference)

@@ -139,6 +139,35 @@ class TradingBotSettings(BaseSettings):
                     "round trip instead of a position actually playing out.",
         ge=0
     )
+    # --- Position Pyramid / Scale-in Gates ---
+    MAX_POSITION_ADDS: int = Field(
+        default=2,
+        description="Maximum number of scale-in adds allowed per position. "
+                    "Prevents unlimited pyramiding on the same signal.",
+        ge=0,
+        le=10
+    )
+    POSITION_ADD_MIN_SECONDS: int = Field(
+        default=900,
+        description="Minimum seconds between successive adds to the same position. "
+                    "Prevents rapid-fire scale-ins when market conditions barely change.",
+        ge=0
+    )
+    POSITION_ADD_MIN_SCORE_INCREASE: float = Field(
+        default=0.05,
+        description="Minimum committee score improvement required for each successive add. "
+                    "Ensures adds only happen when conviction meaningfully increases.",
+        ge=0.0,
+        le=1.0
+    )
+    POSITION_ADD_SIZE_DECAY: float = Field(
+        default=0.5,
+        description="Size decay factor per add. Each successive add sized at "
+                    "decay^add_count relative to normal sizing (e.g., 0.5 means "
+                    "2nd add is 50% size, 3rd is 25%, etc.).",
+        ge=0.0,
+        le=1.0
+    )
 
     # --- Transaction Cost Model ---
     # Used by calculate_position_size to adjust effective risk and filter trades
@@ -384,7 +413,10 @@ class TradingBotSettings(BaseSettings):
     ADAPTIVE_ML_ENABLED: bool = Field(
         default=True,
         description="Let the meta-learner drive the committee decision. "
-                    "Default False = paper-only shadow mode (computed, logged, but not acted on).",
+                    "Default True = live mode (weights drive decisions after warm-up and validation). "
+                    "When False, runs in paper-only shadow mode (computed, logged, but not acted on). "
+                    "Live-driving is still gated by ADAPTIVE_MIN_TRADES_BEFORE_LIVE (30) and "
+                    "the validation gate (is_regime_validated).",
     )
     ADAPTIVE_STATE_PATH: str = Field(
         default="data/adaptive_meta_state.json",
@@ -415,7 +447,7 @@ class TradingBotSettings(BaseSettings):
         ge=0,
     )
     PPO_MIN_TRADES_BEFORE_LIVE: int = Field(
-        default=1,
+        default=10,
         description="Realized outcomes required before PPO RL meta-learner drives live decisions. "
                     "PPO is pre-trained offline via evolutionary pipeline; gate mainly ensures model file exists.",
         ge=0,
@@ -583,4 +615,8 @@ CROSS_ASSET_LOOKBACK = settings.CROSS_ASSET_LOOKBACK
 CROSS_ASSET_MAX_LAG = settings.CROSS_ASSET_MAX_LAG
 CROSS_ASSET_METHOD = settings.CROSS_ASSET_METHOD
 CROSS_ASSET_LIST = settings.CROSS_ASSET_LIST
+MAX_POSITION_ADDS = settings.MAX_POSITION_ADDS
+POSITION_ADD_MIN_SECONDS = settings.POSITION_ADD_MIN_SECONDS
+POSITION_ADD_MIN_SCORE_INCREASE = settings.POSITION_ADD_MIN_SCORE_INCREASE
+POSITION_ADD_SIZE_DECAY = settings.POSITION_ADD_SIZE_DECAY
 log_config = settings.log_config

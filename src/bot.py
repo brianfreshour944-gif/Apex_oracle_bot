@@ -6,7 +6,7 @@ import time
 from datetime import datetime, timezone
 from typing import Dict, Any, Optional
 
-from src.config import settings
+from src.config import settings, COOLDOWN_SECONDS_BUY, MAX_POSITION_ADDS, POSITION_ADD_MIN_SECONDS, POSITION_ADD_MIN_SCORE_INCREASE, POSITION_ADD_SIZE_DECAY
 from src.logging_config import get_logger
 from src.db import init_db
 from src.exchange import AlpacaExchange
@@ -151,37 +151,39 @@ async def _record_committee_outcome(symbol: str, exit_price: float, exit_reason:
                              x = torch.tensor(data_scaled).unsqueeze(0).to(device)
                              label_tensor = torch.tensor([[1.0 if realized_pnl > 0 else 0.0]], dtype=torch.float32).to(device)
                              
-                             model.train()
-                             model.zero_grad()
-                             logits = model(x)
-                             loss = torch.nn.functional.binary_cross_entropy_with_logits(logits, label_tensor)
-                             loss.backward()
-                             
-                             # Learning rate schedule with warmup + cosine annealing
-                             global _transformer_online_updates, _transformer_online_lr_schedule, _transformer_online_lr_base, _transformer_online_lr_min, _transformer_online_warmup_steps, _transformer_online_total_steps
-                             
-                             step = _transformer_online_updates
-                             
-                             if step < _transformer_online_warmup_steps:
-                                 # Linear warmup
-                                 lr = _transformer_online_lr_base * (step + 1) / _transformer_online_warmup_steps
-                             else:
-                                 progress = min((step - _transformer_online_warmup_steps) / (_transformer_online_total_steps - _transformer_online_warmup_steps), 1.0)
-                                 if _transformer_online_lr_schedule == "cosine":
-                                     # Cosine annealing to min LR
-                                     lr = _transformer_online_lr_min + 0.5 * (_transformer_online_lr_base - _transformer_online_lr_min) * (1 + math.cos(math.pi * progress))
-                                 elif _transformer_online_lr_schedule == "linear":
-                                     # Linear decay to min LR
-                                     lr = _transformer_online_lr_base - (_transformer_online_lr_base - _transformer_online_lr_min) * progress
-                                 else:  # constant
-                                     lr = _transformer_online_lr_base
-                             
-                             _transformer_online_updates += 1
-                             with torch.no_grad():
-                                 for p in model.parameters():
-                                     if p.grad is not None:
-                                         p.data -= lr * p.grad
-                             model.eval()
+                             # Protect model train/eval state from concurrent a
+                             with _model_inference_lock:
+                                  model.train()
+                                  model.zero_grad()
+                                  logits = model(x)
+                                  loss = torch.nn.functional.binary_cross_entropy_with_logits(logits, label_tensor)
+                                  loss.backward()
+                                  
+                                  # Learning rate schedule with warmup + cosine annealing
+                                  global _transformer_online_updates, _transformer_online_lr_schedule, _transformer_online_lr_base, _transformer_online_lr_min, _transformer_online_warmup_steps, _transformer_online_total_steps
+                                  
+                                  step = _transformer_online_updates
+                                  
+                                  if step < _transformer_online_warmup_steps:
+                                      # Linear warmup
+                                      lr = _transformer_online_lr_base * (step + 1) / _transformer_online_warmup_steps
+                                  else:
+                                      progress = min((step - _transformer_online_warmup_steps) / (_transformer_online_total_steps - _transformer_online_warmup_steps), 1.0)
+                                      if _transformer_online_lr_schedule == "cosine":
+                                          # Cosine annealing to min LR
+                                          lr = _transformer_online_lr_min + 0.5 * (_transformer_online_lr_base - _transformer_online_lr_min) * (1 + math.cos(math.pi * progress))
+                                      elif _transformer_online_lr_schedule == "linear":
+                                          # Linear decay to min LR
+                                          lr = _transformer_online_lr_base - (_transformer_online_lr_base - _transformer_online_lr_min) * progress
+                                      else:  # constant
+                                          lr = _transformer_online_lr_base
+                                      
+                                      _transformer_online_updates += 1
+                                      with torch.no_grad():
+                                          for p in model.parameters():
+                                              if p.grad is not None:
+                                                  p.data -= lr * p.grad
+                                      model.eval()
                      except Exception:
                          pass  # Swallow all errors
                   
@@ -264,6 +266,9 @@ scan_cycle_count: int = 0
 # that symbol is blocked, set right after closing a position. See
 # settings.COOLDOWN_SECONDS_BUY for why this exists.
 cooldowns: Dict[str, float] = {}
+# Position pyramid/scale-in tracking: tracks adds per symbol
+# {symbol: {"count": int, "last_add_time": float, "last_add_score": float}}
+position_adds: Dict[str, Dict[str, Any]] = {}
 _symbol_locks: Dict[str, asyncio.Lock] = {}
 # Track background tasks from _record_committee_outcome to prevent GC
 _background_tasks: set[asyncio.Task] = set()
@@ -374,6 +379,8 @@ async def process_signal_for_symbol(symbol: str, current_price: float, risk_mana
                     logger.info(f"Trailing Stop Executed: {symbol}")
                     await send_telegram_alert(f"Ã°Å¸Å¡Â¨ <b>Trailing Stop Triggered</b>\nSymbol: {symbol}\nClosed {qty} @ ${current_price:.2f}")
                     cooldowns[symbol] = time.time() + settings.COOLDOWN_SECONDS_BUY
+                    # Reset position pyramid/scale-in tracking on close
+                    position_adds.pop(symbol, None)
                     await _record_committee_outcome(symbol, current_price, exit_reason="trailing_stop")
                     return  # Skip standard signals
     
@@ -501,12 +508,15 @@ async def process_signal_for_symbol(symbol: str, current_price: float, risk_mana
                     return
     
                 # Calculate position size
+                # Use committee score as proxy for expected return (score ~ probability of profitable trade)
+                expected_return_pct = abs(committee_result.score - 0.5) * 2.0  # map [0.5, 1.0] -> [0, 1.0] then scale
                 position_size, sizing_status = risk_manager.calculate_position_size(
                     symbol,
                     current_price,
                     signal["regime"],
                     atr=signal.get("atr"),
-                    confidence=signal.get("confidence", 1.0)
+                    confidence=signal.get("confidence", 1.0),
+                    expected_return_pct=expected_return_pct
                 )
     
                 if sizing_status != "ok":
@@ -563,6 +573,60 @@ async def process_signal_for_symbol(symbol: str, current_price: float, risk_mana
                         logger.warning(f"[{symbol}] Order vetoed: scaled position size rounded to zero")
                         return
     
+                if approved_notional < notional:
+                    scale = approved_notional / notional
+                    original_size = position_size
+                    position_size = round(position_size * scale, 6)
+                    logger.info(f"[{symbol}] Position size reduced to fit exposure headroom: {position_size} (was {original_size}, ${approved_notional:.2f} of ${notional:.2f} requested)")
+                    if position_size <= 0:
+                        logger.warning(f"[{symbol}] Order vetoed: scaled position size rounded to zero")
+                        return
+     
+                # Position pyramid/scale-in gates: prevent unlimited re-buying
+                # of an already-open position without meaningful improvement
+                if signal["action"] == "buy":
+                    current_position = None
+                    for p in positions:
+                        if p["symbol"].replace("/", "") == symbol.replace("/", ""):
+                            current_position = p
+                            break
+                    
+                    if current_position is not None:
+                        # There's already a position - check scale-in gates
+                        add_info = position_adds.get(symbol, {"count": 0, "last_add_time": 0.0, "last_add_score": 0.0})
+                        now = time.time()
+                        
+                        # Gate 1: Max adds cap
+                        if add_info["count"] >= MAX_POSITION_ADDS:
+                            logger.info(f"[{symbol}] Scale-in vetoed: max adds ({MAX_POSITION_ADDS}) reached (current: {add_info['count']})")
+                            return
+                        
+                        # Gate 2: Minimum time since last add
+                        if now - add_info["last_add_time"] < POSITION_ADD_MIN_SECONDS:
+                            logger.info(f"[{symbol}] Scale-in vetoed: minimum time between adds not met ({now - add_info['last_add_time']:.0f}s < {POSITION_ADD_MIN_SECONDS}s)")
+                            return
+                        
+                        # Gate 3: Minimum score improvement
+                        committee_score = committee_result.score
+                        if committee_score - add_info["last_add_score"] < POSITION_ADD_MIN_SCORE_INCREASE:
+                            logger.info(f"[{symbol}] Scale-in vetoed: insufficient score improvement ({committee_score:.3f} - {add_info['last_add_score']:.3f} < {POSITION_ADD_MIN_SCORE_INCREASE})")
+                            return
+                        
+                        # All gates passed - apply size decay
+                        decay_factor = POSITION_ADD_SIZE_DECAY ** add_info["count"]
+                        position_size = round(position_size * decay_factor, 6)
+                        logger.info(f"[{symbol}] Scale-in add #{add_info['count'] + 1}: size decayed by {decay_factor:.2f}x to {position_size}")
+                        
+                        # Update tracking
+                        position_adds[symbol] = {
+                            "count": add_info["count"] + 1,
+                            "last_add_time": now,
+                            "last_add_score": committee_score
+                        }
+                    else:
+                        # No existing position - reset tracking
+                        position_adds[symbol] = {"count": 0, "last_add_time": 0.0, "last_add_score": 0.0}
+     
                 # Place order
                 client_order_id = f"{symbol}_{signal['action']}_{position_size}_{int(time.time())}"
                 order_result = await ex.create_order(
@@ -584,6 +648,13 @@ async def process_signal_for_symbol(symbol: str, current_price: float, risk_mana
                         logger.info(f"[FILL] {symbol} {signal['action']}: filled=${filled_price:.2f} commission=${commission:.4f}")
                     if commission > 0:
                         logger.info(f"[FEE] {symbol} {signal['action']}: commission=${commission:.4f}")
+                    
+                    # Record fill costs for dynamic transaction cost model
+                    if filled_price > 0:
+                        expected_price = current_price
+                        slippage_bps = abs(filled_price - expected_price) / expected_price * 10000
+                        fee_bps = (commission / (filled_price * position_size)) * 10000 if filled_price * position_size > 0 else 0
+                        risk_manager.record_fill_costs(symbol, fee_bps, slippage_bps)
 
                 logger.info(f"[TRADE] Order executed: {signal['action'].upper()} {position_size} {symbol} @ ${current_price:.2f}")
                 logger.debug(f"[TRADE] Order result: {order_result}")
@@ -649,11 +720,13 @@ async def process_signal_for_symbol(symbol: str, current_price: float, risk_mana
                         logger.info(f"[FILL] {symbol} close: filled=${filled_price:.2f} commission=${commission:.4f}")
                     if commission > 0:
                         logger.info(f"[FEE] {symbol} close: commission=${commission:.4f}")
-
+                
                 logger.info(f"[TRADE] Position closed: {symbol} (was {qty}) - reason: {signal.get('reason', 'unknown')}")
                 logger.debug(f"[TRADE] Close order result: {order_result}")
                 await send_telegram_alert(f"Ã°Å¸â€œâ€° <b>Position Closed</b>\nSymbol: {symbol}\nReason: {signal.get('reason', 'unknown')}")
                 cooldowns[symbol] = time.time() + settings.COOLDOWN_SECONDS_BUY
+                # Reset position pyramid/scale-in tracking on close
+                position_adds.pop(symbol, None)
                 await _record_committee_outcome(symbol, current_price, exit_reason=signal.get('reason', 'unknown'))
     
         except Exception as e:

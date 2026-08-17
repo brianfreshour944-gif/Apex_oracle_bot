@@ -1,0 +1,249 @@
+warning: in the working copy of 'src/strategies.py', LF will be replaced by CRLF the next time Git touches it
+[1mdiff --git a/src/committee/committee.py b/src/committee/committee.py[m
+[1mindex 8c28617..6aec807 100644[m
+[1m--- a/src/committee/committee.py[m
+[1m+++ b/src/committee/committee.py[m
+[36m@@ -29,6 +29,10 @@[m [mlogger = get_logger("committee")[m
+ # Default fallback if symbol lacks optimized data[m
+ DEFAULT_SCORE_THRESHOLD = 0.15[m
+ [m
+[32m+[m[32m# Alias for tests / external imports — the real trade-gating threshold is[m
+[32m+[m[32m# DEFAULT_SCORE_THRESHOLD (0.15) or the per-symbol adaptive threshold.[m
+[32m+[m[32mWINNING_SCORE_THRESHOLD = DEFAULT_SCORE_THRESHOLD[m
+[32m+[m
+ import json[m
+ import os[m
+ import time[m
+[36m@@ -108,11 +112,11 @@[m [mREGIME_WEIGHT_MATRIX = {[m
+         "llm": 0.05[m
+     },[m
+     "sideways": {[m
+[31m-        "transformer": 0.20,[m
+[31m-        "quant": 0.45,[m
+[32m+[m[32m        "transformer": 0.30,[m
+[32m+[m[32m        "quant": 0.20,[m
+         "momentum": 0.10,[m
+[31m-        "sentinel": 0.10,[m
+[31m-        "llm": 0.15[m
+[32m+[m[32m        "sentinel": 0.15,[m
+[32m+[m[32m        "llm": 0.25[m
+     },[m
+     "high_volatility": {[m
+         "transformer": 0.15,[m
+[36m@@ -258,6 +262,10 @@[m [masync def run_committee(symbol: str, price: float, signal: Dict[str, Any]) -> Co[m
+         if v.action not in ["stand_aside", "skip"]:[m
+             scores[v.action] += v.confidence * v.weight[m
+             active_weight += v.weight[m
+[32m+[m[32m        elif v.action == "hold":[m
+[32m+[m[32m            # "hold" votes still count toward active_weight (dilution)[m
+[32m+[m[32m            # but are NEVER a tradeable action, so they cannot win[m
+[32m+[m[32m            active_weight += v.weight[m
+ [m
+     if active_weight > 0:[m
+         for action in scores:[m
+[36m@@ -275,11 +283,32 @@[m [masync def run_committee(symbol: str, price: float, signal: Dict[str, Any]) -> Co[m
+     explanation: Optional[str] = None[m
+     winner, score = baseline_winner, baseline_score[m
+ [m
+[32m+[m[32m    # Check if adaptive learning is ready (min trades gate)[m
+[32m+[m[32m    learner = get_meta_learner()[m
+[32m+[m[32m    live_ready = False[m
+[32m+[m[32m    if learner is not None:[m
+[32m+[m[32m        live_ready = learner.sample_count_for_regime(regime) >= settings.ADAPTIVE_MIN_TRADES_BEFORE_LIVE[m
+[32m+[m
+[32m+[m[32m    # Always compute adaptive weights for shadow mode observability[m
+[32m+[m[32m    shadow_decision = None[m
+[32m+[m[32m    if learner is not None:[m
+[32m+[m[32m        try:[m
+[32m+[m[32m            shadow_decision = learner.combine(raw_votes, regime)[m
+[32m+[m[32m            adaptive_weights = shadow_decision.weights[m
+[32m+[m[32m            explanation = shadow_decision.explanation[m
+[32m+[m[32m        except Exception as e:[m
+[32m+[m[32m            logger.warning(f"Adaptive combine failed: {e}")[m
+[32m+[m
+[32m+[m[32m    # Use mathematical adaptive learner if enabled and gate passed[m
+[32m+[m[32m    if learner is not None and settings.ADAPTIVE_ML_ENABLED and live_ready and shadow_decision:[m
+[32m+[m[32m        adaptive_used = True[m
+[32m+[m[32m        winner, score = shadow_decision.action, shadow_decision.confidence[m
+[32m+[m
+[32m+[m[32m    # Fallback to RL Meta-Learner (PPO) if mathematical learner not ready/failed[m
+     from .rl_meta import RLMetaLearner[m
+     rl_learner = RLMetaLearner()[m
+     [m
+[31m-    # Attempt to use PPO RL Model first[m
+[31m-    if getattr(rl_learner, "model", None) and settings.ADAPTIVE_ML_ENABLED and signal.get("backtest_df") is None:[m
+[32m+[m[32m    if not adaptive_used and getattr(rl_learner, "model", None) and settings.ADAPTIVE_ML_ENABLED and live_ready and signal.get("backtest_df") is None:[m
+         try:[m
+             # We need to construct the features dict for the RL agent[m
+             features = signal.get("features", {})[m
+[36m@@ -295,35 +324,8 @@[m [masync def run_committee(symbol: str, price: float, signal: Dict[str, Any]) -> Co[m
+             [m
+             # The RL Meta-Learner dynamically controls position size[m
+             size_mult = getattr(decision, "pos_size_mult", 1.0)[m
+[31m-            [m
+[31m-            return CommitteeResult([m
+[31m-                action=winner,[m
+[31m-                score=score,[m
+[31m-                size_multiplier=size_mult,[m
+[31m-                entropy=entropy,[m
+[31m-                votes=votes,[m
+[31m-                active_weights=weights,[m
+[31m-                decision_id=decision_id,[m
+[31m-                adaptive_used=adaptive_used,[m
+[31m-                adaptive_weights=adaptive_weights,[m
+[31m-                explanation=explanation,[m
+[31m-            )[m
+         except Exception as e:[m
+[31m-            logger.warning(f"RL Meta-Learner combine failed, falling back to Adaptive: {e}")[m
+[31m-            [m
+[31m-    # Fallback to Mathematical Adaptive Meta-Learner[m
+[31m-    learner = get_meta_learner()[m
+[31m-    if learner is not None:[m
+[31m-        try:[m
+[31m-            decision = learner.combine(raw_votes, regime)[m
+[31m-            adaptive_weights = decision.weights[m
+[31m-            explanation = decision.explanation[m
+[31m-            live_ready = learner.sample_count_for_regime(regime) >= settings.ADAPTIVE_MIN_TRADES_BEFORE_LIVE[m
+[31m-            if settings.ADAPTIVE_ML_ENABLED and live_ready:[m
+[31m-                adaptive_used = True[m
+[31m-                winner, score = decision.action, decision.confidence[m
+[31m-        except Exception as e:  # pragma: no cover - defensive[m
+[31m-            logger.warning(f"Adaptive combine failed, using classic committee: {e}")[m
+[32m+[m[32m            logger.warning(f"RL Meta-Learner combine failed: {e}")[m
+ [m
+     # Threshold + confidence sizing apply identically regardless of source.[m
+     if not scores and not adaptive_used:[m
+[1mdiff --git a/src/committee/sentinel_brain.py b/src/committee/sentinel_brain.py[m
+[1mindex c4309e9..992240b 100644[m
+[1m--- a/src/committee/sentinel_brain.py[m
+[1m+++ b/src/committee/sentinel_brain.py[m
+[36m@@ -26,6 +26,10 @@[m [masync def sentinel_brain(symbol: str, price: float, signal: dict) -> BrainVote:[m
+         is_veto = True[m
+         action = "stand_aside"[m
+         reason = "Hard Veto: Trading halted"[m
+[32m+[m[32m    elif regime == "crash":[m
+[32m+[m[32m        is_veto = True[m
+[32m+[m[32m        action = "stand_aside"[m
+[32m+[m[32m        reason = "Hard Veto: Crash regime detected"[m
+     elif price > 0 and atr > 0 and (atr / price) > 0.10:[m
+         # ATR > 10% of price indicates abnormal price swing / gap risk[m
+         # Extreme volatility - Reduce position sizing heavily and demand near unanimous agreement[m
+[1mdiff --git a/src/config.py b/src/config.py[m
+[1mindex 4c161f2..8bf2b97 100644[m
+[1m--- a/src/config.py[m
+[1m+++ b/src/config.py[m
+[36m@@ -182,6 +182,12 @@[m [mclass TradingBotSettings(BaseSettings):[m
+         gt=0,[m
+         lt=100[m
+     )[m
+[32m+[m[32m    BB_ZSCORE_THRESHOLD: float = Field([m
+[32m+[m[32m        default=1.5,[m
+[32m+[m[32m        description="Price z-score threshold for mean-reversion entries in sideways/chop (standard deviations from rolling mean)",[m
+[32m+[m[32m        gt=0,[m
+[32m+[m[32m        le=3.0[m
+[32m+[m[32m    )[m
+ [m
+     # --- Trailing Stop Configuration ---[m
+     TRAILING_STOP_ENABLED: bool = Field([m
+[1mdiff --git a/src/execution_strategies.py b/src/execution_strategies.py[m
+[1mindex f6f0661..3bef929 100644[m
+[1m--- a/src/execution_strategies.py[m
+[1m+++ b/src/execution_strategies.py[m
+[36m@@ -53,13 +53,21 @@[m [mclass MeanReversionStrategy(BaseExecutionStrategy):[m
+     def generate_signal(self, symbol: str, current_price: float, position: Optional[Dict], features: Dict[str, Any]) -> Dict[str, Any]:[m
+         rsi = features.get("rsi", 50.0)[m
+         prev_rsi = features.get("prev_rsi", 50.0)[m
+[32m+[m[32m        price_zscore = features.get("price_zscore", 0.0)[m
+[32m+[m[32m        z_thresh = getattr(settings, "BB_ZSCORE_THRESHOLD", 1.5)[m
+ [m
+         if not position:[m
+[31m-            # Added +10 and -10 to make mean reversion trigger more reasonably on 1H timeframe[m
+[32m+[m[32m            # Primary: RSI oversold/overbought bounce[m
+             if rsi < (settings.RSI_OVERSOLD + 10.0) and rsi > prev_rsi:[m
+                 return {"action": "buy", "reason": f"Mean Reversion: Oversold bounce (RSI {rsi:.1f})"}[m
+             elif rsi > (settings.RSI_OVERBOUGHT - 10.0) and rsi < prev_rsi:[m
+                 return {"action": "sell", "reason": f"Mean Reversion: Overbought rejection (RSI {rsi:.1f})"}[m
+[32m+[m[32m            # Fallback: price z-score when RSI is neutral (40-60)[m
+[32m+[m[32m            elif 40.0 <= rsi <= 60.0:[m
+[32m+[m[32m                if price_zscore <= -z_thresh:[m
+[32m+[m[32m                    return {"action": "buy", "reason": f"Mean Reversion: Price {price_zscore:.1f}sd below mean, RSI neutral ({rsi:.1f})"}[m
+[32m+[m[32m                elif price_zscore >= z_thresh:[m
+[32m+[m[32m                    return {"action": "sell", "reason": f"Mean Reversion: Price {price_zscore:.1f}sd above mean, RSI neutral ({rsi:.1f})"}[m
+         else:[m
+             qty = float(position.get("qty", 0))[m
+             if qty > 0 and rsi > settings.RSI_NEUTRAL_SELL:[m
+[1mdiff --git a/src/strategies.py b/src/strategies.py[m
+[1mindex f396f7a..2c8a724 100644[m
+[1m--- a/src/strategies.py[m
+[1m+++ b/src/strategies.py[m
+[36m@@ -75,6 +75,14 @@[m [mclass TradingStrategy:[m
+             # Calculate RSI[m
+             rsi, prev_rsi = self._calculate_rsi(close_arr)[m
+ [m
+[32m+[m[32m            # Calculate 20-period price z-score (for mean-reversion in chop)[m
+[32m+[m[32m            price_zscore = 0.0[m
+[32m+[m[32m            if len(close_arr) >= 20:[m
+[32m+[m[32m                rolling_mean = np.mean(close_arr[-20:])[m
+[32m+[m[32m                rolling_std = np.std(close_arr[-20:], ddof=1)[m
+[32m+[m[32m                if rolling_std > 1e-8:[m
+[32m+[m[32m                    price_zscore = (close_arr[-1] - rolling_mean) / rolling_std[m
+[32m+[m
+             # Multi-timeframe confirmation check (e.g. EMA slope on bars)[m
+             htf_trend = "neutral"[m
+             if len(close_arr) >= 20:[m
+[36m@@ -166,6 +174,7 @@[m [mclass TradingStrategy:[m
+                 "atr": float(atr),[m
+                 "rsi": float(rsi),[m
+                 "prev_rsi": float(prev_rsi),[m
+[32m+[m[32m                "price_zscore": float(price_zscore),[m
+                 "htf_trend": htf_trend,[m
+                 "confidence": self._calculate_regime_confidence(regime, hurst, atr, rsi),[m
+                 "funding_rate": funding_rate,[m
+[36m@@ -189,6 +198,7 @@[m [mclass TradingStrategy:[m
+                 "atr": 0.0,[m
+                 "rsi": 50.0,[m
+                 "prev_rsi": 50.0,[m
+[32m+[m[32m                "price_zscore": 0.0,[m
+                 "confidence": 0.0[m
+             }[m
+ [m
+[1mdiff --git a/tests/test_committee.py b/tests/test_committee.py[m
+[1mindex 6d3218c..7486987 100644[m
+[1m--- a/tests/test_committee.py[m
+[1m+++ b/tests/test_committee.py[m
+[36m@@ -50,7 +50,7 @@[m [masync def test_committee_sentinel_hard_veto():[m
+     assert result.vetoed is True[m
+     assert result.action == "stand_aside"[m
+     assert result.size_multiplier == 0.0[m
+[31m-    assert "Extreme market volatility" in result.veto_reason[m
+[32m+[m[32m    assert "Crash regime detected" in result.veto_reason[m
+     print("PASS: test_committee_sentinel_hard_veto")[m
+ [m
+ async def test_committee_low_conviction_stand_aside():[m
+[36m@@ -68,17 +68,22 @@[m [masync def test_committee_low_conviction_stand_aside():[m
+     print("PASS: test_committee_low_conviction_stand_aside")[m
+ [m
+ def test_size_multiplier_logic():[m
+[31m-    """Test size multiplier scaling based on confidence scores."""[m
+[32m+[m[32m    """Test size multiplier scaling based on confidence scores.[m
+[32m+[m[41m    [m
+[32m+[m[32m    Uses explicit reference threshold of 0.60 (legacy test value), decoupled[m
+[32m+[m[32m    from production's DEFAULT_SCORE_THRESHOLD (0.15).[m
+[32m+[m[32m    """[m
+[32m+[m[32m    ref_thresh = 0.60[m
+     # Marginal confidence score (0.60) -> ~0.50x[m
+[31m-    m1 = calculate_confidence_size_multiplier(0.60, 0.0)[m
+[32m+[m[32m    m1 = calculate_confidence_size_multiplier(0.60, 0.0, ref_thresh)[m
+     assert m1 == 0.50[m
+     [m
+     # Moderate confidence score (0.76) -> ~1.00x[m
+[31m-    m2 = calculate_confidence_size_multiplier(0.76, 0.0)[m
+[32m+[m[32m    m2 = calculate_confidence_size_multiplier(0.76, 0.0, ref_thresh)[m
+     assert 0.95 <= m2 <= 1.05[m
+     [m
+     # High conviction score (0.92) -> > 1.40x[m
+[31m-    m3 = calculate_confidence_size_multiplier(0.92, 0.0)[m
+[32m+[m[32m    m3 = calculate_confidence_size_multiplier(0.92, 0.0, ref_thresh)[m
+     assert m3 >= 1.40[m
+     print(f"PASS: test_size_multiplier_logic (0.60->{m1}x, 0.76->{m2}x, 0.92->{m3}x)")[m
+ [m
