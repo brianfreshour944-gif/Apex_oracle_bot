@@ -69,10 +69,10 @@ async def call(self, func: Callable[..., Awaitable[T]], *args: Any, **kwargs: An
                         self._failures = 0
                         self._half_open_successes = 0
                         logger.info(f"Circuit {self.name!r} recovered -^> CLOSED")
-                # In CLOSED state, reset failures on success
+# In CLOSED state, reset failures on success
             elif self._state == CircuitState.CLOSED:
                 self._failures = 0
-return result
+            return result
 
     def reset(self):
         self._failures = 0
