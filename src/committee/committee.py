@@ -224,13 +224,35 @@ async def run_committee(symbol: str, price: float, signal: Dict[str, Any]) -> Co
 
     # Run all 5 brains concurrently (transformer_brain uses asyncio.to_thread + network I/O,
     # so running sequentially would serialize its latency before every other brain).
-    raw_votes = list(await asyncio.gather(
+    raw_results = await asyncio.gather(
         transformer_brain(symbol, price, signal),
         quant_brain(symbol, price, signal),
         momentum_brain(symbol, price, signal),
         sentinel_brain(symbol, price, signal),
         llm_brain(symbol, price, signal),
-    ))
+        return_exceptions=True
+    )
+    
+    # Filter out exceptions and log failures
+    raw_votes = []
+    for i, result in enumerate(raw_results):
+        brain_names = ["transformer", "quant", "momentum", "sentinel", "llm"]
+        if isinstance(result, Exception):
+            brain_name = brain_names[i]
+            logger.warning(f"Brain '{brain_name}' failed: {result}. Using fallback.")
+            # Create a fallback vote for failed brain
+            fallback_vote = BrainVote(
+                name=brain_names[i],
+                action="stand_aside",
+                confidence=0.0,
+                weight=0.0,
+                regime=signal.get("regime", "default"),
+                reason=f"Brain failed: {result}",
+                is_veto=False
+            )
+            raw_votes.append(fallback_vote)
+        else:
+            raw_votes.append(result)
 
     # Re-weight votes dynamically based on active regime matrix
     votes = []

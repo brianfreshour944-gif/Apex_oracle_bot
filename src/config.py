@@ -526,6 +526,40 @@ class TradingBotSettings(BaseSettings):
                 "ALPACA_API_KEY and ALPACA_SECRET_KEY are required to run the bot. "
                 "Please set them in your environment variables or .env file."
             )
+        
+        # Validate symbol format
+        for symbol in self.SYMBOLS:
+            if "/" not in symbol:
+                raise ValueError(f"Invalid symbol format: '{symbol}'. Expected format 'BASE/QUOTE' (e.g., 'BTC/USD')")
+        
+        # Validate risk parameters consistency
+        if self.MAX_DRAWDOWN_STOP >= 0:
+            raise ValueError("MAX_DRAWDOWN_STOP must be negative (e.g., -10.0)")
+        if self.DAILY_LOSS_LIMIT >= 0:
+            raise ValueError("DAILY_LOSS_LIMIT must be negative (e.g., -3.0)")
+        if self.PROFIT_TARGET_PCT <= 0:
+            raise ValueError("PROFIT_TARGET_PCT must be positive")
+        if self.STOP_LOSS_PCT <= 0:
+            raise ValueError("STOP_LOSS_PCT must be positive")
+        if self.STOP_LOSS_PCT >= abs(self.MAX_DRAWDOWN_STOP):
+            raise ValueError("STOP_LOSS_PCT should be smaller than MAX_DRAWDOWN_STOP")
+        if self.MAX_HOLD_HOURS <= 0:
+            raise ValueError("MAX_HOLD_HOURS must be positive")
+        if self.COOLDOWN_SECONDS_BUY < 0:
+            raise ValueError("COOLDOWN_SECONDS_BUY must be non-negative")
+        if self.TRAILING_ACTIVATION_PCT <= 0:
+            raise ValueError("TRAILING_ACTIVATION_PCT must be positive")
+        if self.TRAILING_DISTANCE_PCT <= 0:
+            raise ValueError("TRAILING_DISTANCE_PCT must be positive")
+        if self.TRAILING_DISTANCE_PCT >= self.TRAILING_ACTIVATION_PCT:
+            raise ValueError("TRAILING_DISTANCE_PCT should be smaller than TRAILING_ACTIVATION_PCT")
+        
+        # Validate timeframe format
+        valid_timeframes = {"1Min", "5Min", "15Min", "1Hour", "4Hour", "1Day"}
+        for tf in self.TIMEFRAMES:
+            if tf not in valid_timeframes:
+                raise ValueError(f"Invalid timeframe: '{tf}'. Valid options: {valid_timeframes}")
+        
         return self
 
     def log_config(self) -> str:

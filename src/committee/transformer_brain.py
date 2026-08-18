@@ -260,13 +260,13 @@ async def transformer_brain(symbol: str, price: float, signal: dict) -> BrainVot
                     df_raw["open_interest"] = 0.0
                     df_raw["long_short_ratio"] = 1.0
                 try:
-                  if is_live:
-                    from src.onchain_data import fetch_derivatives_data
-                    deriv_data = asyncio.run(fetch_derivatives_data(symbol))
-                    
-                    df_raw["funding_rate"] = deriv_data.get("funding_rate", 0.0)
-                    df_raw["open_interest"] = deriv_data.get("open_interest", 0.0)
-                    df_raw["long_short_ratio"] = deriv_data.get("long_short_ratio", 1.0)
+                    if is_live:
+                        from src.onchain_data import fetch_derivatives_data_sync
+                        deriv_data = fetch_derivatives_data_sync(symbol)
+                        
+                        df_raw["funding_rate"] = deriv_data.get("funding_rate", 0.0)
+                        df_raw["open_interest"] = deriv_data.get("open_interest", 0.0)
+                        df_raw["long_short_ratio"] = deriv_data.get("long_short_ratio", 1.0)
                 except Exception as e:
                     import logging
                     logging.getLogger("onchain").warning(f"Failed to append onchain data: {e}")

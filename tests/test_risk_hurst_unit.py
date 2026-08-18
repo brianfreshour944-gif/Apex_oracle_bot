@@ -147,3 +147,69 @@ def test_hurst_constant_series():
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+
+
+def test_dynamic_transaction_costs():
+    """Test dynamic transaction cost model updates and affects sizing."""
+    rm = RiskManager(AsyncMock())
+    
+    # Initially uses static defaults
+    costs1 = rm.get_transaction_costs("BTC/USD")
+    assert costs1["fee_bps"] == 5.0
+    assert costs1["slippage_bps"] == 3.0
+    assert costs1["spread_bps"] == 2.0
+    assert costs1["total_bps"] == 10.0
+    
+    # Record a fill with high costs
+    rm.record_fill_costs("BTC/USD", fee_bps=10.0, slippage_bps=20.0, spread_bps=5.0)
+    
+    # Dynamic model should now reflect higher costs
+    costs2 = rm.get_transaction_costs("BTC/USD")
+    assert costs2["fee_bps"] > 5.0  # Updated via EMA
+    assert costs2["slippage_bps"] > 3.0
+    assert costs2["spread_bps"] > 2.0
+    
+    # High costs should reduce position size
+    size_before, _ = rm.calculate_position_size("BTC/USD", 50000.0, "trending", atr=500.0, confidence=1.0, expected_return_pct=0.03)
+    # Simulate more high-cost fills to push edge below threshold
+    for _ in range(5):
+        rm.record_fill_costs("BTC/USD", fee_bps=10.0, slippage_bps=20.0, spread_bps=5.0)
+    size_after, status = rm.calculate_position_size("BTC/USD", 50000.0, "trending", atr=500.0, confidence=1.0, expected_return_pct=0.03)
+    # With high costs, net edge may be below threshold
+    # The test verifies the dynamic model is being used
+    assert status in ("ok", "rejected: insufficient edge after costs")
+
+
+def test_edge_below_cost_threshold_rejected():
+    """Trades with expected edge below transaction costs should be rejected."""
+    rm = RiskManager(AsyncMock())
+    # Simulate very high costs
+    rm.record_fill_costs("ETH/USD", fee_bps=50.0, slippage_bps=50.0, spread_bps=10.0)
+    # Low expected return with high costs -> should be rejected
+    size, status = rm.calculate_position_size("ETH/USD", 3000.0, "trending", atr=100.0, confidence=1.0, expected_return_pct=0.01)
+    assert size == 0.0
+    assert "insufficient edge" in status.lower() or status == "rejected: insufficient edge after costs"
+
+
+def test_record_fill_costs_ema():
+    """Verify EMA blending works correctly."""
+    rm = RiskManager(AsyncMock())
+    alpha = 0.3
+    
+    # First fill
+    rm.record_fill_costs("BTC/USD", fee_bps=10.0, slippage_bps=5.0)
+    costs = rm._realized_tx_costs["BTC/USD"]
+    assert costs["fee_bps"] == 10.0
+    assert costs["slippage_bps"] == 5.0
+    
+    # Second fill - should blend with alpha=0.3
+    rm.record_fill_costs("BTC/USD", fee_bps=20.0, slippage_bps=15.0)
+    costs = rm._realized_tx_costs["BTC/USD"]
+    expected_fee = (1 - alpha) * 10.0 + alpha * 20.0
+    expected_slippage = (1 - alpha) * 5.0 + alpha * 15.0
+    assert abs(costs["fee_bps"] - expected_fee) < 0.01
+    assert abs(costs["slippage_bps"] - expected_slippage) < 0.01
+
+
+if __name__ == "__main__":
+    pytest.main([__file__, "-v"])

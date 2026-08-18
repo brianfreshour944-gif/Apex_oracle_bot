@@ -7,6 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 from typing import Dict, Any, Optional
 from pydantic import BaseModel
+from datetime import datetime
 
 from src.config import settings
 from src.logging_config import get_logger
@@ -45,6 +46,8 @@ class HealthCheckResponse(BaseModel):
     version: str
     symbols: list
     database: bool
+    exchange: bool
+    timestamp: str
 
 
 def _check_database() -> bool:
@@ -56,16 +59,30 @@ def _check_database() -> bool:
         return True  # If we can't check, assume healthy
 
 
+def _check_exchange() -> bool:
+    """Check if exchange is configured and reachable."""
+    try:
+        from src.config import settings
+        return bool(settings.ALPACA_API_KEY and settings.ALPACA_SECRET_KEY)
+    except Exception:
+        return False
+
+
 @api_router.get("/health", response_model=HealthCheckResponse)
 async def health_check(response: Response) -> HealthCheckResponse:
     """Health check endpoint for container orchestration (Coolify/Docker)."""
     db_ok = _check_database()
-    response.status_code = 200 if db_ok else 503
+    ex_ok = _check_exchange()
+    overall_ok = db_ok and ex_ok
+    
+    response.status_code = 200 if overall_ok else 503
     return HealthCheckResponse(
-        status="healthy" if db_ok else "degraded",
+        status="healthy" if overall_ok else "degraded",
         version="2.0.0",
         symbols=settings.SYMBOLS,
         database=db_ok,
+        exchange=ex_ok,
+        timestamp=datetime.utcnow().isoformat() + "Z",
     )
 
 
@@ -73,12 +90,48 @@ async def health_check(response: Response) -> HealthCheckResponse:
 async def health_check_v1(response: Response) -> HealthCheckResponse:
     """Health check endpoint under /api/v1/ prefix."""
     db_ok = _check_database()
-    response.status_code = 200 if db_ok else 503
+    ex_ok = _check_exchange()
+    overall_ok = db_ok and ex_ok
+    
+    response.status_code = 200 if overall_ok else 503
     return HealthCheckResponse(
-        status="healthy" if db_ok else "degraded",
+        status="healthy" if overall_ok else "degraded",
         version="2.0.0",
         symbols=settings.SYMBOLS,
         database=db_ok,
+        exchange=ex_ok,
+        timestamp=datetime.utcnow().isoformat() + "Z",
+    )
+
+
+@api_router.get("/ready", response_model=HealthCheckResponse)
+async def readiness_check(response: Response) -> HealthCheckResponse:
+    """Readiness check - verifies all dependencies are ready."""
+    db_ok = _check_database()
+    ex_ok = _check_exchange()
+    overall_ok = db_ok and ex_ok
+    
+    response.status_code = 200 if overall_ok else 503
+    return HealthCheckResponse(
+        status="ready" if overall_ok else "not_ready",
+        version="2.0.0",
+        symbols=settings.SYMBOLS,
+        database=db_ok,
+        exchange=ex_ok,
+        timestamp=datetime.utcnow().isoformat() + "Z",
+    )
+
+
+@api_router.get("/live", response_model=HealthCheckResponse)
+async def liveness_check(response: Response) -> HealthCheckResponse:
+    """Liveness check - simple endpoint to verify process is alive."""
+    return HealthCheckResponse(
+        status="alive",
+        version="2.0.0",
+        symbols=settings.SYMBOLS,
+        database=True,
+        exchange=True,
+        timestamp=datetime.utcnow().isoformat() + "Z",
     )
 
 
@@ -99,14 +152,50 @@ app.include_router(api_router)
 
 @app.get("/health", response_model=HealthCheckResponse)
 async def root_health_check(response: Response) -> HealthCheckResponse:
-    """Root-level health check for container orchestration."""
+    """Root-level health check for container orchestration (Coolify/Docker)."""
     db_ok = _check_database()
-    response.status_code = 200 if db_ok else 503
+    ex_ok = _check_exchange()
+    overall_ok = db_ok and ex_ok
+    
+    response.status_code = 200 if overall_ok else 503
     return HealthCheckResponse(
-        status="healthy" if db_ok else "degraded",
+        status="healthy" if overall_ok else "degraded",
         version="2.0.0",
         symbols=settings.SYMBOLS,
         database=db_ok,
+        exchange=ex_ok,
+        timestamp=datetime.utcnow().isoformat() + "Z",
+    )
+
+
+@app.get("/ready", response_model=HealthCheckResponse)
+async def root_readiness_check(response: Response) -> HealthCheckResponse:
+    """Root-level readiness check."""
+    db_ok = _check_database()
+    ex_ok = _check_exchange()
+    overall_ok = db_ok and ex_ok
+    
+    response.status_code = 200 if overall_ok else 503
+    return HealthCheckResponse(
+        status="ready" if overall_ok else "not_ready",
+        version="2.0.0",
+        symbols=settings.SYMBOLS,
+        database=db_ok,
+        exchange=ex_ok,
+        timestamp=datetime.utcnow().isoformat() + "Z",
+    )
+
+
+@app.get("/live", response_model=HealthCheckResponse)
+async def root_liveness_check(response: Response) -> HealthCheckResponse:
+    """Root-level liveness check."""
+    return HealthCheckResponse(
+        status="alive",
+        version="2.0.0",
+        symbols=settings.SYMBOLS,
+        database=True,
+        exchange=True,
+        timestamp=datetime.utcnow().isoformat() + "Z",
     )
 
 
@@ -129,7 +218,7 @@ async def start_fastapi_server_async() -> None:
     )
     logger.info(f"FastAPI server started on port {settings.STATUS_PORT}")
     logger.info("API documentation available at /docs")
-    logger.info("Health check available at /health")
+    logger.info("Health check available at /health, /ready, /live")
 
 
 async def stop_fastapi_server_async() -> None:

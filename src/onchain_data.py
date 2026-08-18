@@ -12,9 +12,10 @@ from src.logging_config import get_logger
 
 logger = get_logger("onchain")
 
-async def fetch_derivatives_data(symbol: str) -> Dict[str, float]:
+
+def fetch_derivatives_data_sync(symbol: str) -> Dict[str, float]:
     """
-    Fetches Open Interest, Funding Rate, and Global Long/Short ratio from Binance Futures.
+    Synchronous version: Fetches Open Interest, Funding Rate, and Long/Short ratio from Binance Futures.
     Alpaca symbols are usually 'BTC/USD', so we convert to 'BTCUSDT' for Binance.
     """
     base_asset = symbol.split("/")[0] if "/" in symbol else symbol.replace("USD", "")
@@ -28,7 +29,7 @@ async def fetch_derivatives_data(symbol: str) -> Dict[str, float]:
     }
     
     try:
-        async with httpx.AsyncClient(timeout=5.0) as client:
+        with httpx.Client(timeout=5.0) as client:
             # 1. Funding Rate (Premium Index)
             funding_url = f"https://fapi.binance.com/fapi/v1/premiumIndex?symbol={binance_symbol}"
             
@@ -40,33 +41,32 @@ async def fetch_derivatives_data(symbol: str) -> Dict[str, float]:
             # 4. L2 Order Book Depth
             depth_url = f"https://fapi.binance.com/fapi/v1/depth?symbol={binance_symbol}&limit=50"
             
-            results = await asyncio.gather(
+            responses = [
                 client.get(funding_url),
                 client.get(oi_url),
                 client.get(ls_url),
                 client.get(depth_url),
-                return_exceptions=True
-            )
+            ]
             
             # Parse Funding Rate
-            if not isinstance(results[0], Exception) and results[0].status_code == 200:
-                payload = results[0].json()
+            if responses[0].status_code == 200:
+                payload = responses[0].json()
                 data["funding_rate"] = float(payload.get("lastFundingRate", 0.0))
                 
             # Parse Open Interest
-            if not isinstance(results[1], Exception) and results[1].status_code == 200:
-                payload = results[1].json()
+            if responses[1].status_code == 200:
+                payload = responses[1].json()
                 data["open_interest"] = float(payload.get("openInterest", 0.0))
                 
             # Parse Long/Short Ratio
-            if not isinstance(results[2], Exception) and results[2].status_code == 200:
-                payload = results[2].json()
+            if responses[2].status_code == 200:
+                payload = responses[2].json()
                 if len(payload) > 0:
                     data["long_short_ratio"] = float(payload[0].get("longShortRatio", 1.0))
                     
             # Parse L2 Depth Imbalance
-            if not isinstance(results[3], Exception) and results[3].status_code == 200:
-                payload = results[3].json()
+            if responses[3].status_code == 200:
+                payload = responses[3].json()
                 bids = payload.get("bids", [])
                 asks = payload.get("asks", [])
                 
@@ -81,3 +81,11 @@ async def fetch_derivatives_data(symbol: str) -> Dict[str, float]:
         logger.warning(f"Failed to fetch derivatives data for {binance_symbol}: {e}")
         
     return data
+
+
+async def fetch_derivatives_data(symbol: str) -> Dict[str, float]:
+    """
+    Async wrapper for backward compatibility.
+    """
+    # Run sync version in thread pool to avoid blocking event loop
+    return await asyncio.to_thread(fetch_derivatives_data_sync, symbol)
