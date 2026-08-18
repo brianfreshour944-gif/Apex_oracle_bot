@@ -1,49 +1,49 @@
-"""Circuit breaker for exchange/network calls."""  
+"""Circuit breaker for exchange/network calls."""
 
-from __future__ import annotations  
+from __future__ import annotations
 
-import asyncio  
-import time  
-from enum import Enum  
-from typing import Any, Awaitable, Callable, Optional, TypeVar  
+import asyncio
+import time
+from enum import Enum
+from typing import Any, Awaitable, Callable, Optional, TypeVar
 
-from src.config import settings  
-from src.logging_config import get_logger  
+from src.config import settings
+from src.logging_config import get_logger
 
-logger = get_logger("circuit_breaker")  
+logger = get_logger("circuit_breaker")
 
-T = TypeVar("T")  
-
-
-class CircuitState(str, Enum):  
-    CLOSED = "closed"  
-    OPEN = "open"  
-    HALF_OPEN = "half_open"  
+T = TypeVar("T")
 
 
-class CircuitBreaker:  
-    def __init__(self, name: str, failure_threshold: Optional[int] = None, open_seconds: Optional[float] = None):  
-        self.name = name  
-        self.failure_threshold = failure_threshold or getattr(settings, "CIRCUIT_FAILURE_THRESHOLD", 5)  
-        self.open_seconds = open_seconds or getattr(settings, "CIRCUIT_OPEN_SECONDS", 60.0)  
+class CircuitState(str, Enum):
+    CLOSED = "closed"
+    OPEN = "open"
+    HALF_OPEN = "half_open"
 
-        self._failures = 0  
-        self._state = CircuitState.CLOSED  
-        self._opened_at = 0.0  
-        self._lock = asyncio.Lock()  
-        self._half_open_successes = 0  
 
-    @property  
-    def state(self):  
-        return self._state  
+class CircuitBreaker:
+    def __init__(self, name: str, failure_threshold: Optional[int] = None, open_seconds: Optional[float] = None):
+        self.name = name
+        self.failure_threshold = failure_threshold or getattr(settings, "CIRCUIT_FAILURE_THRESHOLD", 5)
+        self.open_seconds = open_seconds or getattr(settings, "CIRCUIT_OPEN_SECONDS", 60.0)
 
-    def _maybe_transition(self):  
-        if self._state == CircuitState.OPEN and (time.monotonic() - self._opened_at) >= self.open_seconds:  
-            self._state = CircuitState.HALF_OPEN  
-            self._half_open_successes = 0  
-            logger.warning(f"Circuit {self.name!r} -^> HALF_OPEN")  
+        self._failures = 0
+        self._state = CircuitState.CLOSED
+        self._opened_at = 0.0
+        self._lock = asyncio.Lock()
+        self._half_open_successes = 0
 
-async def call(self, func: Callable[..., Awaitable[T]], *args: Any, **kwargs: Any) -> T:
+    @property
+    def state(self):
+        return self._state
+
+    def _maybe_transition(self):
+        if self._state == CircuitState.OPEN and (time.monotonic() - self._opened_at) >= self.open_seconds:
+            self._state = CircuitState.HALF_OPEN
+            self._half_open_successes = 0
+            logger.warning(f"Circuit {self.name!r} -> HALF_OPEN")
+
+    async def call(self, func: Callable[..., Awaitable[T]], *args: Any, **kwargs: Any) -> T:
         async with self._lock:
             self._maybe_transition()
             if self._state == CircuitState.OPEN:
@@ -68,8 +68,8 @@ async def call(self, func: Callable[..., Awaitable[T]], *args: Any, **kwargs: An
                         self._state = CircuitState.CLOSED
                         self._failures = 0
                         self._half_open_successes = 0
-                        logger.info(f"Circuit {self.name!r} recovered -^> CLOSED")
-# In CLOSED state, reset failures on success
+                        logger.info(f"Circuit {self.name!r} recovered -> CLOSED")
+            # In CLOSED state, reset failures on success
             elif self._state == CircuitState.CLOSED:
                 self._failures = 0
             return result
