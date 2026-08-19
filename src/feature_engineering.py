@@ -319,7 +319,7 @@ def add_features(df: pd.DataFrame, symbol: str = "") -> pd.DataFrame:
     tr3 = (low - safe_prev_close).abs()
     tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
     atr_raw = tr.rolling(14, min_periods=2).mean()
-    d["atr"] = _z_score(atr_raw, window=20, fill=0.0)
+    d["atr"] = _sanitize(atr_raw, fill=0.0)
 
     # ── Feature 15: volume_spike ──────────────────────────────────────────────
     vol_mean = volume.rolling(20, min_periods=2).mean().replace(0.0, np.nan)
@@ -502,7 +502,7 @@ async def _fetch_multi_timeframe_features(
                 log_hl = _sanitize(np.log(high / safe_low), fill=0.0).clip(lower=0.0)
                 park_vol = np.sqrt(log_hl ** 2 / (4.0 * np.log(2.0)))
                 
-                safe_open = open_.replace(0, np.nan)
+                safe_open = bars_df["open"].replace(0, np.nan)
                 log_co = _sanitize(np.log(close / safe_open), fill=0.0)
                 gk_vol = np.sqrt((0.5 * log_hl ** 2) - ((2.0 * np.log(2.0) - 1.0) * log_co ** 2))
                 gk_vol = np.sqrt(gk_vol.clip(lower=0))

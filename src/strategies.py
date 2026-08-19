@@ -25,6 +25,7 @@ class TradingStrategy:
         self._cache_ttl = cache_ttl
         self.backtest = backtest
         self._active_strategy: Dict[str, str] = {}
+        self._trailing_peaks: Dict[str, float] = {}
         # Cycle-level caches for on-chain and sentiment data so they
         # are fetched once per cycle instead of once per symbol.
         self._cycle_derivatives: Dict[str, Dict[str, float]] = {}
@@ -65,7 +66,8 @@ class TradingStrategy:
                     "prev_rsi": 50.0,
                     "confidence": 0.0
                 }
-                self._regime_cache[symbol] = (now, res)
+                # Do NOT cache insufficient-data fallback so subsequent calls
+                # within the TTL still re-fetch and may succeed.
                 return res
 
             # Extract numpy arrays explicitly (Polars Series -> numpy) from raw data
@@ -496,10 +498,6 @@ class TradingStrategy:
 
             # Trailing stop (if enabled)
             if settings.TRAILING_STOP_ENABLED:
-                # Track peak price for trailing stop
-                if not hasattr(self, '_trailing_peaks'):
-                    self._trailing_peaks = {}
-
                 if symbol not in self._trailing_peaks:
                     self._trailing_peaks[symbol] = current_price
 

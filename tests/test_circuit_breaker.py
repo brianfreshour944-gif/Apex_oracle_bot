@@ -1,6 +1,7 @@
 """Tests for circuit breaker functionality."""
 
 import asyncio
+import time
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 import sys
@@ -79,7 +80,7 @@ class TestCircuitBreaker:
         assert result == "success"
         assert circuit_breaker.state == CircuitState.CLOSED
 
-@pytest.mark.asyncio
+    @pytest.mark.asyncio
     async def test_reopens_on_failure_in_half_open(self, circuit_breaker):
         """Circuit reopens on failure in HALF_OPEN state."""
         circuit_breaker._state = CircuitState.HALF_OPEN

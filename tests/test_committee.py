@@ -7,7 +7,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 import asyncio
 from src.committee.models import BrainVote, CommitteeResult
 
-from src.committee.committee import run_committee, WINNING_SCORE_THRESHOLD, calculate_confidence_size_multiplier
+from src.committee.committee import run_committee, WINNING_SCORE_THRESHOLD, calculate_confidence_size_multiplier, DEFAULT_SCORE_THRESHOLD
 from src.committee.sentinel_brain import sentinel_brain
 from src.committee.momentum_brain import momentum_brain
 from src.committee.quant_brain import quant_brain
@@ -19,7 +19,7 @@ async def test_committee_buy_consensus_and_sizing():
     signal = {
         "action": "buy",
         "confidence": 0.92,
-        "regime": "uptrend",
+        "regime": "trending",
         "rsi": 22.0,  # Strongly Oversold (Quant BUY)
         "atr": 50.0
     }
@@ -70,22 +70,21 @@ async def test_committee_low_conviction_stand_aside():
 def test_size_multiplier_logic():
     """Test size multiplier scaling based on confidence scores.
     
-    Uses explicit reference threshold of 0.60 (legacy test value), decoupled
-    from production's DEFAULT_SCORE_THRESHOLD (0.15).
+    Uses production DEFAULT_SCORE_THRESHOLD (0.15) for consistency.
     """
-    ref_thresh = 0.60
-    # Marginal confidence score (0.60) -> ~0.50x
-    m1 = calculate_confidence_size_multiplier(0.60, 0.0, ref_thresh)
+    ref_thresh = DEFAULT_SCORE_THRESHOLD
+    # Marginal confidence score (0.15) -> ~0.50x
+    m1 = calculate_confidence_size_multiplier(0.15, 0.0, ref_thresh)
     assert m1 == 0.50
     
-    # Moderate confidence score (0.76) -> ~1.00x
-    m2 = calculate_confidence_size_multiplier(0.76, 0.0, ref_thresh)
+    # Moderate confidence score (0.31) -> ~1.00x
+    m2 = calculate_confidence_size_multiplier(0.31, 0.0, ref_thresh)
     assert 0.95 <= m2 <= 1.05
     
-    # High conviction score (0.92) -> > 1.40x
-    m3 = calculate_confidence_size_multiplier(0.92, 0.0, ref_thresh)
+    # High conviction score (0.47) -> > 1.40x
+    m3 = calculate_confidence_size_multiplier(0.47, 0.0, ref_thresh)
     assert m3 >= 1.40
-    print(f"PASS: test_size_multiplier_logic (0.60->{m1}x, 0.76->{m2}x, 0.92->{m3}x)")
+    print(f"PASS: test_size_multiplier_logic (0.15->{m1}x, 0.31->{m2}x, 0.47->{m3}x)")
 
 async def main():
     await test_committee_buy_consensus_and_sizing()

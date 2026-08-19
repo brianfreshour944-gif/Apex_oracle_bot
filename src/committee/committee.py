@@ -23,6 +23,7 @@ from .quant_brain import quant_brain
 from .momentum_brain import momentum_brain
 from .sentinel_brain import sentinel_brain
 from .llm_brain import llm_brain
+from .rl_meta import RLMetaLearner
 
 logger = get_logger("committee")
 
@@ -341,7 +342,6 @@ async def run_committee(symbol: str, price: float, signal: Dict[str, Any]) -> Co
         logger.info(f"Adaptive learner SHADOW for regime '{regime}' (trades={learner.sample_count_for_regime(regime)}, validated=False)")
 
     # Fallback to RL Meta-Learner (PPO) if mathematical learner not ready/failed
-    from .rl_meta import RLMetaLearner
     rl_learner = RLMetaLearner()
     
     if not adaptive_used and getattr(rl_learner, "model", None) and settings.ADAPTIVE_ML_ENABLED and ppo_ready and validated_ready and signal.get("backtest_df") is None:

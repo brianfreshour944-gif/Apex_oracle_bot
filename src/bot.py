@@ -17,6 +17,7 @@ from src.api import start_fastapi_server_async
 from src.strategies import TradingStrategy
 from src.risk import RiskManager
 from src.telegram_alerts import send_telegram_alert
+from src.committee.transformer_brain import _model_inference_lock
 
 # Structured logging setup
 class StructuredLogger:
@@ -97,9 +98,9 @@ async def _record_committee_outcome(symbol: str, exit_price: float, exit_reason:
 
         max_fav_pct = 0.0
         max_adv_pct = 0.0
-        global strategy
-        if strategy is not None and hasattr(strategy, '_trailing_peaks') and symbol in strategy._trailing_peaks:
-            peak = strategy._trailing_peaks[symbol]
+        global _state
+        if _state.strategy is not None and hasattr(_state.strategy, '_trailing_peaks') and symbol in _state.strategy._trailing_peaks:
+            peak = _state.strategy._trailing_peaks[symbol]
             if action == "buy":
                 max_fav_pct = (peak - entry_price) / entry_price * 100.0 if peak > entry_price else 0.0
             else:
@@ -118,8 +119,8 @@ async def _record_committee_outcome(symbol: str, exit_price: float, exit_reason:
 
         # Clear peak price tracking for this symbol on any position close
         # to prevent stale peak prices from affecting future positions
-        if risk_manager is not None:
-            risk_manager.peak_prices.pop(symbol, None)
+        if _state.risk_manager is not None:
+            _state.risk_manager.peak_prices.pop(symbol, None)
 
         # Append to the Transformer's live replay buffer, if this trade's
         # entry captured a tensor state. Matches the exact {"tensor": ...,
@@ -222,8 +223,8 @@ async def _record_committee_outcome(symbol: str, exit_price: float, exit_reason:
 
             # Run in background thread, don't await
             task = asyncio.create_task(asyncio.to_thread(_online_transformer_step), name="transformer_online")
-            _background_tasks.add(task)
-            task.add_done_callback(_background_tasks.discard)
+            _state._background_tasks.add(task)
+            task.add_done_callback(_state._background_tasks.discard)
         except Exception as e:
             logger.debug(f"Online Transformer step skipped (non-fatal): {e}")
 
@@ -281,8 +282,8 @@ async def _record_committee_outcome(symbol: str, exit_price: float, exit_reason:
                 logger.error(f"Attribution engine failed: {e}")
                 
         task = asyncio.create_task(_run_attribution(), name="attribution")
-        _background_tasks.add(task)
-        task.add_done_callback(_background_tasks.discard)
+        _state._background_tasks.add(task)
+        task.add_done_callback(_state._background_tasks.discard)
 
     except Exception as e:
         logger.error(f"Adaptive outcome recording failed for {symbol} (non-fatal): {e}")
@@ -381,18 +382,6 @@ class BotState:
 # Global state instance (single instance for the process)
 _state = BotState()
 
-# Backwards-compatible module-level accessors (for gradual migration)
-ex = _state.ex
-strategy = _state.strategy
-risk_manager = _state.risk_manager
-latest_scan_results = _state.latest_scan_results
-scan_cycle_count = _state.scan_cycle_count
-cooldowns = _state.cooldowns
-position_adds = _state.position_adds
-_symbol_locks = _state._symbol_locks
-_background_tasks = _state._background_tasks
-_shutdown_requested = _state._shutdown_requested
-
 # Paths for config files
 _REGIME_FLAG_PATH = "data/regime_flag.txt"
 _BANNED_SYMBOLS_PATH = _os.path.join(_os.path.dirname(__file__), '..', 'data', 'banned_symbols.json')
@@ -410,7 +399,7 @@ def get_banned_symbols():
 async def process_signal_for_symbol(symbol: str, current_price: float, risk_manager: RiskManager, strategy: TradingStrategy, ex: AlpacaExchange, positions: list = None, regime_flag: dict = None, banned_symbols: set = None) -> None:
     """Processes signal for a single symbol asynchronously."""
     # Get or create lock for this symbol
-    lock = _symbol_locks.setdefault(symbol, asyncio.Lock())
+    lock = _state._symbol_locks.setdefault(symbol, asyncio.Lock())
     async with lock:
         try:
             # Use pre-fetched positions from the main cycle if available,
@@ -425,7 +414,7 @@ async def process_signal_for_symbol(symbol: str, current_price: float, risk_mana
             # logic (a position we're already holding must always be free to close).
             if not current_position:
                 now_ts = time.time()
-                cooldown_until = cooldowns.get(symbol, 0)
+                cooldown_until = _state.cooldowns.get(symbol, 0)
                 if now_ts < cooldown_until:
                     remaining = int(cooldown_until - now_ts)
                     logger.debug(f"[{symbol}] On entry cooldown, {remaining}s remaining -- skipping")
@@ -449,10 +438,10 @@ async def process_signal_for_symbol(symbol: str, current_price: float, risk_mana
                         client_order_id=client_order_id,
                     )
                     logger.info(f"Trailing Stop Executed: {symbol}")
-                    await send_telegram_alert(f"Ã°Å¸Å¡Â¨ <b>Trailing Stop Triggered</b>\nSymbol: {symbol}\nClosed {qty} @ ${current_price:.2f}")
-                    cooldowns[symbol] = time.time() + settings.COOLDOWN_SECONDS_BUY
+                    await send_telegram_alert(f"ð <b>Trailing Stop Triggered</b>\nSymbol: {symbol}\nClosed {qty} @ ${current_price:.2f}")
+                    _state.cooldowns[symbol] = time.time() + settings.COOLDOWN_SECONDS_BUY
                     # Reset position pyramid/scale-in tracking on close
-                    position_adds.pop(symbol, None)
+                    _state.position_adds.pop(symbol, None)
                     await _record_committee_outcome(symbol, current_price, exit_reason="trailing_stop")
                     return  # Skip standard signals
     
@@ -515,7 +504,8 @@ async def process_signal_for_symbol(symbol: str, current_price: float, risk_mana
                     dashboard.append(f"Reason......... {committee_result.veto_reason}")
                     dashboard.append("==============================")
                     print("\n".join(dashboard), flush=True)
-                    latest_scan_results[symbol] = {"score": committee_result.score, "action": "VETO", "price": current_price}
+                    # Update scan results for this symbol
+                    _state.latest_scan_results[symbol] = {"score": committee_result.score, "action": "VETO", "price": current_price}
                     return
     
                 if committee_result.action in ["stand_aside", "skip", "hold"]:
@@ -523,10 +513,10 @@ async def process_signal_for_symbol(symbol: str, current_price: float, risk_mana
                     dashboard.append("Reason......... Committee Consensus")
                     dashboard.append("==============================")
                     print("\n".join(dashboard), flush=True)
-                    latest_scan_results[symbol] = {"score": committee_result.score, "action": committee_result.action.upper(), "price": current_price}
+                    _state.latest_scan_results[symbol] = {"score": committee_result.score, "action": committee_result.action.upper(), "price": current_price}
                     return
     
-                latest_scan_results[symbol] = {"score": committee_result.score, "action": committee_result.action.upper(), "price": current_price}
+                _state.latest_scan_results[symbol] = {"score": committee_result.score, "action": committee_result.action.upper(), "price": current_price}
     
                 # Override original signal action & confidence with committee's consensus decision
                 signal["action"] = committee_result.action
@@ -667,50 +657,50 @@ async def process_signal_for_symbol(symbol: str, current_price: float, risk_mana
                         logger.warning(f"[{symbol}] Order vetoed: scaled position size rounded to zero")
                         return
       
-                # Position pyramid/scale-in gates: prevent unlimited re-buying
-                # of an already-open position without meaningful improvement
-                if signal["action"] == "buy":
-                    current_position = None
-                    for p in positions:
-                        if p["symbol"].replace("/", "") == symbol.replace("/", ""):
-                            current_position = p
-                            break
+# Position pyramid/scale-in gates: prevent unlimited re-buying
+                    # of an already-open position without meaningful improvement
+                    if signal["action"] == "buy":
+                        current_position = None
+                        for p in positions:
+                            if p["symbol"].replace("/", "") == symbol.replace("/", ""):
+                                current_position = p
+                                break
                     
-                    if current_position is not None:
-                        # There's already a position - check scale-in gates
-                        add_info = position_adds.get(symbol, {"count": 0, "last_add_time": 0.0, "last_add_score": 0.0})
-                        now = time.time()
-                        
-                        # Gate 1: Max adds cap
-                        if add_info["count"] >= MAX_POSITION_ADDS:
-                            logger.info(f"[{symbol}] Scale-in vetoed: max adds ({MAX_POSITION_ADDS}) reached (current: {add_info['count']})")
-                            return
-                        
-                        # Gate 2: Minimum time since last add
-                        if now - add_info["last_add_time"] < POSITION_ADD_MIN_SECONDS:
-                            logger.info(f"[{symbol}] Scale-in vetoed: minimum time between adds not met ({now - add_info['last_add_time']:.0f}s < {POSITION_ADD_MIN_SECONDS}s)")
-                            return
-                        
-                        # Gate 3: Minimum score improvement
-                        committee_score = committee_result.score
-                        if committee_score - add_info["last_add_score"] < POSITION_ADD_MIN_SCORE_INCREASE:
-                            logger.info(f"[{symbol}] Scale-in vetoed: insufficient score improvement ({committee_score:.3f} - {add_info['last_add_score']:.3f} < {POSITION_ADD_MIN_SCORE_INCREASE})")
-                            return
-                        
-                        # All gates passed - apply size decay
-                        decay_factor = POSITION_ADD_SIZE_DECAY ** add_info["count"]
-                        position_size = round(position_size * decay_factor, 6)
-                        logger.info(f"[{symbol}] Scale-in add #{add_info['count'] + 1}: size decayed by {decay_factor:.2f}x to {position_size}")
-                        
-                        # Update tracking
-                        position_adds[symbol] = {
-                            "count": add_info["count"] + 1,
-                            "last_add_time": now,
-                            "last_add_score": committee_score
-                        }
-                    else:
-                        # No existing position - reset tracking
-                        position_adds[symbol] = {"count": 0, "last_add_time": 0.0, "last_add_score": 0.0}
+                        if current_position is not None:
+                            # There's already a position - check scale-in gates
+                            add_info = _state.position_adds.get(symbol, {"count": 0, "last_add_time": 0.0, "last_add_score": 0.0})
+                            now = time.time()
+                            
+                            # Gate 1: Max adds cap
+                            if add_info["count"] >= MAX_POSITION_ADDS:
+                                logger.info(f"[{symbol}] Scale-in vetoed: max adds ({MAX_POSITION_ADDS}) reached (current: {add_info['count']})")
+                                return
+                            
+                            # Gate 2: Minimum time since last add
+                            if now - add_info["last_add_time"] < POSITION_ADD_MIN_SECONDS:
+                                logger.info(f"[{symbol}] Scale-in vetoed: minimum time between adds not met ({now - add_info['last_add_time']:.0f}s < {POSITION_ADD_MIN_SECONDS}s)")
+                                return
+                            
+                            # Gate 3: Minimum score improvement
+                            committee_score = committee_result.score
+                            if committee_score - add_info["last_add_score"] < POSITION_ADD_MIN_SCORE_INCREASE:
+                                logger.info(f"[{symbol}] Scale-in vetoed: insufficient score improvement ({committee_score:.3f} - {add_info['last_add_score']:.3f} < {POSITION_ADD_MIN_SCORE_INCREASE})")
+                                return
+                            
+                            # All gates passed - apply size decay
+                            decay_factor = POSITION_ADD_SIZE_DECAY ** add_info["count"]
+                            position_size = round(position_size * decay_factor, 6)
+                            logger.info(f"[{symbol}] Scale-in add #{add_info['count'] + 1}: size decayed by {decay_factor:.2f}x to {position_size}")
+                            
+                            # Update tracking
+                            _state.position_adds[symbol] = {
+                                "count": add_info["count"] + 1,
+                                "last_add_time": now,
+                                "last_add_score": committee_score
+                            }
+                        else:
+                            # No existing position - reset tracking
+                            _state.position_adds[symbol] = {"count": 0, "last_add_time": 0.0, "last_add_score": 0.0}
      
                 # Place order
                 client_order_id = f"{symbol}_{signal['action']}_{position_size}_{int(time.time())}"
@@ -805,14 +795,17 @@ async def process_signal_for_symbol(symbol: str, current_price: float, risk_mana
                         logger.info(f"[FILL] {symbol} close: filled=${filled_price:.2f} commission=${commission:.4f}")
                     if commission > 0:
                         logger.info(f"[FEE] {symbol} close: commission=${commission:.4f}")
-                
-                logger.info(f"[TRADE] Position closed: {symbol} (was {qty}) - reason: {signal.get('reason', 'unknown')}")
-                logger.debug(f"[TRADE] Close order result: {order_result}")
-                await send_telegram_alert(f"Ã°Å¸â€œâ€° <b>Position Closed</b>\nSymbol: {symbol}\nReason: {signal.get('reason', 'unknown')}")
-                cooldowns[symbol] = time.time() + settings.COOLDOWN_SECONDS_BUY
-                # Reset position pyramid/scale-in tracking on close
-                position_adds.pop(symbol, None)
-                await _record_committee_outcome(symbol, current_price, exit_reason=signal.get('reason', 'unknown'))
+                    
+                    logger.info(f"[TRADE] Position closed: {symbol} (was {qty}) - reason: {signal.get('reason', 'unknown')}")
+                    logger.debug(f"[TRADE] Close order result: {order_result}")
+                    await send_telegram_alert(f"ð <b>Position Closed</b>\nSymbol: {symbol}\nReason: {signal.get('reason', 'unknown')}")
+                    _state.cooldowns[symbol] = time.time() + settings.COOLDOWN_SECONDS_BUY
+                    # Reset position pyramid/scale-in tracking on close
+                    _state.position_adds.pop(symbol, None)
+                    # Clear trailing peaks for this symbol
+                    if _state.strategy is not None and hasattr(_state.strategy, '_trailing_peaks'):
+                        _state.strategy._trailing_peaks.pop(symbol, None)
+                    await _record_committee_outcome(symbol, current_price, exit_reason=signal.get('reason', 'unknown'))
     
         except Exception as e:
             logger.error(f"Error processing {symbol}: {e}")
@@ -820,24 +813,23 @@ async def process_signal_for_symbol(symbol: str, current_price: float, risk_mana
     
 async def scan_heartbeat_loop() -> None:
     """Background task to print periodic scan summary."""
-    global scan_cycle_count, latest_scan_results
     while True:
         try:
             await asyncio.sleep(settings.LOOP_INTERVAL_SEC)
-            scan_cycle_count += 1
+            _state.scan_cycle_count += 1
             
-            if not latest_scan_results:
+            if not _state.latest_scan_results:
                 continue
                 
             trades_this_cycle = False
             out = []
             out.append("========================================")
-            out.append(f"Cycle {scan_cycle_count}")
-            out.append(f"{len(latest_scan_results)} Symbols")
+            out.append(f"Cycle {_state.scan_cycle_count}")
+            out.append(f"{len(_state.latest_scan_results)} Symbols")
             out.append("Scanning...")
             out.append("========================================")
             
-            for sym, data in latest_scan_results.items():
+            for sym, data in _state.latest_scan_results.items():
                 action = data.get("action", "UNKNOWN")
                 score = data.get("score", 0.0)
                 out.append(f"{sym:<10} Score {score:.3f} {action}")
@@ -856,14 +848,13 @@ async def scan_heartbeat_loop() -> None:
 
 async def monitor_killswitch(risk_manager: RiskManager) -> None:
     """Background task to monitor killswitch continuously."""
-    global _shutdown_requested
     while True:
         try:
             if await risk_manager.check_killswitch_conditions():
                 logger.critical("KILLSWITCH ACTIVATED - Liquidating all positions")
                 await send_telegram_alert(f"🛑 <b>KILLSWITCH ACTIVATED</b>\nLiquidating all positions immediately.")
                 await risk_manager.liquidate_all_positions()
-                _shutdown_requested = True
+                _state._shutdown_requested = True
                 return  # Exit the task, let main loop handle shutdown
 
             exposure_status = await risk_manager.update_account_status()
@@ -1221,7 +1212,6 @@ async def run_periodic_db_maintenance() -> None:
 
 async def run_trading_bot() -> None:
     """Main trading bot loop."""
-    global ex, strategy, risk_manager
 
     try:
         logger.info("Initializing Apex Oracle Bot v2.0.0")
@@ -1264,9 +1254,9 @@ async def run_trading_bot() -> None:
         logger.info(settings.log_config())
 
         # Initialize exchange
-        ex = AlpacaExchange()
+        _state.ex = AlpacaExchange()
         try:
-            await ex.load()
+            await _state.ex.load()
             logger.info("Alpaca exchange connected")
         except RuntimeError:
             # Re-raise configuration and auth errors which are fatal
@@ -1275,8 +1265,8 @@ async def run_trading_bot() -> None:
             logger.warning(f"Alpaca exchange connection failed on startup: {e}. Bot will start in offline/retry mode.")
 
         # Initialize trading strategy and risk manager
-        strategy = TradingStrategy(ex)
-        risk_manager = RiskManager(ex)
+        _state.strategy = TradingStrategy(_state.ex)
+        _state.risk_manager = RiskManager(_state.ex)
         logger.info("Trading strategy and risk manager initialized")
 
         # Start API server
@@ -1313,7 +1303,7 @@ async def run_trading_bot() -> None:
 
         # Start Killswitch monitor
         active_tasks: set[asyncio.Task] = set()
-        ks_task = asyncio.create_task(monitor_killswitch(risk_manager), name="killswitch")
+        ks_task = asyncio.create_task(monitor_killswitch(_state.risk_manager), name="killswitch")
         active_tasks.add(ks_task)
         ks_task.add_done_callback(_on_task_done)
         logger.info("Killswitch monitor started")
@@ -1374,24 +1364,23 @@ async def run_trading_bot() -> None:
 
 # Main trading loop
         logger.info(f"Bot initialization complete. Starting stateless REST polling loop for {settings.SYMBOLS} (interval: {settings.LOOP_INTERVAL_SEC}s).")
-        global _shutdown_requested
 
         try:
-            while not _shutdown_requested:
+            while not _state._shutdown_requested:
                 regime_flag = read_regime_flag()
                 banned_symbols = get_banned_symbols()
 
                 # Fetch all latest bars concurrently instead of sequentially
-                bar_tasks = {symbol: ex.get_latest_bar(symbol) for symbol in settings.SYMBOLS}
+                bar_tasks = {symbol: _state.ex.get_latest_bar(symbol) for symbol in settings.SYMBOLS}
                 bar_results = await asyncio.gather(*bar_tasks.values(), return_exceptions=True)
 
                 now_ts = time.time()
-                expired = [k for k, v in cooldowns.items() if v < now_ts]
+                expired = [k for k, v in _state.cooldowns.items() if v < now_ts]
                 for k in expired:
-                    del cooldowns[k]
+                    del _state.cooldowns[k]
 
                 # Fetch positions once per cycle (was fetched redundantly per symbol)
-                positions = await ex.get_positions()
+                positions = await _state.ex.get_positions()
 
                 for symbol, bar_result in zip(settings.SYMBOLS, bar_results):
                     try:
@@ -1407,7 +1396,7 @@ async def run_trading_bot() -> None:
                         # Dispatch signal processing to a background task
                         task = asyncio.create_task(
                             process_signal_for_symbol(
-                                symbol, current_price, risk_manager, strategy, ex,
+                                symbol, current_price, _state.risk_manager, _state.strategy, _state.ex,
                                 positions=positions,
                                 regime_flag=regime_flag,
                                 banned_symbols=banned_symbols,
@@ -1437,12 +1426,12 @@ async def run_trading_bot() -> None:
         if active_tasks:
             await asyncio.gather(*active_tasks, return_exceptions=True)
         # Clean up _background_tasks from _record_committee_outcome
-        for task in list(_background_tasks):
+        for task in list(_state._background_tasks):
             task.cancel()
-        if _background_tasks:
-            await asyncio.gather(*_background_tasks, return_exceptions=True)
-        if ex:
-            await ex.close()
+        if _state._background_tasks:
+            await asyncio.gather(*_state._background_tasks, return_exceptions=True)
+        if _state.ex:
+            await _state.ex.close()
         logger.info("Shutdown complete.")
 
 

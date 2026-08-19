@@ -210,11 +210,7 @@ async def transformer_brain(symbol: str, price: float, signal: dict) -> BrainVot
             import os
             from src.feature_engineering import add_features
             # fetch_bars is actually located in data_fetcher or similar, wait I will just copy the import logic
-            try:
-                from src.data_fetcher import fetch_bars
-            except ImportError:
-                # fallback if fetch_bars was moved
-                from src.feature_engineering import fetch_bars
+            from src.data_fetcher import fetch_bars
                 
             from alpaca.data.historical import CryptoHistoricalDataClient
 
