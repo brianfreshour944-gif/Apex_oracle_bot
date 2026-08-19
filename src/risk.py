@@ -58,6 +58,18 @@ class RiskManager:
         spread = getattr(settings, "TX_COST_SPREAD_BPS", DEFAULT_TX_COSTS["spread_bps"])
         return {"fee_bps": fee, "slippage_bps": slippage, "spread_bps": spread, "total_bps": fee + slippage + spread}
 
+    def _get_max_portfolio_cap(self) -> float:
+        """Return the effective portfolio exposure cap in USD.
+        
+        If MAX_PORTFOLIO_PCT is set (default 0.5), the cap is
+        ACCOUNT_BASE * MAX_PORTFOLIO_PCT. Otherwise falls back to the
+        static MAX_PORTFOLIO_VALUE.
+        """
+        pct = getattr(settings, "MAX_PORTFOLIO_PCT", None)
+        if pct is not None and pct > 0:
+            return float(settings.ACCOUNT_BASE) * float(pct)
+        return float(settings.MAX_PORTFOLIO_VALUE)
+
     def record_fill_costs(self, symbol: str, fee_bps: float, slippage_bps: float, spread_bps: float = None) -> None:
         """Record realized transaction costs for dynamic model updates.
         
@@ -159,8 +171,8 @@ class RiskManager:
             # Calculate current exposure
             current_exposure = sum(float(p.get("market_value", 0)) for p in positions)
 
-            # Check portfolio value cap (absolute dollar amount)
-            max_portfolio_abs = float(settings.MAX_PORTFOLIO_VALUE)
+            # Check portfolio value cap (dynamic: percentage of account base if configured)
+            max_portfolio_abs = self._get_max_portfolio_cap()
             if current_exposure > max_portfolio_abs:
                 logger.warning(f"Portfolio value cap exceeded: ${current_exposure:.2f} (cap: ${max_portfolio_abs:.2f})")
                 return {
@@ -411,7 +423,7 @@ class RiskManager:
             # so failed/cancelled orders release their headroom faster.
             self._reserved_exposure = [(a, t) for a, t in self._reserved_exposure if (now - t).total_seconds() < 30]
             reserved_total = sum(a for a, _ in self._reserved_exposure)
-            max_portfolio_abs = float(settings.MAX_PORTFOLIO_VALUE)
+            max_portfolio_abs = self._get_max_portfolio_cap()
             headroom = max_portfolio_abs - current_exposure - reserved_total
             if headroom < min_notional:
                 logger.warning(f"Exposure reservation denied: current=${current_exposure:.2f} reserved=${reserved_total:.2f} headroom=${headroom:.2f} (below min ${min_notional:.2f}) cap=${max_portfolio_abs:.2f}")
@@ -450,7 +462,7 @@ class RiskManager:
         back under the cap. Targeted/incremental, unlike liquidate_all_positions."""
         try:
             positions = await self.exchange.get_positions()
-            max_portfolio_abs = float(settings.MAX_PORTFOLIO_VALUE)
+            max_portfolio_abs = self._get_max_portfolio_cap()
             current_exposure = sum(float(p.get("market_value", 0)) for p in positions)
             if current_exposure <= max_portfolio_abs:
                 return {"status": "no_action_needed"}

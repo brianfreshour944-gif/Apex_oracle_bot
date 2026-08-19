@@ -50,7 +50,7 @@ st.sidebar.write(", ".join(settings.SYMBOLS))
 col1, col2, col3, col4 = st.columns(4)
 
 col1.metric("Base Account Equity", f"${settings.ACCOUNT_BASE:,.2f}")
-col2.metric("Max Portfolio Cap", f"${settings.MAX_PORTFOLIO_VALUE:,.2f}")
+col2.metric("Max Portfolio Cap", f"${settings.ACCOUNT_BASE * getattr(settings, 'MAX_PORTFOLIO_PCT', 0.5):,.2f}")
 col3.metric("Max Drawdown Stop", f"{settings.MAX_DRAWDOWN_STOP:.1f}%")
 col4.metric("Daily Loss Limit", f"{settings.DAILY_LOSS_LIMIT:.1f}%")
 

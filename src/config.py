@@ -81,8 +81,18 @@ class TradingBotSettings(BaseSettings):
     )
     MAX_PORTFOLIO_VALUE: float = Field(
         default=500.0,
-        description="Maximum exposure cap across all positions",
+        description="Maximum exposure cap across all positions (absolute USD). "
+                    "If MAX_PORTFOLIO_PCT is set, this is overridden by "
+                    "ACCOUNT_BASE * MAX_PORTFOLIO_PCT.",
         gt=0
+    )
+    MAX_PORTFOLIO_PCT: float = Field(
+        default=0.5,
+        description="Maximum portfolio exposure as a fraction of ACCOUNT_BASE (0.5 = 50%). "
+                    "When set, overrides the static MAX_PORTFOLIO_VALUE cap. "
+                    "A $10K account with 0.5 would allow $5K total exposure.",
+        ge=0.0,
+        le=1.0,
     )
     MAX_OPEN_POSITIONS: int = Field(
         default=3,
@@ -602,6 +612,7 @@ ACCOUNT_BASE = settings.ACCOUNT_BASE
 BASE_RISK_PERCENT = settings.BASE_RISK_PERCENT
 MAX_SINGLE_TRADE_USD = settings.MAX_SINGLE_TRADE_USD
 MAX_PORTFOLIO_VALUE = settings.MAX_PORTFOLIO_VALUE
+MAX_PORTFOLIO_PCT = settings.MAX_PORTFOLIO_PCT
 MAX_OPEN_POSITIONS = settings.MAX_OPEN_POSITIONS
 MAX_DRAWDOWN_STOP = settings.MAX_DRAWDOWN_STOP
 DAILY_LOSS_LIMIT = settings.DAILY_LOSS_LIMIT
