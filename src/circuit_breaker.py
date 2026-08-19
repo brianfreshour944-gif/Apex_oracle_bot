@@ -53,11 +53,19 @@ class CircuitBreaker:
             result = await func(*args, **kwargs)
         except Exception:
             async with self._lock:
-                self._failures += 1
-                if self._state != CircuitState.OPEN and self._failures >= self.failure_threshold:
+                if probe:
+                    # Immediate reopening on HALF_OPEN probe failure
                     self._state = CircuitState.OPEN
                     self._opened_at = time.monotonic()
-                    logger.critical(f"Circuit {self.name!r} TRIPPED OPEN")
+                    self._half_open_successes = 0
+                    logger.critical(f"Circuit {self.name!r} failed during HALF_OPEN probe -> OPEN")
+                else:
+                    # Existing failure_threshold-based logic for CLOSED state
+                    self._failures += 1
+                    if self._state != CircuitState.OPEN and self._failures >= self.failure_threshold:
+                        self._state = CircuitState.OPEN
+                        self._opened_at = time.monotonic()
+                        logger.critical(f"Circuit {self.name!r} TRIPPED OPEN")
             raise
         async with self._lock:
             if probe:

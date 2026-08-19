@@ -105,10 +105,14 @@ class TestCircuitBreaker:
         # Fail twice (below threshold)
         for _ in range(2):
             with pytest.raises(Exception):
-                await circuit_breaker.call(lambda: (_ for _ in ()).throw(Exception("fail")))
+                async def failing_func():
+                    raise Exception("fail")
+                await circuit_breaker.call(failing_func)
 
         # Success should reset failure count
-        result = await circuit_breaker.call(lambda: "success")
+        async def success_func():
+            return "success"
+        result = await circuit_breaker.call(success_func)
         assert result == "success"
 
 
@@ -131,7 +135,9 @@ class TestCircuitBreakerIntegration:
             # Fail twice to trip circuit
             for _ in range(2):
                 with pytest.raises(Exception):
-                    await exchange.circuit_breaker.call(lambda: (_ for _ in ()).throw(Exception("fail")))
+                    async def failing_func():
+                        raise Exception("fail")
+                    await exchange.circuit_breaker.call(failing_func)
 
             assert exchange.circuit_breaker.state == CircuitState.OPEN
 

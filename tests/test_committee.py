@@ -77,14 +77,14 @@ def test_size_multiplier_logic():
     m1 = calculate_confidence_size_multiplier(0.15, 0.0, ref_thresh)
     assert m1 == 0.50
     
-    # Moderate confidence score (0.31) -> ~1.00x
-    m2 = calculate_confidence_size_multiplier(0.31, 0.0, ref_thresh)
+    # Moderate confidence score (0.49) -> ~1.00x
+    m2 = calculate_confidence_size_multiplier(0.49, 0.0, ref_thresh)
     assert 0.95 <= m2 <= 1.05
     
-    # High conviction score (0.47) -> > 1.40x
-    m3 = calculate_confidence_size_multiplier(0.47, 0.0, ref_thresh)
+    # High conviction score (0.83) -> > 1.40x
+    m3 = calculate_confidence_size_multiplier(0.83, 0.0, ref_thresh)
     assert m3 >= 1.40
-    print(f"PASS: test_size_multiplier_logic (0.15->{m1}x, 0.31->{m2}x, 0.47->{m3}x)")
+    print(f"PASS: test_size_multiplier_logic (0.15->{m1}x, 0.49->{m2}x, 0.83->{m3}x)")
 
 async def main():
     await test_committee_buy_consensus_and_sizing()

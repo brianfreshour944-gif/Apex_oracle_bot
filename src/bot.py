@@ -210,13 +210,13 @@ async def _record_committee_outcome(symbol: str, exit_price: float, exit_reason:
                                           lr = _transformer_online_lr_base - (_transformer_online_lr_base - _transformer_online_lr_min) * progress
                                       else:  # constant
                                           lr = _transformer_online_lr_base
-                                      
-                                      _transformer_online_updates += 1
-                                      with torch.no_grad():
-                                          for p in model.parameters():
-                                              if p.grad is not None:
-                                                  p.data -= lr * p.grad
-                                      model.eval()
+                                  
+                                  _transformer_online_updates += 1
+                                  with torch.no_grad():
+                                      for p in model.parameters():
+                                          if p.grad is not None:
+                                              p.data -= lr * p.grad
+                                  model.eval()
                      except Exception:
                          pass  # Swallow all errors
                   

@@ -86,8 +86,8 @@ class TestPeakPriceCleanup:
 
         rm = Mock()
         rm.peak_prices = {"BTCUSD": 52000.0}
-        original = bot_mod.risk_manager
-        bot_mod.risk_manager = rm
+        original = bot_mod._state.risk_manager
+        bot_mod._state.risk_manager = rm
 
         try:
             save_decision_snapshot(
@@ -103,7 +103,7 @@ class TestPeakPriceCleanup:
             assert "BTCUSD" not in rm.peak_prices, \
                 "peak_prices['BTCUSD'] was not cleared on signal-based position close"
         finally:
-            bot_mod.risk_manager = original
+            bot_mod._state.risk_manager = original
 
 
 class TestLoggerEagerFormatting:
