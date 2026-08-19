@@ -639,7 +639,7 @@ async def process_signal_for_symbol(symbol: str, current_price: float, risk_mana
                 # above so this doesn't re-fetch account/positions a third time AND
                 # so the exposure lock's critical section is pure in-memory
                 # arithmetic instead of holding the lock across a network round
-                # trip (measured: this previously serialized ~2.85s across 15
+# trip (measured: this previously serialized ~2.85s across 15
                 # concurrently-evaluated symbols in the same cycle).
                 approved_notional, reserve_reason = await risk_manager.check_and_reserve_exposure(
                     notional, current_exposure=risk_status.get("current_exposure")
@@ -647,7 +647,7 @@ async def process_signal_for_symbol(symbol: str, current_price: float, risk_mana
                 if approved_notional <= 0:
                     logger.warning(f"[{symbol}] Order vetoed: {reserve_reason}")
                     return
-     
+                
                 if approved_notional < notional:
                     scale = approved_notional / notional
                     original_size = position_size
@@ -655,9 +655,10 @@ async def process_signal_for_symbol(symbol: str, current_price: float, risk_mana
                     logger.info(f"[{symbol}] Position size reduced to fit exposure headroom: {position_size} (was {original_size}, ${approved_notional:.2f} of ${notional:.2f} requested)")
                     if position_size <= 0:
                         logger.warning(f"[{symbol}] Order vetoed: scaled position size rounded to zero")
+                        risk_manager.release_reserved_exposure(approved_notional)
                         return
-      
-# Position pyramid/scale-in gates: prevent unlimited re-buying
+                
+                # Position pyramid/scale-in gates: prevent unlimited re-buying
                     # of an already-open position without meaningful improvement
                     if signal["action"] == "buy":
                         current_position = None
@@ -704,13 +705,25 @@ async def process_signal_for_symbol(symbol: str, current_price: float, risk_mana
      
                 # Place order
                 client_order_id = f"{symbol}_{signal['action']}_{position_size}_{int(time.time())}"
-                order_result = await ex.create_order(
-                    symbol=symbol,
-                    qty=position_size,
-                    side=signal["action"],
-                    type="market",
-                    client_order_id=client_order_id,
-                )
+                try:
+                    order_result = await ex.create_order(
+                        symbol=symbol,
+                        qty=position_size,
+                        side=signal["action"],
+                        type="market",
+                        client_order_id=client_order_id,
+                    )
+                except Exception as order_e:
+                    # Release reserved exposure on order failure so the
+                    # headroom isn't permanently leaked.
+                    risk_manager.release_reserved_exposure(approved_notional)
+                    logger.error(f"[{symbol}] Order placement failed: {order_e}")
+                    raise
+                
+                # Release the reserved exposure now that the order has been
+                # placed successfully -- the actual portfolio value will be
+                # reflected on the next cycle's update_account_status() call.
+                risk_manager.release_reserved_exposure(approved_notional)
     
                 filled_price = order_result.get("filled_avg_price", 0.0)
                 commission = order_result.get("commission", 0.0)

@@ -407,7 +407,9 @@ class RiskManager:
                 current_exposure = status["current_exposure"]
 
             now = datetime.now(timezone.utc)
-            self._reserved_exposure = [(a, t) for a, t in self._reserved_exposure if (now - t).total_seconds() < 60]
+            # Prune stale reservations aggressively (30s TTL instead of 60s)
+            # so failed/cancelled orders release their headroom faster.
+            self._reserved_exposure = [(a, t) for a, t in self._reserved_exposure if (now - t).total_seconds() < 30]
             reserved_total = sum(a for a, _ in self._reserved_exposure)
             max_portfolio_abs = float(settings.MAX_PORTFOLIO_VALUE)
             headroom = max_portfolio_abs - current_exposure - reserved_total
@@ -419,6 +421,29 @@ class RiskManager:
                 logger.info(f"Exposure reservation partially approved: requested=${requested_notional:.2f} approved=${approved:.2f} (headroom-limited)")
             self._reserved_exposure.append((approved, now))
             return approved, "ok"
+
+    def release_reserved_exposure(self, notional: float) -> None:
+        """Release a previously-reserved exposure amount back to the pool.
+        
+        Called when an order fails, is cancelled, or the reserved amount
+        was never actually used. Without this, reserved exposure leaks
+        and permanently blocks new entries even though the actual portfolio
+        value is well under the cap.
+        """
+        if notional <= 0:
+            return
+        # Remove the most recent matching reservation (LIFO)
+        for i in range(len(self._reserved_exposure) - 1, -1, -1):
+            amt, _ = self._reserved_exposure[i]
+            if abs(amt - notional) < 0.01:
+                del self._reserved_exposure[i]
+                logger.debug(f"Released reserved exposure: ${notional:.2f}")
+                return
+        # Fallback: remove the largest reservation
+        if self._reserved_exposure:
+            idx = max(range(len(self._reserved_exposure)), key=lambda i: self._reserved_exposure[i][0])
+            del self._reserved_exposure[idx]
+            logger.debug(f"Released largest reserved exposure: ${notional:.2f}")
 
     async def reduce_exposure_to_cap(self) -> Dict[str, Any]:
         """Close positions, worst unrealized P&L first, until exposure is
