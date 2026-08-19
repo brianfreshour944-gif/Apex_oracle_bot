@@ -4,6 +4,7 @@ import asyncio
 import sys
 import traceback
 from src.bot import run_trading_bot
+from src.config import settings
 from src.logging_config import get_logger
 
 logger = get_logger("main")

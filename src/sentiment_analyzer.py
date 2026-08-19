@@ -149,7 +149,8 @@ async def call_gemini_llm(headlines: str, api_key: str) -> Dict[str, Any]:
         genai.configure(api_key=api_key)
         
         model = genai.GenerativeModel('gemini-1.5-flash', generation_config={"response_mime_type": "application/json"})
-        response = model.generate_content(prompt)
+        # generate_content() is synchronous; run in thread pool to avoid blocking the event loop
+        response = await asyncio.to_thread(model.generate_content, prompt)
         
         return json.loads(response.text)
     except Exception as e:

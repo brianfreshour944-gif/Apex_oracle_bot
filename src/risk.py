@@ -1,6 +1,7 @@
 """Modern risk management with position sizing and killswitch logic."""
 
 import asyncio
+import threading
 import time
 import numpy as np
 from typing import Dict, Any, Optional, Tuple
@@ -35,6 +36,9 @@ class RiskManager:
         # settled on the exchange.
         self._exposure_lock = asyncio.Lock()
         self._equity_lock = asyncio.Lock()
+        # Lock for peak_prices dict to prevent concurrent modification issues
+        # Using threading.Lock since check_trailing_stop is synchronous
+        self._peak_prices_lock = threading.Lock()
         self._reserved_exposure = []  # list of (notional_amount, reserved_at) tuples
         # Transaction cost tracking for dynamic model
         self._realized_tx_costs: Dict[str, Dict[str, float]] = {}  # symbol -> {fee_bps, slippage_bps, spread_bps}
@@ -341,33 +345,37 @@ class RiskManager:
             unrealized_pct = (current_price - avg_entry_price) / avg_entry_price
 
             if unrealized_pct >= settings.TRAILING_ACTIVATION_PCT:
-                if symbol not in self.peak_prices or current_price > self.peak_prices[symbol]:
-                    self.peak_prices[symbol] = current_price
+                with self._peak_prices_lock:
+                    if symbol not in self.peak_prices or current_price > self.peak_prices[symbol]:
+                        self.peak_prices[symbol] = current_price
 
-            if symbol in self.peak_prices:
-                peak = self.peak_prices[symbol]
-                drawdown_from_peak = (peak - current_price) / peak
+            with self._peak_prices_lock:
+                if symbol in self.peak_prices:
+                    peak = self.peak_prices[symbol]
+                    drawdown_from_peak = (peak - current_price) / peak
 
-                if drawdown_from_peak >= settings.TRAILING_DISTANCE_PCT:
-                    logger.info(f"Trailing stop triggered for {symbol}: Peak {peak:.2f}, Current {current_price:.2f}")
-                    del self.peak_prices[symbol]
-                    return "close"
+                    if drawdown_from_peak >= settings.TRAILING_DISTANCE_PCT:
+                        logger.info(f"Trailing stop triggered for {symbol}: Peak {peak:.2f}, Current {current_price:.2f}")
+                        del self.peak_prices[symbol]
+                        return "close"
 
         else:
             unrealized_pct = (avg_entry_price - current_price) / avg_entry_price
 
             if unrealized_pct >= settings.TRAILING_ACTIVATION_PCT:
-                if symbol not in self.peak_prices or current_price < self.peak_prices[symbol]:
-                    self.peak_prices[symbol] = current_price
+                with self._peak_prices_lock:
+                    if symbol not in self.peak_prices or current_price < self.peak_prices[symbol]:
+                        self.peak_prices[symbol] = current_price
 
-            if symbol in self.peak_prices:
-                trough = self.peak_prices[symbol]
-                drawdown_from_trough = (current_price - trough) / trough
+            with self._peak_prices_lock:
+                if symbol in self.peak_prices:
+                    trough = self.peak_prices[symbol]
+                    drawdown_from_trough = (current_price - trough) / trough
 
-                if drawdown_from_trough >= settings.TRAILING_DISTANCE_PCT:
-                    logger.info(f"Trailing stop triggered for {symbol} (short): Trough {trough:.2f}, Current {current_price:.2f}")
-                    del self.peak_prices[symbol]
-                    return "close"
+                    if drawdown_from_trough >= settings.TRAILING_DISTANCE_PCT:
+                        logger.info(f"Trailing stop triggered for {symbol} (short): Trough {trough:.2f}, Current {current_price:.2f}")
+                        del self.peak_prices[symbol]
+                        return "close"
 
         return "hold"
 

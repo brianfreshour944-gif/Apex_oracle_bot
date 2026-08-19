@@ -50,13 +50,6 @@ class StructuredLogger:
 logger = get_logger("bot")
 structured_logger = StructuredLogger("bot")
 
-_transformer_online_updates = 0
-_transformer_online_lr_schedule = "cosine"  # "cosine" | "constant" | "linear"
-_transformer_online_lr_base = 1e-5
-_transformer_online_lr_min = 1e-6
-_transformer_online_warmup_steps = 100
-_transformer_online_total_steps = 10000
-
 
 async def _record_committee_outcome(symbol: str, exit_price: float, exit_reason: Optional[str] = None) -> None:
     """On position exit, close the open decision snapshot and update the learner.
@@ -184,7 +177,7 @@ async def _record_committee_outcome(symbol: str, exit_price: float, exit_reason:
                              x = torch.tensor(data_scaled).unsqueeze(0).to(device)
                              label_tensor = torch.tensor([[1.0 if realized_pnl > 0 else 0.0]], dtype=torch.float32).to(device)
                              
-                             # Protect model train/eval state from concurrent a
+                             # Protect model train/eval state from concurrent access
                              with _model_inference_lock:
                                   model.train()
                                   model.zero_grad()
@@ -193,25 +186,32 @@ async def _record_committee_outcome(symbol: str, exit_price: float, exit_reason:
                                   loss.backward()
                                   
                                   # Learning rate schedule with warmup + cosine annealing
-                                  global _transformer_online_updates, _transformer_online_lr_schedule, _transformer_online_lr_base, _transformer_online_lr_min, _transformer_online_warmup_steps, _transformer_online_total_steps
+                                  # Use state from _state instead of module-level globals
+                                  with _state._transformer_online_lock:
+                                      step = _state._transformer_online_updates
+                                      lr_schedule = _state._transformer_online_lr_schedule
+                                      lr_base = _state._transformer_online_lr_base
+                                      lr_min = _state._transformer_online_lr_min
+                                      warmup_steps = _state._transformer_online_warmup_steps
+                                      total_steps = _state._transformer_online_total_steps
                                   
-                                  step = _transformer_online_updates
-                                  
-                                  if step < _transformer_online_warmup_steps:
+                                  if step < warmup_steps:
                                       # Linear warmup
-                                      lr = _transformer_online_lr_base * (step + 1) / _transformer_online_warmup_steps
+                                      lr = lr_base * (step + 1) / warmup_steps
                                   else:
-                                      progress = min((step - _transformer_online_warmup_steps) / (_transformer_online_total_steps - _transformer_online_warmup_steps), 1.0)
-                                      if _transformer_online_lr_schedule == "cosine":
+                                      progress = min((step - warmup_steps) / (total_steps - warmup_steps), 1.0)
+                                      if lr_schedule == "cosine":
                                           # Cosine annealing to min LR
-                                          lr = _transformer_online_lr_min + 0.5 * (_transformer_online_lr_base - _transformer_online_lr_min) * (1 + math.cos(math.pi * progress))
-                                      elif _transformer_online_lr_schedule == "linear":
+                                          lr = lr_min + 0.5 * (lr_base - lr_min) * (1 + math.cos(math.pi * progress))
+                                      elif lr_schedule == "linear":
                                           # Linear decay to min LR
-                                          lr = _transformer_online_lr_base - (_transformer_online_lr_base - _transformer_online_lr_min) * progress
+                                          lr = lr_base - (lr_base - lr_min) * progress
                                       else:  # constant
-                                          lr = _transformer_online_lr_base
+                                          lr = lr_base
                                   
-                                  _transformer_online_updates += 1
+                                  # Increment counter and apply gradient step
+                                  with _state._transformer_online_lock:
+                                      _state._transformer_online_updates += 1
                                   with torch.no_grad():
                                       for p in model.parameters():
                                           if p.grad is not None:
@@ -307,6 +307,14 @@ class BotState:
         self._regime_flag_cache_mtime: float = -1.0
         self._banned_symbols_cache: set = set()
         self._banned_symbols_cache_mtime: float = -1.0
+        # Online transformer learning state (moved from module-level globals)
+        self._transformer_online_updates: int = 0
+        self._transformer_online_lr_schedule: str = "cosine"
+        self._transformer_online_lr_base: float = 1e-5
+        self._transformer_online_lr_min: float = 1e-6
+        self._transformer_online_warmup_steps: int = 100
+        self._transformer_online_total_steps: int = 10000
+        self._transformer_online_lock: asyncio.Lock = asyncio.Lock()
 
     def get_regime_flag(self) -> Dict[str, Any]:
         """Read the regime flag file, cached and only re-read when the file's mtime changes."""
@@ -377,6 +385,31 @@ class BotState:
         if self._background_tasks:
             await asyncio.gather(*self._background_tasks, return_exceptions=True)
         # Note: exchange close handled by caller
+
+    def reset(self) -> None:
+        """Reset all mutable state for testing purposes."""
+        self.ex = None
+        self.strategy = None
+        self.risk_manager = None
+        self.latest_scan_results.clear()
+        self.scan_cycle_count = 0
+        self.cooldowns.clear()
+        self.position_adds.clear()
+        self._symbol_locks.clear()
+        self._background_tasks.clear()
+        self._shutdown_requested = False
+        self._regime_flag_cache.clear()
+        self._regime_flag_cache_mtime = -1.0
+        self._banned_symbols_cache.clear()
+        self._banned_symbols_cache_mtime = -1.0
+        # Reset transformer online learning state
+        self._transformer_online_updates = 0
+        self._transformer_online_lr_schedule = "cosine"
+        self._transformer_online_lr_base = 1e-5
+        self._transformer_online_lr_min = 1e-6
+        self._transformer_online_warmup_steps = 100
+        self._transformer_online_total_steps = 10000
+        self._transformer_online_lock = asyncio.Lock()
 
 
 # Global state instance (single instance for the process)
