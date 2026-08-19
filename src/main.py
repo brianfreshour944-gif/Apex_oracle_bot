@@ -14,7 +14,7 @@ def main() -> None:
         logger.info("Starting Apex Oracle Bot v2.0.0")
         logger.info("=================================")
         logger.info("Configuration:")
-        logger.info(f"Database: PostgreSQL")
+        logger.info(f"Database: {settings.DATABASE_URL}")
         logger.info(f"Exchange: Alpaca Crypto")
         logger.info("=================================")
 

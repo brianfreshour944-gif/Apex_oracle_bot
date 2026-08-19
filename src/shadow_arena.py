@@ -80,17 +80,34 @@ class GrokGQA_Transformer(nn.Module):
         return x
 
 _candidates_cache = {}
+_candidates_cache_mtime = 0.0
+
+def _invalidate_candidates_cache():
+    """Clear the cached candidates so the next get_candidates() call
+    re-reads from disk. Called by retrain/evolution scripts after
+    writing new candidate models to data/candidates/."""
+    global _candidates_cache, _candidates_cache_mtime
+    _candidates_cache = {}
+    _candidates_cache_mtime = 0.0
 
 def get_candidates():
     if not _TORCH_AVAILABLE:
         return {}
 
-    if _candidates_cache:
-        return _candidates_cache
-    
     candidates_dir = os.path.join(os.path.dirname(__file__), '..', 'data', 'candidates')
     if not os.path.exists(candidates_dir):
         return {}
+
+    # Re-scan the directory if its mtime changed (new candidate files
+    # written by retrain/evolution scripts) instead of returning a
+    # stale cache that never sees fresh models.
+    try:
+        dir_mtime = os.path.getmtime(candidates_dir)
+    except OSError:
+        dir_mtime = 0.0
+    if _candidates_cache and dir_mtime <= _candidates_cache_mtime:
+        return _candidates_cache
+    _candidates_cache_mtime = dir_mtime
         
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     
