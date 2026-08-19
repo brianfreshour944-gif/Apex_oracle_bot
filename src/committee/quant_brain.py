@@ -15,12 +15,19 @@ async def quant_brain(symbol: str, price: float, signal: dict) -> BrainVote:
 
     # RSI-based evaluation
     if rsi is not None:
-        if rsi < 30:
+        if rsi < 25:
             votes.append("buy")
-        elif rsi > 70:
+        elif rsi > 75:
             votes.append("sell")
-        elif 45 <= rsi <= 55:
+        elif 40 <= rsi <= 60:
             votes.append("hold")
+        # Wider band: also vote when RSI is in the 25-40 or 60-75 range
+        # with enough conviction. Previously only <30/>70 triggered
+        # directional votes, leaving the brain silent in most regimes.
+        elif 25 <= rsi < 40:
+            votes.append("buy")
+        elif 60 < rsi <= 75:
+            votes.append("sell")
 
     if not votes:
         action = "hold"

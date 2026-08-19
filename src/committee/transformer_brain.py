@@ -375,9 +375,14 @@ async def transformer_brain(symbol: str, price: float, signal: dict) -> BrainVot
             logging.getLogger("committee").error(f"Transformer inference error: {e}")
 
     # Threshold probability decision logic
-    if prob > 0.58:
+    # Use wider thresholds (0.55/0.45) so the model's directional calls
+    # aren't suppressed by the tight 0.58/0.42 HOLD band. In sideways
+    # markets the model rarely reaches 0.58, so it was effectively
+    # disabled -- always voting HOLD and leaving the committee to
+    # the quant brain alone.
+    if prob > 0.55:
         action = "buy"
-    elif prob < 0.42:
+    elif prob < 0.45:
         action = "sell"
     else:
         action = "hold"

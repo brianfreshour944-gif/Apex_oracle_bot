@@ -361,6 +361,13 @@ async def run_committee(symbol: str, price: float, signal: Dict[str, Any]) -> Co
             logger.warning(f"RL Meta-Learner combine failed: {e}")
 
     # Threshold + confidence sizing apply identically regardless of source.
+    # In sideways/choppy markets, use a lower threshold so the committee
+    # doesn't stand aside on every marginal signal. The adaptive learner
+    # will learn whether these trades actually work.
+    effective_threshold = symbol_threshold
+    if regime in ("sideways", "low_volatility", "neutral"):
+        effective_threshold = max(0.10, symbol_threshold * 0.5)
+    
     if not scores and not adaptive_used:
         return CommitteeResult(
             action="stand_aside",
@@ -375,12 +382,12 @@ async def run_committee(symbol: str, price: float, signal: Dict[str, Any]) -> Co
             explanation=explanation,
         )
 
-    if score < symbol_threshold or winner in ["stand_aside", "skip"]:
+    if score < effective_threshold or winner in ["stand_aside", "skip"]:
         final_action = "stand_aside"
         size_mult = 0.0
     else:
         final_action = winner
-        size_mult = calculate_confidence_size_multiplier(score, entropy, symbol_threshold)
+        size_mult = calculate_confidence_size_multiplier(score, entropy, effective_threshold)
 
     result = CommitteeResult(
         action=final_action,

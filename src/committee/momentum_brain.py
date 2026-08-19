@@ -20,6 +20,10 @@ async def momentum_brain(symbol: str, price: float, signal: dict) -> BrainVote:
     elif regime == "low_volatility":
         return BrainVote("momentum", "stand_aside", 0.60, 0.20, regime, "Low liquidity / quiet market")
     elif regime == "sideways":
-        return BrainVote("momentum", "stand_aside", 0.50, 0.20, regime, "Sideways mean-reverting market")
+        # In sideways markets, momentum shouldn't just stand aside --
+        # it should vote based on the underlying trend direction.
+        # Standing aside in sideways markets means the committee
+        # loses a brain that could provide directional context.
+        return BrainVote("momentum", "hold", 0.45, 0.20, regime, "Sideways mean-reverting market")
 
     return BrainVote("momentum", "stand_aside", 0.50, 0.20, regime, f"Neutral regime ({regime})")
