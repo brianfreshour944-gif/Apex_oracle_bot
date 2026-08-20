@@ -20,6 +20,8 @@ from src.telegram_alerts import send_telegram_alert
 from src.committee.transformer_brain import _model_inference_lock
 from src.population_trainer import get_pbt_trainer, run_pbt_cycle
 from src.ood_discriminator import get_ood_discriminator
+from scripts.deployment_registry import register_process, heartbeat_process, cleanup_stale
+import argparse
 
 # Structured logging setup
 class StructuredLogger:
@@ -1462,6 +1464,17 @@ async def run_trading_bot() -> None:
         except Exception as e:
             logger.warning(f"Alpaca exchange connection failed on startup: {e}. Bot will start in offline/retry mode.")
 
+        # Register this process in the deployment registry
+        try:
+            # Create a simple namespace object for the register function
+            class Args:
+                role = "trader"
+                symbols = ",".join(settings.SYMBOLS)
+            register_process(Args())
+            logger.info("Deployment registry: process registered")
+        except Exception as e:
+            logger.warning(f"Deployment registry registration failed (non-fatal): {e}")
+
         # Initialize trading strategy and risk manager
         _state.strategy = TradingStrategy(_state.ex)
         _state.risk_manager = RiskManager(_state.ex)
@@ -1577,6 +1590,21 @@ async def run_trading_bot() -> None:
         active_tasks.add(db_maintenance_task)
         db_maintenance_task.add_done_callback(_on_task_done)
         logger.info("Periodic Database Maintenance task started")
+
+        # Start deployment registry heartbeat
+        async def deployment_heartbeat_loop():
+            while not _state._shutdown_requested:
+                try:
+                    await asyncio.sleep(60)  # Heartbeat every 60 seconds
+                    cleanup_stale(None)
+                    heartbeat_process(None)
+                except Exception as e:
+                    logger.warning(f"Deployment heartbeat failed: {e}")
+
+        heartbeat_task = asyncio.create_task(deployment_heartbeat_loop(), name="deployment_heartbeat")
+        active_tasks.add(heartbeat_task)
+        heartbeat_task.add_done_callback(_on_task_done)
+        logger.info("Deployment registry heartbeat started")
 
 # Main trading loop
         logger.info(f"Bot initialization complete. Starting stateless REST polling loop for {settings.SYMBOLS} (interval: {settings.LOOP_INTERVAL_SEC}s).")
