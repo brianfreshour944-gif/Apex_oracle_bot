@@ -18,6 +18,7 @@ from src.logging_config import get_logger
 
 from .models import CommitteeResult, BrainVote
 from .adaptive_meta import AdaptiveMetaLearner
+from .decision_transformer import run_decision_transformer
 from .transformer_brain import transformer_brain
 from .quant_brain import quant_brain
 from .momentum_brain import momentum_brain
@@ -359,6 +360,33 @@ async def run_committee(symbol: str, price: float, signal: Dict[str, Any]) -> Co
             winner, score = decision.action, decision.confidence
         except Exception as e:
             logger.warning(f"RL Meta-Learner combine failed: {e}")
+
+    # Fallback to Decision Transformer (Offline RL via sequence modeling)
+    dt_ready = False
+    if not adaptive_used and settings.ADAPTIVE_ML_ENABLED and signal.get("backtest_df") is None:
+        try:
+            # Target return: use a moderate target (2% default) or scale by regime
+            regime_targets = {
+                "trending": 3.0, "bull": 3.0, "bear": 3.0,
+                "sideways": 1.5, "mean_reverting": 1.5,
+                "high_volatility": 2.5, "low_volatility": 1.0,
+                "neutral": 2.0
+            }
+            target_return = regime_targets.get(regime, 2.0)
+            
+            dt_decision = await run_decision_transformer(symbol, price, signal, target_return)
+            if dt_decision is not None:
+                dt_ready = True
+                adaptive_used = True
+                adaptive_weights = dt_decision.adaptive_weights
+                explanation = dt_decision.explanation
+                winner, score = dt_decision.action, dt_decision.score
+                # Use DT's size multiplier if available
+                if hasattr(dt_decision, 'size_multiplier') and dt_decision.size_multiplier > 0:
+                    size_mult = dt_decision.size_multiplier
+                logger.info(f"Decision Transformer ACTIVE for regime '{regime}' (target_return={target_return}%)")
+        except Exception as e:
+            logger.warning(f"Decision Transformer combine failed: {e}")
 
     # Threshold + confidence sizing apply identically regardless of source.
     # In sideways/choppy markets, use a lower threshold so the committee
