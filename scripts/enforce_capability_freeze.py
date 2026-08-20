@@ -24,7 +24,7 @@ FOUNDATION_CHECKS = [
     ("Data Integrity", "scripts/verify_data_integrity.py", ["--days", "7"]),
     ("Track Record", "scripts/track_record_status.py", []),
     ("Decision Gate", "python -c \"from src.committee.decision_gate import check_decision_source_gate; print('OK')\"", []),
-    ("Data Integrity Tests", "pytest tests/test_data_integrity.py -v --tb=short", []),
+    ("Data Integrity Tests", "python -m pytest tests/test_data_integrity.py -v --tb=short", []),
     ("Risk Parameter Audit", "scripts/audit_risk_parameters.py", []),
     ("Alerting System", "python -c \"from src.alerting import AlertingEngine; print('OK')\"", []),
     ("Config Dump", "scripts/dump_active_config.py", []),
