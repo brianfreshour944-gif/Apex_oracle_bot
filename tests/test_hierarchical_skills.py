@@ -230,7 +230,8 @@ def test_options_critic_trainer():
     assert 'critic_loss' in losses
     assert 'actor_loss' in losses
     assert 'term_loss' in losses
-    assert all(v >= 0 for v in losses.values())
+    # Critic loss (MSE) should be >= 0; actor/term losses can be negative in RL
+    assert losses['critic_loss'] >= 0
 
 
 # ── 7. Configuration Tests ──────────────────────────────────────────
