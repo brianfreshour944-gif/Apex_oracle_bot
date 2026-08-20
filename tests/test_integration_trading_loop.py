@@ -287,7 +287,7 @@ class TestRiskManagerRaceConditions:
         
         # Total approved should not exceed max portfolio value
         total_approved = sum(r[0] for r in results if r[1] == "ok")
-        assert total_approved <= 500.0  # MAX_PORTFOLIO_VALUE default
+        assert total_approved <= 5000.0  # ACCOUNT_BASE * MAX_PORTFOLIO_PCT (10000 * 0.5)
 
 
 class TestGracefulShutdown:
