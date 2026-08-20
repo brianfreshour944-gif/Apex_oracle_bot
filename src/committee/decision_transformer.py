@@ -17,6 +17,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.nn.utils import spectral_norm
 
 from src.config import settings
 from src.logging_config import get_logger
@@ -40,6 +41,12 @@ NUM_HEADS = 8
 DROPOUT = 0.1
 TARGET_RETURN_SCALE = 100.0  # normalize return_pct to ~[-1, 1]
 
+# Quantile Regression settings (CVaR-aware Decision Transformer)
+NUM_QUANTILES = 5
+QUANTILES = torch.tensor([0.05, 0.25, 0.50, 0.75, 0.95])  # tau values for CVaR
+CVAR_QUANTILE_IDX = 0  # tau=0.05 for CVaR (worst-case)
+MEDIAN_QUANTILE_IDX = 2  # tau=0.50 for size/threshold decisions
+
 # Adaptive RTG settings
 ADAPTIVE_RTG_ENABLED = getattr(settings, 'ADAPTIVE_RTG_ENABLED', True)
 TARGET_ANNUAL_SHARPE = getattr(settings, 'TARGET_ANNUAL_SHARPE', 1.5)
@@ -51,6 +58,9 @@ USE_SPECTRAL_NORM = getattr(settings, 'USE_SPECTRAL_NORM', True)
 # CQL settings
 USE_CQL = getattr(settings, 'USE_CQL', True)
 CQL_WEIGHT = getattr(settings, 'CQL_WEIGHT', 0.1)
+
+# Temporal Action Smoothing (EMA)
+TEMPORAL_EMA_ALPHA = getattr(settings, 'TEMPORAL_EMA_ALPHA', 0.3)
 
 # Paths
 MODEL_DIR = os.path.join(os.path.dirname(__file__), '..', '..', 'models')
@@ -193,7 +203,50 @@ def wrap_output_heads_with_spectral_norm(model: nn.Module) -> nn.Module:
     return model
 
 
-# ── CQL (Conservative Q-Learning) Regularization ────────────────────
+# ── Quantile Regression Loss (Pinball Loss for CVaR) ──────────────────
+
+def quantile_huber_loss(
+    pred_quantiles: torch.Tensor,  # [batch, num_quantiles]
+    target: torch.Tensor,          # [batch, 1] - realized return
+    quantiles: torch.Tensor,       # [num_quantiles]
+    delta: float = 1.0,            # Huber threshold
+) -> torch.Tensor:
+    """Quantile Huber Loss (QR-DQN style) for distributional RL.
+    
+    Args:
+        pred_quantiles: Predicted quantiles [batch, num_quantiles]
+        target: Realized returns [batch, 1]
+        quantiles: Quantile levels [num_quantiles] (e.g., [0.05, 0.25, 0.5, 0.75, 0.95])
+        delta: Huber threshold for smooth L1
+        
+    Returns:
+        Scalar loss
+    """
+    # target: [batch, 1] -> [batch, num_quantiles] for broadcasting
+    target = target.expand_as(pred_quantiles)
+    quantiles = quantiles.to(pred_quantiles.device).view(1, -1)
+    
+    error = target - pred_quantiles  # [batch, num_quantiles]
+    
+    # Quantile loss: max(tau * error, (tau - 1) * error)
+    # Smoothed with Huber
+    tau = quantiles
+    abs_error = torch.abs(error)
+    
+    # Huber quantization: if |error| < delta: 0.5 * error^2 / delta else: |error| - 0.5 * delta
+    huber = torch.where(
+        abs_error < delta,
+        0.5 * error * error / delta,
+        abs_error - 0.5 * delta
+    )
+    
+    # Quantile weighting
+    loss = torch.where(error >= 0, tau * huber, (1 - tau) * huber)
+    
+    return loss.mean()
+
+
+# ── Quantile Regression Decision Transformer ──────────────────────────
 
 def compute_cql_loss(
     model: nn.Module,
@@ -340,6 +393,26 @@ class DecisionTransformer(nn.Module):
             nn.Linear(embed_dim // 2, len(ACTIONS)),
         )
 
+        # ── Quantile Regression Heads (CVaR-aware) ──
+        # Quantile action head: [batch, num_quantiles * num_actions]
+        self.quantile_action_head = nn.Sequential(
+            nn.Linear(embed_dim, embed_dim // 2),
+            nn.GELU(),
+            nn.Linear(embed_dim // 2, NUM_QUANTILES * len(ACTIONS)),
+        )
+        # Quantile size head: [batch, num_quantiles]
+        self.quantile_size_head = nn.Sequential(
+            nn.Linear(embed_dim, embed_dim // 2),
+            nn.GELU(),
+            nn.Linear(embed_dim // 2, NUM_QUANTILES),
+        )
+        # Quantile confidence threshold head: [batch, num_quantiles]
+        self.quantile_conf_threshold_head = nn.Sequential(
+            nn.Linear(embed_dim, embed_dim // 2),
+            nn.GELU(),
+            nn.Linear(embed_dim // 2, NUM_QUANTILES),
+        )
+
         # Layer norm for output
         self.output_norm = nn.LayerNorm(embed_dim)
 
@@ -349,16 +422,16 @@ class DecisionTransformer(nn.Module):
 
     def _apply_spectral_norm(self) -> None:
         """Apply spectral normalization to output heads for OOD robustness."""
-        # Wrap output heads with spectral norm
-        # brain_weight_head: Sequential(Linear, GELU, Linear) -> wrap last Linear
+        # Standard heads
         self.brain_weight_head[2] = spectral_norm(self.brain_weight_head[2])
-        # size_mult_head: Sequential(Linear, GELU, Linear) -> wrap last Linear
         self.size_mult_head[2] = spectral_norm(self.size_mult_head[2])
-        # conf_threshold_head: Sequential(Linear, GELU, Linear) -> wrap last Linear
         self.conf_threshold_head[2] = spectral_norm(self.conf_threshold_head[2])
-        # action_head: Sequential(Linear, GELU, Linear) -> wrap last Linear
         self.action_head[2] = spectral_norm(self.action_head[2])
-        logger.info("Applied Spectral Normalization to all output heads")
+        # Quantile heads
+        self.quantile_action_head[2] = spectral_norm(self.quantile_action_head[2])
+        self.quantile_size_head[2] = spectral_norm(self.quantile_size_head[2])
+        self.quantile_conf_threshold_head[2] = spectral_norm(self.quantile_conf_threshold_head[2])
+        logger.info("Applied Spectral Normalization to all output heads (including quantile heads)")
 
     def forward(
         self,
@@ -411,11 +484,25 @@ class DecisionTransformer(nn.Module):
         conf_threshold = self.conf_threshold_head(last_hidden)   # (batch, 1)
         action_logits = self.action_head(last_hidden)            # (batch, 5)
 
+        # Quantile predictions (for CVaR-aware inference)
+        q_action_logits = self.quantile_action_head(last_hidden)      # (batch, 5*5)
+        q_size_mult = self.quantile_size_head(last_hidden)            # (batch, 5)
+        q_conf_threshold = self.quantile_conf_threshold_head(last_hidden)  # (batch, 5)
+
+        # Reshape quantile outputs
+        q_action_logits = q_action_logits.view(batch_size, NUM_QUANTILES, len(ACTIONS))  # [B, 5, 5]
+        q_size_mult = q_size_mult.view(batch_size, NUM_QUANTILES)  # [B, 5]
+        q_conf_threshold = q_conf_threshold.view(batch_size, NUM_QUANTILES)  # [B, 5]
+
         return {
             "brain_weights": brain_weights,
             "size_mult": size_mult,
             "conf_threshold": conf_threshold,
             "action_logits": action_logits,
+            # Quantile predictions
+            "q_action_logits": q_action_logits,       # [B, 5, 5]
+            "q_size_mult": q_size_mult,               # [B, 5]
+            "q_conf_threshold": q_conf_threshold,     # [B, 5]
         }
 
     def get_action(
@@ -783,8 +870,52 @@ async def run_decision_transformer(
         with torch.no_grad():
             preds = model.get_action(states, actions, rtg, timesteps, mask)
 
-        # Decode
-        brain_weights, size_mult, conf_thresh, action = decode_action_vector(
+        # ── CVaR-Aware Decoding (Quantile Regression) ──
+        # Use tau=0.05 (worst-case) for action selection (CVaR optimization)
+        # Use tau=0.50 (median) for size multiplier and confidence threshold
+        
+        q_action_logits = preds["q_action_logits"][0].cpu()       # [5, 5] - [quantiles, actions]
+        q_size_mult = preds["q_size_mult"][0].cpu()               # [5]
+        q_conf_threshold = preds["q_conf_threshold"][0].cpu()     # [5]
+        
+        # CVaR action: use tau=0.05 (worst-case) logits
+        cvar_action_logits = q_action_logits[CVAR_QUANTILE_IDX]  # [5] - tau=0.05
+        action_idx = int(torch.argmax(cvar_action_logits).item())
+        action = _DT_CONFIG.actions[action_idx] if action_idx < len(_DT_CONFIG.actions) else "stand_aside"
+        
+        # Confidence from CVaR logits (softmax probability of chosen action)
+        cvar_probs = F.softmax(cvar_action_logits, dim=-1)
+        confidence = float(cvar_probs[action_idx].item())
+        
+        # Size multiplier: use median quantile (tau=0.50) for stability
+        size_mult = float(torch.sigmoid(q_size_mult[MEDIAN_QUANTILE_IDX]).item())
+        size_mult = 0.5 + size_mult * 1.25  # scale to [0.5, 1.75]
+        
+        # Confidence threshold: use median quantile
+        conf_thresh = float(torch.sigmoid(q_conf_threshold[MEDIAN_QUANTILE_IDX]).item())
+        conf_thresh = 0.15 + conf_thresh * 0.20  # scale to [0.15, 0.35]
+        
+        # ── Temporal Action EMA Smoothing ──
+        # action_t = alpha * action_DT + (1-alpha) * action_{t-1}
+        # Store previous action in signal for next iteration
+        prev_action = signal.get("_prev_dt_action")
+        prev_confidence = signal.get("_prev_dt_confidence")
+        
+        if prev_action is not None and prev_confidence is not None:
+            # EMA on confidence (actions are discrete, smooth confidence instead)
+            confidence = TEMPORAL_EMA_ALPHA * confidence + (1 - TEMPORAL_EMA_ALPHA) * prev_confidence
+            # For action, we keep current DT action but could use prev_action if confidence drops
+            # Simple approach: if confidence drops significantly, prefer previous action
+            if confidence < 0.3 and prev_confidence > confidence:
+                action = prev_action
+                confidence = prev_confidence
+        
+        # Store current for next iteration
+        signal["_prev_dt_action"] = action
+        signal["_prev_dt_confidence"] = confidence
+
+        # Standard brain_weights from standard head (for committee compatibility)
+        brain_weights, _, _, _ = decode_action_vector(
             preds["brain_weights"][0].cpu().numpy(),
             preds["size_mult"][0].cpu().numpy(),
             preds["conf_threshold"][0].cpu().numpy(),
@@ -820,9 +951,9 @@ async def run_decision_transformer(
                 action_scores[act] /= active_weight
 
         final_action = action
-        confidence = action_scores.get(action, 0.0)
+        confidence = confidence  # Already CVaR-smoothed
 
-        # Threshold check
+        # Threshold check using median quantile threshold
         if confidence < conf_thresh:
             final_action = "stand_aside"
             confidence = 0.0
@@ -838,7 +969,7 @@ async def run_decision_transformer(
             decision_id=None,
             adaptive_used=True,
             adaptive_weights=brain_weights,
-            explanation=f"DT[{regime}] {action}={confidence:.3f} | sz={size_mult:.2f}x | thresh={conf_thresh:.2f}",
+            explanation=f"QR-DT[{regime}] CVaR(action={action}, c={confidence:.3f}) | sz={size_mult:.2f}x | thresh={conf_thresh:.2f}",
         )
 
     except Exception as e:
@@ -1030,13 +1161,54 @@ def train_decision_transformer(
             target_conf_thresh = a_t[:, :, len(BRAINS)+1:len(BRAINS)+2]
             target_action = torch.argmax(a_t[:, :, -len(ACTIONS):], dim=-1)
 
-            # Loss: MSE for continuous, CE for action
+            # Standard losses (MSE for continuous, CE for action)
             loss_bw = F.mse_loss(preds["brain_weights"], target_brain_weights[:, -1, :])
             loss_sm = F.mse_loss(preds["size_mult"], target_size_mult[:, -1, :])
             loss_ct = F.mse_loss(preds["conf_threshold"], target_conf_thresh[:, -1, :])
             loss_act = F.cross_entropy(preds["action_logits"], target_action[:, -1])
 
+            # ── Quantile Regression Loss (CVaR-aware) ──
+            # Target return for quantile regression (use the realized return from the last timestep)
+            # r_t[:, -1, 0] contains the target return for the last timestep
+            target_return = r_t[:, -1, :]  # [batch, 1] - realized return
+            
+            # Quantile action loss: pinball loss for each quantile
+            q_action_logits = preds["q_action_logits"]  # [B, 5, 5]
+            # We predict action logits per quantile; target is the action taken
+            # For quantile regression on actions, we use the realized return as target
+            # and compute pinball loss on the logits for the taken action
+            target_action_onehot = F.one_hot(target_action[:, -1], num_classes=len(ACTIONS)).float()  # [B, 5]
+            # Get logits for the taken action per quantile
+            q_action_taken = torch.einsum('bqa,bq->bqa', preds["q_action_logits"], target_action_onehot).sum(dim=-1)  # [B, 5]
+            # Target return per quantile (same target, different quantiles)
+            target_return_expanded = r_t[:, -1, :].expand(-1, NUM_QUANTILES)  # [B, 5]
+            loss_q_action = quantile_huber_loss(
+                q_action_logits.mean(dim=-1),  # [B, 5] - average over actions as proxy
+                target_return_expanded,
+                QUANTILES.to(device)
+            )
+            
+            # Quantile size loss
+            q_size = preds["q_size_mult"]  # [B, 5]
+            target_size = target_size_mult[:, -1, :].expand(-1, NUM_QUANTILES)  # [B, 5]
+            loss_q_size = quantile_huber_loss(
+                preds["q_size_mult"],
+                target_size,
+                QUANTILES.to(device)
+            )
+            
+            # Quantile conf threshold loss
+            q_conf = preds["q_conf_threshold"]  # [B, 5]
+            target_conf = target_conf_thresh[:, -1, :].expand(-1, NUM_QUANTILES)  # [B, 5]
+            loss_q_conf = quantile_huber_loss(
+                preds["q_conf_threshold"],
+                target_conf,
+                QUANTILES.to(device)
+            )
+
             loss = loss_bw + loss_sm + loss_ct + loss_act
+            # Add quantile losses (weighted)
+            loss = loss + 0.5 * (loss_q_action + loss_q_size + loss_q_conf)
 
             # CQL regularization for OOD robustness
             if USE_CQL:
