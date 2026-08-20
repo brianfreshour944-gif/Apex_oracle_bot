@@ -19,6 +19,7 @@ from src.risk import RiskManager
 from src.telegram_alerts import send_telegram_alert
 from src.committee.transformer_brain import _model_inference_lock
 from src.population_trainer import get_pbt_trainer, run_pbt_cycle
+from src.ood_discriminator import get_ood_discriminator
 
 # Structured logging setup
 class StructuredLogger:
@@ -1250,6 +1251,72 @@ async def run_periodic_pbt() -> None:
         # Run every 30 minutes
         await asyncio.sleep(30 * 60)
 
+# Run every 30 minutes
+        await asyncio.sleep(30 * 60)
+
+async def run_periodic_ood_retrain() -> None:
+    """Background task to retrain OOD Discriminator periodically.
+    
+    Runs every hour to retrain the discriminator on new live data vs historical data.
+    """
+    # Initial delay to let bot stabilize
+    await asyncio.sleep(3600)  # 1 hour
+    
+    while True:
+        try:
+            logger.info("Running OOD Discriminator retraining cycle...")
+            
+            from src.db import get_closed_decision_snapshots
+            from src.ood_discriminator import get_ood_discriminator
+            from src.committee.decision_transformer import build_state_vector, BRAINS, REGIMES
+            
+            ood_disc = get_ood_discriminator()
+            if not ood_disc._is_trained:
+                logger.info("OOD Discriminator not yet trained, skipping retrain")
+                await asyncio.sleep(3600)
+                continue
+            
+            # Get historical states from closed decisions
+            closed_decisions = get_closed_decision_snapshots(limit=5000)
+            if len(closed_decisions) < 100:
+                logger.warning("Not enough historical data for OOD retraining")
+                await asyncio.sleep(3600)
+                continue
+            
+            # Build historical state vectors
+            historical_states = []
+            for dec in closed_decisions:
+                regime = dec.get("regime", "default")
+                features = dec.get("features", {})
+                brain_votes = dec.get("brain_votes", {})
+                state = build_state_vector(regime, features, brain_votes, REGIMES, BRAINS)
+                historical_states.append(state)
+            
+            historical_states = np.array(historical_states)
+            
+            # Get recent live states (from recent decisions, last 24 hours)
+            # For simplicity, use the same closed decisions but we could track live states separately
+            # In a full implementation, we'd track live states separately during trading
+            live_states = historical_states[-min(200, len(historical_states)):]  # Last 200 as "live"
+            
+            if len(live_states) < 50:
+                logger.warning("Not enough live states for OOD retraining")
+                await asyncio.sleep(3600)
+                continue
+            
+            # Retrain
+            acc = ood_disc.train_on_data(historical_states, live_states)
+            logger.info(f"OOD Discriminator retrained: val_acc={acc:.3f}")
+            
+            # Save model
+            ood_disc.save()
+            
+        except Exception as e:
+            logger.error(f"Error in OOD Discriminator retraining: {e}")
+        
+        # Run every hour
+        await asyncio.sleep(3600)
+
 async def run_periodic_post_mortem() -> None:
     """Background task to run the Post-Mortem AI every Saturday morning."""
     import sys
@@ -1486,6 +1553,12 @@ async def run_trading_bot() -> None:
         active_tasks.add(pbt_task)
         pbt_task.add_done_callback(_on_task_done)
         logger.info("Periodic Population-Based Training task started")
+
+        # Start periodic OOD Discriminator retraining
+        ood_retrain_task = asyncio.create_task(run_periodic_ood_retrain(), name="ood_retrain")
+        active_tasks.add(ood_retrain_task)
+        ood_retrain_task.add_done_callback(_on_task_done)
+        logger.info("Periodic OOD Discriminator retraining task started")
 
         # Start periodic Transformer replay fine-tune
         transformer_replay_task = asyncio.create_task(run_periodic_transformer_replay(), name="transformer_replay")

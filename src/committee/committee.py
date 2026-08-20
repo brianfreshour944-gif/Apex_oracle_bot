@@ -25,6 +25,7 @@ from .momentum_brain import momentum_brain
 from .sentinel_brain import sentinel_brain
 from .llm_brain import llm_brain
 from .rl_meta import RLMetaLearner
+from src.ood_discriminator import get_ood_discriminator, check_ood_and_override
 
 logger = get_logger("committee")
 
@@ -429,6 +430,20 @@ async def run_committee(symbol: str, price: float, signal: Dict[str, Any]) -> Co
         adaptive_weights=adaptive_weights,
         explanation=explanation,
     )
+
+    # OOD Discriminator check — override if state is out-of-distribution
+    try:
+        ood_disc = get_ood_discriminator()
+        if ood_disc is not None and ood_disc._is_trained:
+            # Build signal dict for OOD check
+            ood_signal = {
+                "regime": signal.get("regime", "default"),
+                "features": signal.get("features", {}),
+                "votes": signal.get("votes", []),
+            }
+            result = check_ood_and_override(symbol, price, ood_signal, result, ood_disc)
+    except Exception as e:
+        logger.warning(f"OOD check failed for {symbol}: {e}")
 
     # Publish Prometheus metrics (best-effort, never blocks trading)
     try:

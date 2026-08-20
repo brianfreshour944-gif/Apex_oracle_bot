@@ -32,6 +32,15 @@ from .batch_ensemble import (
     convert_model_to_batchensemble,
 )
 
+from src.ood_discriminator import (
+    OODDiscriminator,
+    get_ood_discriminator,
+    reset_ood_discriminator,
+    check_ood_and_override,
+    build_ood_state_vector,
+    TemporalEMASmoother,
+)
+
 __all__ = [
     "DecisionTransformer",
     "get_decision_transformer",
@@ -56,4 +65,10 @@ __all__ = [
     "BatchEnsembleTransformer",
     "replace_linear_with_batchensemble",
     "convert_model_to_batchensemble",
+    "OODDiscriminator",
+    "get_ood_discriminator",
+    "reset_ood_discriminator",
+    "check_ood_and_override",
+    "build_ood_state_vector",
+    "TemporalEMASmoother",
 ]
