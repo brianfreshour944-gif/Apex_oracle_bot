@@ -41,6 +41,21 @@ from src.ood_discriminator import (
     TemporalEMASmoother,
 )
 
+from .hierarchical_skills import (
+    HierarchicalSkills,
+    SkillConfig,
+    SkillEncoder,
+    SkillLSTMExecutor,
+    TerminationHead,
+    SkillCritic,
+    HierarchicalSkills,
+    OptionsCriticTrainer,
+    get_hierarchical_skills,
+    get_skills_trainer,
+    reset_hierarchical_skills,
+    run_hierarchical_skills,
+)
+
 __all__ = [
     "DecisionTransformer",
     "get_decision_transformer",
@@ -71,4 +86,15 @@ __all__ = [
     "check_ood_and_override",
     "build_ood_state_vector",
     "TemporalEMASmoother",
+    "HierarchicalSkills",
+    "SkillConfig",
+    "SkillEncoder",
+    "SkillLSTMExecutor",
+    "TerminationHead",
+    "SkillCritic",
+    "OptionsCriticTrainer",
+    "get_hierarchical_skills",
+    "get_skills_trainer",
+    "reset_hierarchical_skills",
+    "run_hierarchical_skills",
 ]
