@@ -101,7 +101,7 @@ class AlertingEngine:
     def _in_cooldown(self, alert_key: str, category: AlertCategory) -> bool:
         now = time.monotonic()
         cooldown = self._get_cooldown(category)
-        last = self._last_alert_time.get(alert_key, 0.0)
+        last = self._last_alert_time.get(alert_key, float("-inf"))
         if now - last < cooldown:
             return True
         self._last_alert_time[alert_key] = now

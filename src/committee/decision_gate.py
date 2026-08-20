@@ -165,7 +165,7 @@ def _check_source_specific(source: DecisionSource, regime: str) -> tuple[bool, s
         return True, "OK", {"adaptive_learner_ready": True}
     
     elif source == "ppo":
-        from src.rl_meta import RLMetaLearner
+        from src.committee.rl_meta import RLMetaLearner
         rl_learner = RLMetaLearner()
         model_loaded = getattr(rl_learner, "model", None) is not None
         return model_loaded, "PPO model loaded" if model_loaded else "PPO model not loaded", {
