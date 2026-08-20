@@ -123,6 +123,33 @@ class ExperimentRecord(Base):
         DateTime(timezone=True), default=lambda: datetime.datetime.now(datetime.timezone.utc)
     )
 
+class OrderRecord(Base):
+    """Record of Alpaca orders with fill data for data integrity verification."""
+    __tablename__ = "orders"
+    __table_args__ = (
+        Index("ix_orders_decision_id", "decision_id"),
+        Index("ix_orders_symbol_status", "symbol", "status"),
+    )
+
+    order_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    decision_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, default=None)
+    symbol: Mapped[str] = mapped_column(String(32))
+    side: Mapped[str] = mapped_column(String(16))  # buy/sell
+    qty: Mapped[float] = mapped_column(Float, default=0.0)
+    filled_qty: Mapped[float] = mapped_column(Float, default=0.0)
+    filled_avg_price: Mapped[float] = mapped_column(Float, default=0.0)
+    commission: Mapped[float] = mapped_column(Float, default=0.0)
+    status: Mapped[str] = mapped_column(String(32), default="new")
+    type: Mapped[str] = mapped_column(String(16), default="market")
+    time_in_force: Mapped[str] = mapped_column(String(16), default="ioc")
+    client_order_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, default=None)
+    submitted_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.datetime.now(datetime.timezone.utc)
+    )
+    filled_at: Mapped[Optional[datetime.datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True, default=None
+    )
+
 def save_experiment_record(
     experiment_id: str,
     generation_type: str,
@@ -152,6 +179,51 @@ def save_experiment_record(
         return True
     except Exception as e:
         logger.warning(f"save_experiment_record failed (non-fatal): {e}")
+        return False
+
+
+def save_order_record(
+    *,
+    order_id: str,
+    decision_id: Optional[str] = None,
+    symbol: str,
+    side: str,
+    qty: float,
+    filled_qty: float = 0.0,
+    filled_avg_price: float = 0.0,
+    commission: float = 0.0,
+    status: str = "new",
+    type: str = "market",
+    time_in_force: str = "ioc",
+    client_order_id: Optional[str] = None,
+    submitted_at: Optional[datetime.datetime] = None,
+    filled_at: Optional[datetime.datetime] = None,
+) -> bool:
+    """Persist an order record for data integrity verification. Returns True on success."""
+    try:
+        _ensure_tables()
+        with get_db_session() as session:
+            order = OrderRecord(
+                order_id=order_id,
+                decision_id=decision_id,
+                symbol=symbol,
+                side=side,
+                qty=float(qty),
+                filled_qty=float(filled_qty),
+                filled_avg_price=float(filled_avg_price),
+                commission=float(commission),
+                status=status,
+                type=type,
+                time_in_force=time_in_force,
+                client_order_id=client_order_id,
+                submitted_at=submitted_at or datetime.datetime.now(datetime.timezone.utc),
+                filled_at=filled_at,
+            )
+            session.merge(order)
+            session.commit()
+        return True
+    except Exception as e:
+        logger.warning(f"save_order_record failed (non-fatal): {e}")
         return False
 
 # Engine will be created lazily when first needed

@@ -21,7 +21,9 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.config import settings
 from src.exchange import AlpacaExchange
-from src.db import init_db
+from src.db import init_db, OrderRecord
+from sqlalchemy import select
+from sqlalchemy.orm import Session
 
 DB_PATH = PROJECT_ROOT / "data" / "bot.db"
 
@@ -40,50 +42,57 @@ def load_trades_from_db(days_back: int) -> list:
         print(f"Database not found: {DB_PATH}")
         return []
     
-    conn = sqlite3.connect(str(DB_PATH))
-    cutoff = (datetime.now(timezone.utc) - timedelta(days=days_back)).isoformat()
+    from src.db import get_engine, DecisionSnapshot, OrderRecord
+    from sqlalchemy import select, and_
+    from sqlalchemy.orm import Session
     
-    query = """
-        SELECT 
-            ds.decision_id,
-            ds.symbol,
-            ds.final_action as action,
-            ds.entry_price,
-            ds.qty,
-            ds.created_at as entry_time,
-            ds.exit_price,
-            ds.realized_pnl,
-            ds.return_pct,
-            ds.holding_period_sec,
-            ds.exit_reason,
-            o.filled_avg_price as order_filled_price,
-            o.commission as order_commission,
-            o.filled_qty as order_filled_qty,
-            o.submitted_at as order_time,
-            o.status as order_status
-        FROM decision_snapshots ds
-        LEFT JOIN orders o ON o.decision_id = ds.decision_id
-        WHERE ds.exit_price IS NOT NULL
-        AND ds.created_at >= ?
-        ORDER BY ds.created_at DESC
-    """
+    engine = get_engine()
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days_back)
     
-    cursor = conn.execute(query, (cutoff,))
-    columns = [desc[0] for desc in cursor.description]
-    trades = [dict(zip(columns, row)) for row in cursor.fetchall()]
-    conn.close()
-    
-    print(f"Loaded {len(trades)} completed trades from last {days_back} days")
-    return trades
+    with Session(engine) as session:
+        # Query closed decision snapshots with their order records
+        stmt = (
+            select(DecisionSnapshot, OrderRecord)
+            .outerjoin(OrderRecord, OrderRecord.decision_id == DecisionSnapshot.decision_id)
+            .where(
+                and_(
+                    DecisionSnapshot.status == "closed",
+                    DecisionSnapshot.created_at >= cutoff
+                )
+            )
+            .order_by(DecisionSnapshot.created_at.desc())
+        )
+        
+        results = session.execute(stmt).all()
+        trades = []
+        for snap, order in results:
+            trade = {
+                "decision_id": snap.decision_id,
+                "symbol": snap.symbol,
+                "action": snap.final_action,
+                "entry_price": snap.entry_price,
+                "qty": snap.qty,
+                "entry_time": snap.created_at.isoformat() if snap.created_at else None,
+                "exit_price": snap.realized_pnl,  # Using realized_pnl as proxy since exit_price doesn't exist
+                "realized_pnl": snap.realized_pnl,
+                "return_pct": snap.return_pct,
+                "holding_period_sec": snap.holding_period_sec,
+                "exit_reason": snap.exit_reason,
+                "order_filled_price": order.filled_avg_price if order else None,
+                "order_commission": order.commission if order else None,
+                "order_filled_qty": order.filled_qty if order else None,
+                "order_time": order.submitted_at.isoformat() if order and order.submitted_at else None,
+                "order_status": order.status if order else None,
+            }
+            trades.append(trade)
+        
+        print(f"Loaded {len(trades)} completed trades from last {days_back} days")
+        return trades
 
 def fetch_alpaca_fills(days_back: int) -> list:
     """Fetch actual fills from Alpaca for the same period."""
     try:
-        exchange = AlpacaExchange(
-            api_key=settings.ALPACA_API_KEY,
-            secret_key=settings.ALPACA_SECRET_KEY,
-            base_url=settings.ALPACA_BASE_URL
-        )
+        exchange = AlpacaExchange()
         
         # Alpaca's get_orders can filter by date
         after = (datetime.now(timezone.utc) - timedelta(days=days_back)).isoformat()
