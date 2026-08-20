@@ -141,6 +141,9 @@ def show_status():
     print(f"Registry file: {REGISTRY_PATH}")
     print(f"Total processes: {len(registry['processes'])}")
     
+    has_stale = False
+    has_dirty = False
+    
     # Group by account
     by_account = {}
     for key, proc in registry["processes"].items():
@@ -158,7 +161,18 @@ def show_status():
             print(f"    {key}")
             print(f"      Role: {role} | Status: {status} | Last HB: {age:.0f}s ago")
             print(f"      Symbols: {symbols}")
-            print(f"      Git: {proc.get('git_commit', '?')} ({proc.get('git_branch', '?')}){' DIRTY' if proc.get('git_dirty') else ''}")
+            git_str = f"      Git: {proc.get('git_commit', '?')} ({proc.get('git_branch', '?')})"
+            if proc.get('git_dirty'):
+                git_str += " DIRTY"
+                has_dirty = True
+            print(git_str)
+            if status == "stale":
+                has_stale = True
+    
+    # Return non-zero if issues found
+    if has_stale or has_dirty:
+        return 1
+    return 0
 
 def main():
     parser = argparse.ArgumentParser(description="Deployment registry for bot processes")
@@ -176,7 +190,7 @@ def main():
     
     # Status
     st = subparsers.add_parser("status", help="Show deployment status")
-    st.set_defaults(func=lambda _: show_status())
+    st.set_defaults(func=lambda _: sys.exit(show_status()))
     
     # Cleanup
     cl = subparsers.add_parser("cleanup", help="Remove stale processes")

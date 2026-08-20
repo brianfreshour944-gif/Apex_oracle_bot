@@ -1,16 +1,16 @@
 # Capability Freeze Status
 
-**Status:** VERIFIED
-**Last Check:** 2026-08-20T14:51:59.546850+00:00
-**Passed:** 8/8 checks
+**Status:** ACTIVE
+**Last Check:** 2026-08-20T17:23:07.548546+00:00
+**Passed:** 5/8 checks
 
 ## Foundation Checks (Steps 1-8)
 
 | Step | Check | Status |
 |------|-------|--------|
-| Deployment Hygiene | Deployment Hygiene | PASS |
-| Data Integrity | Data Integrity | PASS |
-| Track Record | Track Record | PASS |
+| Deployment Hygiene | Deployment Hygiene | FAIL |
+| Data Integrity | Data Integrity | FAIL |
+| Track Record | Track Record | FAIL |
 | Decision Gate | Decision Gate | PASS |
 | Data Integrity Tests | Data Integrity Tests | PASS |
 | Risk Parameter Audit | Risk Parameter Audit | PASS |

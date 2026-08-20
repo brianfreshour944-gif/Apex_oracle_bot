@@ -296,6 +296,8 @@ def main():
     with open(report_path, "w") as f:
         json.dump(report, f, indent=2)
     print(f"\n  Report saved: {report_path}")
+    
+    sys.exit(1 if all_issues else 0)
 
 if __name__ == "__main__":
     main()

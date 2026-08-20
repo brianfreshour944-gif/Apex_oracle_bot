@@ -1,0 +1,33 @@
+{
+  "state_dim": 25,
+  "act_dim": 12,
+  "context_length": 32,
+  "embed_dim": 256,
+  "num_layers": 4,
+  "num_heads": 8,
+  "dropout": 0.1,
+  "brains": [
+    "transformer",
+    "quant",
+    "momentum",
+    "sentinel",
+    "llm"
+  ],
+  "regimes": [
+    "bull",
+    "bear",
+    "trending",
+    "sideways",
+    "high_volatility",
+    "low_volatility",
+    "neutral",
+    "default"
+  ],
+  "actions": [
+    "buy",
+    "sell",
+    "hold",
+    "stand_aside",
+    "skip"
+  ]
+}

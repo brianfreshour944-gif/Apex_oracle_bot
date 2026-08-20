@@ -221,12 +221,12 @@ def main():
     db_trades = load_trades_from_db(args.days)
     if not db_trades:
         print("No trades found in database. Exiting.")
-        return
+        sys.exit(1)
     
     alpaca_orders = fetch_alpaca_fills(args.days)
     if not alpaca_orders:
         print("No orders fetched from Alpaca. Exiting.")
-        return
+        sys.exit(1)
     
     # Compare
     results = match_and_compare(db_trades, alpaca_orders)
@@ -290,6 +290,12 @@ def main():
     with open(report_path, "w") as f:
         json.dump(report, f, indent=2)
     print(f"\nReport saved: {report_path}")
+    
+    # Exit with appropriate code
+    if verdict == "PASS":
+        sys.exit(0)
+    else:
+        sys.exit(1)
 
 if __name__ == "__main__":
     main()

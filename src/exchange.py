@@ -301,6 +301,64 @@ class AlpacaExchange:
         }
 
     @retry(stop=stop_after_attempt(5), wait=wait_exponential(multiplier=1, min=2, max=30))
+    async def get_orders(
+        self,
+        status: Optional[str] = None,
+        after: Optional[str] = None,
+        until: Optional[str] = None,
+        limit: int = 500,
+    ) -> List[Dict[str, Any]]:
+        """Fetch order history from Alpaca with optional filters.
+        
+        Args:
+            status: Filter by order status (e.g., "filled", "cancelled", "expired")
+            after: ISO format datetime string - only orders after this time
+            until: ISO format datetime string - only orders before this time
+            limit: Maximum number of orders to return
+            
+        Returns:
+            List of order dictionaries with fill data
+        """
+        if not self.trading_client:
+            await self.load()
+            
+        # Parse after/until strings to datetime if provided
+        after_dt = None
+        until_dt = None
+        if after:
+            after_dt = datetime.datetime.fromisoformat(after.replace("Z", "+00:00"))
+        if until:
+            until_dt = datetime.datetime.fromisoformat(until.replace("Z", "+00:00"))
+            
+        request = GetOrdersRequest(
+            status=status,
+            after=after_dt,
+            until=until_dt,
+            limit=limit,
+            direction="desc",
+        )
+        
+        orders = await asyncio.to_thread(self.trading_client.get_orders, request)
+        
+        results = []
+        for order in orders:
+            results.append({
+                "id": str(order.id),
+                "symbol": str(order.symbol).replace("/", ""),
+                "qty": float(order.qty) if order.qty else 0.0,
+                "filled_qty": float(order.filled_qty) if order.filled_qty else 0.0,
+                "status": str(order.status.value) if hasattr(order.status, "value") else str(order.status),
+                "side": str(order.side.value) if hasattr(order.side, "value") else str(order.side),
+                "type": str(order.type.value) if hasattr(order.type, "value") else str(order.type),
+                "filled_avg_price": float(order.filled_avg_price) if order.filled_avg_price else 0.0,
+                "commission": float(order.commission) if order.commission else 0.0,
+                "submitted_at": order.submitted_at.isoformat() if order.submitted_at else None,
+                "filled_at": order.filled_at.isoformat() if order.filled_at else None,
+                "client_order_id": str(order.client_order_id) if order.client_order_id else None,
+            })
+        return results
+
+    @retry(stop=stop_after_attempt(5), wait=wait_exponential(multiplier=1, min=2, max=30))
     async def create_order(
         self,
         symbol: str,

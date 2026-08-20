@@ -136,8 +136,8 @@ def check_model_freshness() -> dict:
     models = {
         "Transformer": PROJECT_ROOT / "models" / "grok_gqa_v9_best.pth",
         "Feature Scaler": PROJECT_ROOT / "models" / "feature_scaler.pkl",
-        "PPO Model": PROJECT_ROOT / "models" / "ppo_meta_actor.pt",
-        "DT Model": PROJECT_ROOT / "models" / "decision_transformer.pt",
+        "PPO Model": PROJECT_ROOT / "models" / "ppo_meta_weights.zip",
+        "DT Model": PROJECT_ROOT / "models" / "decision_transformer.pth",
     }
     
     results = {}
@@ -284,6 +284,7 @@ def main():
     all_pass = all(passed for _, passed in checks)
     print(f"\n  OVERALL: {'FOUNDATION READY' if all_pass else 'FOUNDATION NOT READY'}")
     print("  (Requires all checks PASS before lifting capability freeze)")
+    sys.exit(0 if all_pass else 1)
 
 if __name__ == "__main__":
     main()
