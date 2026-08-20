@@ -41,6 +41,13 @@ from src.ood_discriminator import (
     TemporalEMASmoother,
 )
 
+from .decision_gate import (
+    check_decision_source_gate,
+    GateResult,
+    get_gate_status_summary,
+    log_gate_status,
+)
+
 from .hierarchical_skills import (
     HierarchicalSkills,
     SkillConfig,
@@ -86,6 +93,10 @@ __all__ = [
     "check_ood_and_override",
     "build_ood_state_vector",
     "TemporalEMASmoother",
+    "check_decision_source_gate",
+    "GateResult",
+    "get_gate_status_summary",
+    "log_gate_status",
     "HierarchicalSkills",
     "SkillConfig",
     "SkillEncoder",

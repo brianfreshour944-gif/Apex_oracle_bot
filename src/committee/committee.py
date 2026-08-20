@@ -25,6 +25,7 @@ from .momentum_brain import momentum_brain
 from .sentinel_brain import sentinel_brain
 from .llm_brain import llm_brain
 from .rl_meta import RLMetaLearner
+from .decision_gate import check_decision_source_gate, GateResult
 from src.ood_discriminator import get_ood_discriminator, check_ood_and_override
 
 logger = get_logger("committee")
@@ -308,24 +309,16 @@ async def run_committee(symbol: str, price: float, signal: Dict[str, Any]) -> Co
     else:
         baseline_winner, baseline_score = "stand_aside", 0.0
 
-    # ── Adaptive meta-learner / RL Meta-Learner (shadow by default) ──
+    # ── Shared Decision Source Gate (Step 4: Structural Fix) ──
+    # ALL decision sources must pass through check_decision_source_gate()
+    # This eliminates the bug class where new fallback sources bypass validation.
     adaptive_used = False
     adaptive_weights: Dict[str, float] = {}
     explanation: Optional[str] = None
     winner, score = baseline_winner, baseline_score
 
-    # Check if adaptive learning is ready (min trades gate + validation gate)
-    learner = get_meta_learner()
-    live_ready = False
-    validated_ready = False
-    ppo_ready = False
-    if learner is not None:
-        live_ready = learner.sample_count_for_regime(regime) >= settings.ADAPTIVE_MIN_TRADES_BEFORE_LIVE
-        validated_ready = learner.is_regime_validated(regime)
-        # PPO gate: just needs model loaded and minimal trades
-        ppo_ready = learner.sample_count_for_regime(regime) >= settings.PPO_MIN_TRADES_BEFORE_LIVE
-
     # Always compute adaptive weights for shadow mode observability
+    learner = get_meta_learner()
     shadow_decision = None
     if learner is not None:
         try:
@@ -335,59 +328,81 @@ async def run_committee(symbol: str, price: float, signal: Dict[str, Any]) -> Co
         except Exception as e:
             logger.warning(f"Adaptive combine failed: {e}")
 
-    # Use mathematical adaptive learner if enabled and gates passed
-    if learner is not None and settings.ADAPTIVE_ML_ENABLED and live_ready and validated_ready and shadow_decision:
+    # Source 1: Mathematical Adaptive Learner
+    adaptive_gate = check_decision_source_gate("adaptive_learner", regime)
+    if adaptive_gate.allowed and shadow_decision:
         adaptive_used = True
         winner, score = shadow_decision.action, shadow_decision.confidence
-        logger.info(f"Adaptive learner ACTIVE for regime '{regime}' (trades={learner.sample_count_for_regime(regime)}, validated=True)")
-    elif learner is not None and settings.ADAPTIVE_ML_ENABLED and live_ready and not validated_ready:
-        logger.info(f"Adaptive learner SHADOW for regime '{regime}' (trades={learner.sample_count_for_regime(regime)}, validated=False)")
+        logger.info(f"Adaptive learner ACTIVE for regime '{regime}' (gate: {adaptive_gate.reason})")
+    elif learner is not None and settings.ADAPTIVE_ML_ENABLED:
+        logger.info(f"Adaptive learner SHADOW for regime '{regime}' (gate: {adaptive_gate.reason})")
 
-    # Fallback to RL Meta-Learner (PPO) if mathematical learner not ready/failed
-    rl_learner = RLMetaLearner()
-    
-    if not adaptive_used and getattr(rl_learner, "model", None) and settings.ADAPTIVE_ML_ENABLED and ppo_ready and validated_ready and signal.get("backtest_df") is None:
-        try:
-            # We need to construct the features dict for the RL agent
-            features = signal.get("features", {})
-            features["rsi"] = signal.get("rsi", 50.0)
-            features["atr"] = signal.get("atr", 0.0)
-            features["macd"] = signal.get("macd", 0.0)
-            
-            decision = rl_learner.combine(raw_votes, regime, features)
-            adaptive_weights = decision.weights
-            explanation = decision.explanation
-            adaptive_used = True
-            winner, score = decision.action, decision.confidence
-        except Exception as e:
-            logger.warning(f"RL Meta-Learner combine failed: {e}")
-
-    # Fallback to Decision Transformer (Offline RL via sequence modeling)
-    dt_ready = False
-    if not adaptive_used and settings.ADAPTIVE_ML_ENABLED and signal.get("backtest_df") is None:
-        try:
-            # Target return: use a moderate target (2% default) or scale by regime
-            regime_targets = {
-                "trending": 3.0, "bull": 3.0, "bear": 3.0,
-                "sideways": 1.5, "mean_reverting": 1.5,
-                "high_volatility": 2.5, "low_volatility": 1.0,
-                "neutral": 2.0
-            }
-            target_return = regime_targets.get(regime, 2.0)
-            
-            dt_decision = await run_decision_transformer(symbol, price, signal, target_return)
-            if dt_decision is not None:
-                dt_ready = True
+    # Source 2: RL Meta-Learner (PPO) — fallback if adaptive not used
+    if not adaptive_used:
+        ppo_gate = check_decision_source_gate("ppo", regime)
+        rl_learner = RLMetaLearner()
+        if ppo_gate.allowed and getattr(rl_learner, "model", None) and signal.get("backtest_df") is None:
+            try:
+                features = signal.get("features", {})
+                features["rsi"] = signal.get("rsi", 50.0)
+                features["atr"] = signal.get("atr", 0.0)
+                features["macd"] = signal.get("macd", 0.0)
+                
+                decision = rl_learner.combine(raw_votes, regime, features)
+                adaptive_weights = decision.weights
+                explanation = decision.explanation
                 adaptive_used = True
-                adaptive_weights = dt_decision.adaptive_weights
-                explanation = dt_decision.explanation
-                winner, score = dt_decision.action, dt_decision.score
-                # Use DT's size multiplier if available
-                if hasattr(dt_decision, 'size_multiplier') and dt_decision.size_multiplier > 0:
-                    size_mult = dt_decision.size_multiplier
-                logger.info(f"Decision Transformer ACTIVE for regime '{regime}' (target_return={target_return}%)")
-        except Exception as e:
-            logger.warning(f"Decision Transformer combine failed: {e}")
+                winner, score = decision.action, decision.confidence
+                logger.info(f"PPO RL Meta-Learner ACTIVE for regime '{regime}' (gate: {ppo_gate.reason})")
+            except Exception as e:
+                logger.warning(f"RL Meta-Learner combine failed: {e}")
+        elif settings.ADAPTIVE_ML_ENABLED:
+            logger.info(f"PPO SHADOW for regime '{regime}' (gate: {ppo_gate.reason})")
+
+    # Source 3: Decision Transformer — fallback if PPO not used
+    if not adaptive_used:
+        dt_gate = check_decision_source_gate("decision_transformer", regime)
+        if dt_gate.allowed and signal.get("backtest_df") is None:
+            try:
+                regime_targets = {
+                    "trending": 3.0, "bull": 3.0, "bear": 3.0,
+                    "sideways": 1.5, "mean_reverting": 1.5,
+                    "high_volatility": 2.5, "low_volatility": 1.0,
+                    "neutral": 2.0
+                }
+                target_return = regime_targets.get(regime, 2.0)
+                
+                dt_decision = await run_decision_transformer(symbol, price, signal, target_return)
+                if dt_decision is not None:
+                    adaptive_used = True
+                    adaptive_weights = dt_decision.adaptive_weights
+                    explanation = dt_decision.explanation
+                    winner, score = dt_decision.action, dt_decision.score
+                    if hasattr(dt_decision, 'size_multiplier') and dt_decision.size_multiplier > 0:
+                        size_mult = dt_decision.size_multiplier
+                    logger.info(f"Decision Transformer ACTIVE for regime '{regime}' (gate: {dt_gate.reason}, target_return={target_return}%)")
+            except Exception as e:
+                logger.warning(f"Decision Transformer combine failed: {e}")
+        elif settings.ADAPTIVE_ML_ENABLED:
+            logger.info(f"Decision Transformer SHADOW for regime '{regime}' (gate: {dt_gate.reason})")
+
+    # Source 4: Hierarchical Skills — fallback if DT not used
+    if not adaptive_used:
+        skills_gate = check_decision_source_gate("hierarchical_skills", regime)
+        if skills_gate.allowed and signal.get("backtest_df") is None:
+            try:
+                from src.committee.hierarchical_skills import run_hierarchical_skills
+                skills_decision = await run_hierarchical_skills(symbol, price, signal)
+                if skills_decision is not None:
+                    adaptive_used = True
+                    adaptive_weights = getattr(skills_decision, 'adaptive_weights', {})
+                    explanation = getattr(skills_decision, 'explanation', '')
+                    winner, score = skills_decision.action, skills_decision.score
+                    logger.info(f"Hierarchical Skills ACTIVE for regime '{regime}' (gate: {skills_gate.reason})")
+            except Exception as e:
+                logger.warning(f"Hierarchical Skills combine failed: {e}")
+        elif settings.ADAPTIVE_ML_ENABLED:
+            logger.info(f"Hierarchical Skills SHADOW for regime '{regime}' (gate: {skills_gate.reason})")
 
     # Threshold + confidence sizing apply identically regardless of source.
     # In sideways/choppy markets, use a lower threshold so the committee
