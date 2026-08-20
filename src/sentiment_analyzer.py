@@ -6,6 +6,7 @@ to extract a structured sentiment signal. Fallbacks to a heuristic stub if no ke
 
 import os
 import json
+import math
 import httpx
 import asyncio
 from typing import Dict, Any
@@ -188,10 +189,21 @@ async def extract_sentiment(symbol: str) -> Dict[str, Any]:
         event = str(res.get("event_type", "none")).lower()
         conf = float(res.get("confidence", 0.5))
         dur = float(res.get("duration_hrs", 24.0))
-        
+
+        # Guard against NaN/Inf values from LLM output — max/min() clamping
+        # silently converts NaN to the *upper* bound (e.g. +1.0) because
+        # NaN comparisons are always False, which would turn a corrupt
+        # sentiment score into an erroneously bullish 1.0 signal.
+        if math.isnan(score) or math.isinf(score):
+            score = 0.0
+        if math.isnan(conf) or math.isinf(conf):
+            conf = 0.5
+        if math.isnan(dur) or math.isinf(dur):
+            dur = 24.0
+
         if event not in EVENT_TYPES:
             event = "none"
-            
+
         return {
             "sentiment_score": max(-1.0, min(1.0, score)),
             "event_type": event,

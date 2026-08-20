@@ -6,6 +6,7 @@ Performs live model inference if PyTorch & model weights exist, with graceful fa
 
 import os
 import numpy as np
+import asyncio
 import threading
 from typing import Optional, List
 from .models import BrainVote
