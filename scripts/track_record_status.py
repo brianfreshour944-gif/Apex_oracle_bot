@@ -22,8 +22,9 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.config import settings
 from src.committee.committee import get_meta_learner
-from src.db import init_db
-import sqlite3
+from src.db import init_db, get_engine, DecisionSnapshot
+from sqlalchemy import select, func, and_
+from sqlalchemy.orm import Session
 
 DB_PATH = PROJECT_ROOT / "data" / "bot.db"
 ADAPTIVE_STATE_PATH = PROJECT_ROOT / "data" / "adaptive_meta_state.json"
@@ -48,59 +49,60 @@ def get_db_trade_stats(days_back: int = 30) -> dict:
     if not DB_PATH.exists():
         return {}
     
-    conn = sqlite3.connect(str(DB_PATH))
-    cutoff = (datetime.now(timezone.utc) - timedelta(days=days_back)).isoformat()
+    engine = get_engine()
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days_back)
     
-    # Overall stats
-    query = """
-        SELECT 
-            COUNT(*) as total_trades,
-            SUM(CASE WHEN realized_pnl > 0 THEN 1 ELSE 0 END) as wins,
-            SUM(CASE WHEN realized_pnl < 0 THEN 1 ELSE 0 END) as losses,
-            AVG(return_pct) as avg_return,
-            SUM(realized_pnl) as total_pnl
-        FROM decision_snapshots
-        WHERE exit_price IS NOT NULL
-        AND created_at >= ?
-    """
-    cursor = conn.execute(query, (cutoff,))
-    row = cursor.fetchone()
-    overall = {
-        "total": row[0] or 0,
-        "wins": row[1] or 0,
-        "losses": row[2] or 0,
-        "avg_return_pct": row[3] or 0,
-        "total_pnl": row[4] or 0
-    }
-    
-    # Per-regime stats
-    query2 = """
-        SELECT 
-            regime,
-            COUNT(*) as total_trades,
-            SUM(CASE WHEN realized_pnl > 0 THEN 1 ELSE 0 END) as wins,
-            AVG(return_pct) as avg_return,
-            SUM(realized_pnl) as total_pnl
-        FROM decision_snapshots
-        WHERE exit_price IS NOT NULL
-        AND created_at >= ?
-        GROUP BY regime
-    """
-    cursor = conn.execute(query2, (cutoff,))
-    by_regime = {}
-    for row in cursor.fetchall():
-        regime, total, wins, avg_ret, total_pnl = row
-        by_regime[regime] = {
+    with Session(engine) as session:
+        # Overall stats - fetch all closed trades and compute in Python
+        stmt = select(DecisionSnapshot).where(
+            and_(
+                DecisionSnapshot.status == "closed",
+                DecisionSnapshot.created_at >= cutoff
+            )
+        )
+        trades = session.execute(stmt).scalars().all()
+        
+        if not trades:
+            return {"overall": {"total": 0, "wins": 0, "losses": 0, "avg_return_pct": 0, "total_pnl": 0}, "by_regime": {}}
+        
+        total = len(trades)
+        wins = sum(1 for t in trades if t.realized_pnl > 0)
+        losses = sum(1 for t in trades if t.realized_pnl < 0)
+        avg_return = sum(t.return_pct for t in trades) / total
+        total_pnl = sum(t.realized_pnl for t in trades)
+        
+        overall = {
             "total": total,
-            "wins": wins or 0,
-            "losses": total - (wins or 0),
-            "win_rate": (wins or 0) / total if total > 0 else 0,
-            "avg_return_pct": avg_ret or 0,
-            "total_pnl": total_pnl or 0
+            "wins": wins,
+            "losses": losses,
+            "avg_return_pct": avg_return,
+            "total_pnl": total_pnl
         }
-    
-    conn.close()
-    return {"overall": overall, "by_regime": by_regime}
+        
+        # Per-regime stats
+        by_regime = {}
+        for trade in trades:
+            regime = trade.regime
+            if regime not in by_regime:
+                by_regime[regime] = {"total": 0, "wins": 0, "losses": 0, "returns": [], "pnls": []}
+            by_regime[regime]["total"] += 1
+            if trade.realized_pnl > 0:
+                by_regime[regime]["wins"] += 1
+            elif trade.realized_pnl < 0:
+                by_regime[regime]["losses"] += 1
+            by_regime[regime]["returns"].append(trade.return_pct)
+            by_regime[regime]["pnls"].append(trade.realized_pnl)
+        
+        # Compute averages
+        for regime, data in by_regime.items():
+            data["win_rate"] = data["wins"] / data["total"] if data["total"] > 0 else 0
+            data["avg_return_pct"] = sum(data["returns"]) / len(data["returns"]) if data["returns"] else 0
+            data["total_pnl"] = sum(data["pnls"])
+            # Clean up temporary fields
+            del data["returns"]
+            del data["pnls"]
+        
+        return {"overall": overall, "by_regime": by_regime}
 
 def check_retraining_cycles() -> dict:
     """Check if retraining scripts have run recently."""
