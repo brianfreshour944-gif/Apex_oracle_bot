@@ -177,7 +177,7 @@ class TestRiskManagerTransactionCosts:
         settings.MAX_SINGLE_TRADE_USD = 2500.0
 
         # Round-trip = 2*(50+30+20) = 200 bps
-        # Expected edge = 50 bps
+        # Expected edge = 50 bps (0.5% = 50 bps)
         # Net edge = 50 - 200 = -150 bps < 10 bps minimum -> REJECT
         size, status = risk_manager.calculate_position_size(
             symbol="BTC/USD",
@@ -185,7 +185,7 @@ class TestRiskManagerTransactionCosts:
             regime="trending",
             atr=1000.0,
             confidence=1.0,
-            expected_return_pct=0.5
+            expected_return_pct=0.005  # 0.5% = 50 bps (not 0.5 which is 50%)
         )
         assert size == 0.0, f"Should reject with negative net edge, got size={size}"
         assert "insufficient edge" in status.lower() or "rejected" in status.lower()
@@ -219,13 +219,17 @@ class TestRiskManagerTransactionCosts:
         assert size == pytest.approx(expected_size, rel=0.01)
 
     def test_dynamic_transaction_costs_update_from_fills(self, risk_manager):
-        """Dynamic cost model should update from recorded fills."""
+        """Dynamic cost model should update from recorded fills using EMA."""
         settings.TX_COST_USE_DYNAMIC = True
         settings.TX_COST_FEE_BPS = 5.0
         settings.TX_COST_SLIPPAGE_BPS = 3.0
         settings.TX_COST_SPREAD_BPS = 2.0
 
-        # Record a fill with higher slippage
+        # First call initializes the costs
+        risk_manager.record_fill_costs("BTC/USD", fee_bps=5.0, slippage_bps=3.0, spread_bps=2.0)
+        
+        # Second call updates with EMA (alpha=0.3)
+        # slippage: 0.7*3 + 0.3*15 = 2.1 + 4.5 = 6.6
         risk_manager.record_fill_costs("BTC/USD", fee_bps=5.0, slippage_bps=15.0, spread_bps=3.0)
 
         costs = risk_manager.get_transaction_costs("BTC/USD")
@@ -258,48 +262,79 @@ class TestCommitteeDecisionGate:
         """Gate should require minimum trades for the specific regime."""
         from src.committee.decision_gate import check_decision_source_gate
         from src.committee.committee import get_meta_learner
+        from src.config import settings as s
         
-        learner = get_meta_learner()
-        if learner:
-            # Reset to known state
-            learner.regime_sample_count = {"trending": 5}  # Below default 10
-            learner._save_safely()
-            
-            result = check_decision_source_gate("adaptive_learner", "trending")
-            assert result.allowed is False
-            assert "Insufficient regime samples" in result.reason
-            assert result.details["regime_samples"] == 5
+        # Enable adaptive ML for these tests
+        original = s.ADAPTIVE_ML_ENABLED
+        s.ADAPTIVE_ML_ENABLED = True
+        try:
+            learner = get_meta_learner()
+            if learner:
+                # Reset to known state
+                learner.regime_sample_count = {"trending": 5}  # Below default 10
+                learner._save_safely()
+                
+                result = check_decision_source_gate("adaptive_learner", "trending")
+                assert result.allowed is False
+                assert "Insufficient regime samples" in result.reason
+                assert result.details["regime_samples"] == 5
+        finally:
+            s.ADAPTIVE_ML_ENABLED = original
 
     def test_gate_requires_regime_validation(self):
         """Gate should require regime validation (Sharpe/win-rate)."""
         from src.committee.decision_gate import check_decision_source_gate
         from src.committee.committee import get_meta_learner
+        from src.config import settings as s
         
-        learner = get_meta_learner()
-        if learner:
-            learner.regime_sample_count = {"trending": 50}  # Above min
-            learner.regime_validated = {"trending": False}  # Not validated
-            learner._save_safely()
-            
-            result = check_decision_source_gate("adaptive_learner", "trending")
-            assert result.allowed is False
-            assert "not validated" in result.reason
+        original = s.ADAPTIVE_ML_ENABLED
+        s.ADAPTIVE_ML_ENABLED = True
+        try:
+            learner = get_meta_learner()
+            if learner:
+                learner.regime_sample_count = {"trending": 50}  # Above min
+                learner.regime_validated = {"trending": False}  # Not validated
+                # Provide returns that DON'T pass validation (negative returns)
+                returns = [-1.0, -2.0, -1.5, -0.5, -2.5, -1.0, -1.5, -0.5, -2.0, -1.0,
+                           -1.0, -1.5, -0.5, -2.0, -1.0, -1.5, -0.5]  # 17 negative returns
+                learner.regime_returns = {"trending": returns}
+                learner._save_safely()
+                
+                result = check_decision_source_gate("adaptive_learner", "trending")
+                assert result.allowed is False
+                assert "not validated" in result.reason
+        finally:
+            s.ADAPTIVE_ML_ENABLED = original
 
     def test_gate_allows_when_all_conditions_met(self):
         """Gate should allow when all conditions are met."""
         from src.committee.decision_gate import check_decision_source_gate
         from src.committee.committee import get_meta_learner
+        from src.config import settings as s
         
-        learner = get_meta_learner()
-        if learner:
-            learner.regime_sample_count = {"trending": 50}
-            learner.regime_validated = {"trending": True}
-            learner.weights = {"trending": {"transformer": 0.3, "quant": 0.2, "momentum": 0.2, "sentinel": 0.15, "llm": 0.15}}
-            learner._save_safely()
-            
-            result = check_decision_source_gate("adaptive_learner", "trending")
-            assert result.allowed is True
-            assert result.reason == "All gates passed"
+        original = s.ADAPTIVE_ML_ENABLED
+        s.ADAPTIVE_ML_ENABLED = True
+        try:
+            learner = get_meta_learner()
+            if learner:
+                # Need at least VALIDATION_MIN_TRADES (10) returns for validation
+                # With 30% holdout, we need 10 trades to get 3 holdout trades (need 5)
+                # So we need at least 17 trades to get 5 holdout trades
+                # Use varying returns to get positive Sharpe (>0.5)
+                learner.regime_sample_count = {"trending": 50}
+                learner.regime_validated = {"trending": True}
+                # Varying positive returns to get positive Sharpe
+                returns = [2.0, 1.5, 2.5, 1.0, 3.0, 2.0, 1.5, 2.5, 1.0, 3.0,
+                           2.0, 1.5, 2.5, 1.0, 3.0, 2.0, 1.5]  # 17 trades, all positive
+                learner.regime_returns = {"trending": returns}
+                learner.weights = {"trending": {"transformer": 0.3, "quant": 0.2, "momentum": 0.2, "sentinel": 0.15, "llm": 0.15}}
+                learner._save_safely()
+                
+                result = check_decision_source_gate("adaptive_learner", "trending")
+                assert result.allowed is True
+                assert result.reason == "All gates passed"
+        finally:
+            s.ADAPTIVE_ML_ENABLED = original
 
 
 class TestCommitteeIntegration:

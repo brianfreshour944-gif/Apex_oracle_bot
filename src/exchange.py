@@ -388,7 +388,9 @@ class AlpacaExchange:
                             order_info["filled_qty"] = 0.0
                             order_info["commission"] = 0.0
                             order_info["slippage"] = 0.0
-                    return poll_info
+                    # Update status to final status before returning
+                    order_info["status"] = status
+                    return order_info
             except Exception as e:
                 logger.warning(f"Error polling order {order_id}: {e}")
 
