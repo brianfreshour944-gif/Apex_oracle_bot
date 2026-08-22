@@ -261,32 +261,37 @@ async def generate_history_for_symbol(symbol: str, bars: pl.DataFrame):
     
     return trades_logged
 
-async def main():
+async def main() -> int:
     logger.info("Initializing Bulk Replay Dataset Generator...")
     total_generated = 0
     
-    for sym in SYMBOLS:
-        try:
-            logger.info(f"Fetching {HISTORY_DAYS} days of data for {sym}...")
-            ticker = yf.Ticker(sym)
-            df = ticker.history(period=f"{HISTORY_DAYS}d", interval="1h")
-            if df.empty:
-                logger.warning(f"No data for {sym}")
-                continue
+    try:
+        for sym in SYMBOLS:
+            try:
+                logger.info(f"Fetching {HISTORY_DAYS} days of data for {sym}...")
+                ticker = yf.Ticker(sym)
+                df = ticker.history(period=f"{HISTORY_DAYS}d", interval="1h")
+                if df.empty:
+                    logger.warning(f"No data for {sym}")
+                    continue
+                    
+                df = df.reset_index()
+                df = df.rename(columns={"Datetime": "t", "Open": "open", "High": "high", "Low": "low", "Close": "close", "Volume": "volume"})
+                df["t"] = df["t"].astype(str)
+                bars = pl.from_pandas(df)
                 
-            df = df.reset_index()
-            df = df.rename(columns={"Datetime": "t", "Open": "open", "High": "high", "Low": "low", "Close": "close", "Volume": "volume"})
-            df["t"] = df["t"].astype(str)
-            bars = pl.from_pandas(df)
-            
-            logged = await generate_history_for_symbol(sym, bars)
-            logger.info(f"Generated {logged} historical replay records for {sym}")
-            total_generated += logged
-            
-        except Exception as e:
-            logger.error(f"Failed processing {sym}: {e}")
-            
-    logger.info(f"Bulk generation complete. Added {total_generated} records to {BUFFER_PATH}")
+                logged = await generate_history_for_symbol(sym, bars)
+                logger.info(f"Generated {logged} historical replay records for {sym}")
+                total_generated += logged
+                
+            except Exception as e:
+                logger.error(f"Failed processing {sym}: {e}")
+                
+        logger.info(f"Bulk generation complete. Added {total_generated} records to {BUFFER_PATH}")
+        return 0
+    except Exception as e:
+        logger.error(f"Bulk generation failed: {e}")
+        return 1
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    sys.exit(asyncio.run(main()))

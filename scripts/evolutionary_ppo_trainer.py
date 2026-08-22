@@ -211,7 +211,7 @@ async def simulate_candidate(bars: pl.DataFrame, symbol: str, config: Dict[str, 
             setattr(settings, k, v)
 
 
-async def main():
+async def main() -> int:
     logger.info("Initializing Multi-Asset Evolutionary PPO Pipeline...")
     symbols = ["BTC-USD", "ETH-USD", "SOL-USD", "DOGE-USD", "XRP-USD", "ADA-USD", "LINK-USD", "LTC-USD", "AVAX-USD", "BCH-USD"]
     bars_dict = {}
@@ -376,6 +376,7 @@ async def main():
             logger.info("❌ PPO Challenger FAILED to beat Champion. Discarding new weights.")
     else:
         logger.warning("No candidates survived the GA filter. PPO was not trained.")
+    return 0
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    sys.exit(asyncio.run(main()))

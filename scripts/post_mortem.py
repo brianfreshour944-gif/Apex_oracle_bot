@@ -20,7 +20,7 @@ from sqlalchemy.orm import Session
 
 logger = get_logger("post_mortem_ai")
 
-def analyze_losses():
+def analyze_losses() -> int:
     logger.info("Starting Post-Mortem Analysis")
     engine = get_engine()
     
@@ -122,6 +122,7 @@ def analyze_losses():
         f.write("> **Action Item:** The AutoML Pipeline should penalize the weights for this strategy in this regime, or the user should tweak the strategy parameters in `execution_strategies.py`.\n")
 
     logger.info(f"Post-Mortem report generated at {report_path}")
+    return 0
 
 if __name__ == "__main__":
-    analyze_losses()
+    sys.exit(analyze_losses())

@@ -26,7 +26,7 @@ CANDIDATES_DIR = os.path.join(DATA_DIR, "candidates")
 PROD_MODEL_OUT = os.path.join(DATA_DIR, "grok_gqa_v9_best.pth")
 PROD_SCALER_OUT = os.path.join(DATA_DIR, "feature_scaler.pkl")
 
-def evaluate_and_cull():
+def evaluate_and_cull() -> int:
     Base.metadata.create_all(get_engine())
     
     # Calculate cutoff for "this month"
@@ -88,6 +88,7 @@ def evaluate_and_cull():
         
     # Optional: Wipe shadow trades to start fresh for next month?
     # We'll leave them in the DB for historical record, the `closed_at >= one_month_ago` filter handles the window.
+    return 0
 
 if __name__ == "__main__":
-    evaluate_and_cull()
+    sys.exit(evaluate_and_cull())

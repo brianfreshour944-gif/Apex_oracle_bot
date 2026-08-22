@@ -17,6 +17,7 @@ from src.api import start_fastapi_server_async
 from src.strategies import TradingStrategy
 from src.risk import RiskManager
 from src.telegram_alerts import send_telegram_alert
+from src.alerts import AlertingEngine
 from src.committee.transformer_brain import _model_inference_lock
 from src.population_trainer import get_pbt_trainer, run_pbt_cycle
 from src.ood_discriminator import get_ood_discriminator
@@ -319,6 +320,10 @@ class BotState:
         self._transformer_online_warmup_steps: int = 100
         self._transformer_online_total_steps: int = 10000
         self._transformer_online_lock: asyncio.Lock = asyncio.Lock()
+        
+        # Alerting metrics
+        self.trade_timestamps: list[float] = []
+        self.exchange_failure_count: int = 0
 
     def get_regime_flag(self) -> Dict[str, Any]:
         """Read the regime flag file, cached and only re-read when the file's mtime changes."""
@@ -757,11 +762,14 @@ async def process_signal_for_symbol(symbol: str, current_price: float, risk_mana
                     logger.error(f"[{symbol}] Order placement failed: {order_e}")
                     raise
                 
-                # Release the reserved exposure now that the order has been
+# Release the reserved exposure now that the order has been
                 # placed successfully -- the actual portfolio value will be
                 # reflected on the next cycle's update_account_status() call.
                 risk_manager.release_reserved_exposure(approved_notional)
-    
+                
+                # Track trade for churn alert
+                _state.trade_timestamps.append(time.time())
+
                 filled_price = order_result.get("filled_avg_price", 0.0)
                 commission = order_result.get("commission", 0.0)
                 if filled_price > 0:
@@ -1480,6 +1488,10 @@ async def run_trading_bot() -> None:
         _state.risk_manager = RiskManager(_state.ex)
         logger.info("Trading strategy and risk manager initialized")
 
+        # Initialize AlertingEngine
+        alerting_engine = AlertingEngine(risk_manager=_state.risk_manager, exchange=_state.ex)
+        logger.info("Alerting engine initialized")
+
         # Start API server
         await start_fastapi_server_async()
         logger.info("FastAPI server started")
@@ -1591,7 +1603,7 @@ async def run_trading_bot() -> None:
         db_maintenance_task.add_done_callback(_on_task_done)
         logger.info("Periodic Database Maintenance task started")
 
-        # Start deployment registry heartbeat
+# Start deployment registry heartbeat
         async def deployment_heartbeat_loop():
             while not _state._shutdown_requested:
                 try:
@@ -1606,7 +1618,37 @@ async def run_trading_bot() -> None:
         heartbeat_task.add_done_callback(_on_task_done)
         logger.info("Deployment registry heartbeat started")
 
-# Main trading loop
+        # Start Alerting Engine monitoring (runs every 30 seconds)
+        async def alerting_monitoring_loop():
+            while not _state._shutdown_requested:
+                try:
+                    await asyncio.sleep(30)
+                    await alerting_engine.run_monitoring_cycle()
+                    
+                    # Check churn alert (trades per hour)
+                    now = time.time()
+                    # Clean old timestamps
+                    _state.trade_timestamps = [ts for ts in _state.trade_timestamps if now - ts < 3600]
+                    trades_last_hour = len(_state.trade_timestamps)
+                    await alerting_engine.check_churn_alert(trades_last_hour)
+                    
+                    # Check exchange failure alert
+                    if _state.exchange_failure_count > 0:
+                        await alerting_engine.check_exchange_failure_alert(
+                            f"Consecutive failures: {_state.exchange_failure_count}",
+                            _state.exchange_failure_count
+                        )
+                        
+                except Exception as e:
+                    logger.error(f"[ALERTING] Monitoring cycle error: {e}")
+                    await asyncio.sleep(10)
+
+        alerting_task = asyncio.create_task(alerting_monitoring_loop(), name="alerting")
+        active_tasks.add(alerting_task)
+        alerting_task.add_done_callback(_on_task_done)
+        logger.info("Alerting engine monitoring started")
+
+        # Main trading loop
         logger.info(f"Bot initialization complete. Starting stateless REST polling loop for {settings.SYMBOLS} (interval: {settings.LOOP_INTERVAL_SEC}s).")
 
         try:
@@ -1617,6 +1659,18 @@ async def run_trading_bot() -> None:
                 # Fetch all latest bars concurrently instead of sequentially
                 bar_tasks = {symbol: _state.ex.get_latest_bar(symbol) for symbol in settings.SYMBOLS}
                 bar_results = await asyncio.gather(*bar_tasks.values(), return_exceptions=True)
+
+                # Track exchange failures
+                any_bar_success = False
+                for bar_result in bar_results:
+                    if not isinstance(bar_result, Exception) and not bar_result.is_empty():
+                        any_bar_success = True
+                        break
+                
+                if any_bar_success:
+                    _state.exchange_failure_count = 0
+                else:
+                    _state.exchange_failure_count += 1
 
                 now_ts = time.time()
                 expired = [k for k, v in _state.cooldowns.items() if v < now_ts]

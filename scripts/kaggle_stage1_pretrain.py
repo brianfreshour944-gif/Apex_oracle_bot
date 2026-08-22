@@ -31,7 +31,7 @@ def run_script(script_path: str):
         logger.error(f"Failed to execute {script_path}. Error: {e}")
         return False
 
-def main():
+def main() -> int:
     logger.info("=====================================================")
     logger.info("STAGE 1: HISTORICAL PRE-TRAINING (OFFLINE)")
     logger.info("=====================================================")
@@ -80,6 +80,7 @@ def main():
     logger.info("=====================================================")
     logger.info("STAGE 1 COMPLETE. Ready for Stage 2 (Backtest Learning).")
     logger.info("=====================================================")
+    return 0
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

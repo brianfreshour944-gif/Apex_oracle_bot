@@ -190,7 +190,7 @@ def train_candidate(name, config, X_tr, y_tr, X_va, y_va, n_feat, device):
     model.load_state_dict(best_state)
     return model
 
-def main():
+def main() -> int:
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     client = _get_data_client()
     
@@ -310,4 +310,4 @@ def main():
         log.error(f"Failed to send telegram alert: {e}")
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

@@ -10,7 +10,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')
 
 from src.config import settings
 
-def main():
+def main() -> int:
     db_path = settings.DATABASE_URL
     print(f"Connecting to database: {db_path}")
     
@@ -145,6 +145,7 @@ def main():
 
     except Exception as e:
         print(f"Error during analysis: {e}")
+        return 1
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

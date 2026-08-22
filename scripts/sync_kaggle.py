@@ -129,9 +129,9 @@ def download_models():
     subprocess.run(cmd, capture_output=True, text=True)
     logger.info("✅ Models successfully downloaded and synced to local environment!")
 
-def main():
+def main() -> int:
     if not ensure_kaggle_api():
-        return
+        return 1
         
     logger.info("=========================================")
     logger.info("🚀 Initiating Kaggle MLOps Nightly Sync")
@@ -142,6 +142,7 @@ def main():
     download_models()
     
     logger.info("🎉 Nightly Research Pipeline fully synchronized.")
+    return 0
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

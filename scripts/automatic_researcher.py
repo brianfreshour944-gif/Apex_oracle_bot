@@ -57,7 +57,7 @@ async def run_experiment(symbol: str, config: Dict[str, Any], seed: int = 42) ->
         for k, v in originals.items():
             setattr(settings, k, v)
 
-async def main():
+async def main() -> int:
     logger.info("Starting Automatic Research Cycle")
     
     symbol = "BTC/USD"
@@ -140,6 +140,7 @@ async def main():
                 f.write(f"- **Max Drawdown:** {imp['max_dd']:.2f}%\n\n")
                 
     logger.info(f"Research cycle complete. Report generated at {report_path}")
+    return 0
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    sys.exit(asyncio.run(main()))

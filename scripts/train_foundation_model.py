@@ -79,7 +79,7 @@ def extract_sequences(df, features_cols):
         
     return np.array(X), np.array(y)
 
-def main():
+def main() -> int:
     logger.info("Initializing Stage 1 Foundation Training...")
     os.makedirs(MODELS_DIR, exist_ok=True)
     
@@ -221,6 +221,7 @@ def main():
                 
     logger.info(f"✅ Foundation Pre-Training Complete. Best Val Acc: {best_val_acc:.2f}%.")
     logger.info("The live bot and retraining pipeline are now ready to operate.")
+    return 0
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

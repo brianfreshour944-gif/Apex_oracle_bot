@@ -15,6 +15,7 @@ from typing import Dict, Any, Optional
 
 from src.config import settings
 from src.logging_config import get_logger
+from src.alerts import AlertingEngine
 
 from .models import CommitteeResult, BrainVote
 from .adaptive_meta import AdaptiveMetaLearner
@@ -29,6 +30,9 @@ from .decision_gate import check_decision_source_gate, GateResult
 from src.ood_discriminator import get_ood_discriminator, check_ood_and_override
 
 logger = get_logger("committee")
+
+# Alerting engine for brain failure notifications
+_alerting_engine = AlertingEngine()
 
 # Default fallback if symbol lacks optimized data
 DEFAULT_SCORE_THRESHOLD = settings.DEFAULT_SCORE_THRESHOLD
@@ -244,6 +248,8 @@ async def run_committee(symbol: str, price: float, signal: Dict[str, Any]) -> Co
         if isinstance(result, Exception):
             brain_name = brain_names[i]
             logger.warning(f"Brain '{brain_name}' failed: {result}. Using fallback.")
+            # Alert on brain failure
+            await _alerting_engine.check_brain_failure_alert(brain_name, str(result))
             # Create a fallback vote for failed brain
             fallback_vote = BrainVote(
                 name=brain_names[i],

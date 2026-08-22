@@ -34,7 +34,7 @@ def run_script(script_path: str):
         logger.error(f"Failed to execute {script_path}. Error: {e}")
         return False
 
-def main():
+def main() -> int:
     logger.info("=====================================================")
     logger.info(f"STAGE 3: NIGHTLY LIVE LEARNING PIPELINE - {datetime.now()}")
     logger.info("=====================================================")
@@ -75,6 +75,7 @@ def main():
     logger.info("=====================================================")
     logger.info("STAGE 3 COMPLETE. Nightly adaptation finished successfully.")
     logger.info("=====================================================")
+    return 0
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
