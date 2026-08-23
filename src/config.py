@@ -110,6 +110,13 @@ class TradingBotSettings(BaseSettings):
         description="Daily stop loss limit",
         lt=0
     )
+    KILLSWITCH_CHECK_INTERVAL_SEC: float = Field(
+        default=5.0,
+        description="How often monitor_killswitch polls account status. Each "
+                    "check is a full Alpaca round-trip, so this is the worst-case "
+                    "detection lag for a drawdown/daily-loss breach.",
+        gt=0
+    )
 
     # --- Strategy Specific Parameters ---
     PROFIT_TARGET_PCT: float = Field(

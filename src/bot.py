@@ -225,8 +225,8 @@ async def _record_committee_outcome(symbol: str, exit_price: float, exit_reason:
                                           if p.grad is not None:
                                               p.data -= lr * p.grad
                                   model.eval()
-                     except Exception:
-                         pass  # Swallow all errors
+                     except Exception as step_e:
+                         logger.debug(f"Online Transformer gradient step failed (non-fatal): {step_e}")
                   
 
                  # Run in background thread, don't await
@@ -947,10 +947,10 @@ async def monitor_killswitch(risk_manager: RiskManager) -> None:
             if exposure_status.get("status") == "exposure_limit_exceeded":
                 logger.warning("Exposure cap breached - reducing")
                 await risk_manager.reduce_exposure_to_cap()
-            await asyncio.sleep(10)
+            await asyncio.sleep(settings.KILLSWITCH_CHECK_INTERVAL_SEC)
         except Exception as e:
             logger.error(f"Killswitch monitor error: {e}")
-            await asyncio.sleep(10)
+            await asyncio.sleep(settings.KILLSWITCH_CHECK_INTERVAL_SEC)
 
 
 async def run_periodic_analyzer() -> None:
