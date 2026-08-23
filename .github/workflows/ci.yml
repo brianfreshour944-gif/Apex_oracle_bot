@@ -25,7 +25,7 @@ jobs:
 
       - name: Install Dependencies
         run: |
-          uv pip install --system -r requirements.txt
+          uv pip install --system --break-system-packages -r requirements.txt
 
       - name: Run Ruff Linter
         run: |
