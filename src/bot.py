@@ -1431,6 +1431,10 @@ async def run_trading_bot() -> None:
         logger.info(f"Symbols: {settings.SYMBOLS}")
         logger.info("=================================")
 
+        # Start API server FIRST so healthcheck passes during initialization
+        await start_fastapi_server_async()
+        logger.info("FastAPI server started")
+
         # Kick off the transformer model/scaler load in the background as
         # early as possible. Measured cold-load cost: ~5-13s (dominated by
         # `import torch` ~7-8s and joblib.load() pulling in a cold sklearn
@@ -1491,10 +1495,6 @@ async def run_trading_bot() -> None:
         # Initialize AlertingEngine
         alerting_engine = AlertingEngine(risk_manager=_state.risk_manager, exchange=_state.ex)
         logger.info("Alerting engine initialized")
-
-        # Start API server
-        await start_fastapi_server_async()
-        logger.info("FastAPI server started")
 
         # Make sure the model warmup (fired above) has actually finished
         # before we start evaluating live signals. By this point it has
