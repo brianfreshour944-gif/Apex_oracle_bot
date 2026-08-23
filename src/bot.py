@@ -284,13 +284,13 @@ async def _record_committee_outcome(symbol: str, exit_price: float, exit_reason:
                 return_pct=return_pct
             )
 
-        # Ã¢â€�?â‚¬Ã¢â€�?â‚¬ Trigger Causal Attribution Ã¢â€�?â‚¬Ã¢â€�?â‚¬
+        # ─── Trigger Causal Attribution ───
         async def _run_attribution():
             try:
                 from src.attribution import analyze_closed_trade
                 res = await analyze_closed_trade(snap["decision_id"])
                 if res:
-                    logger.info(f"Ã°Å¸Â§Â  Causal Attribution for {symbol} ({action}):")
+                    logger.info(f"🧠 Causal Attribution for {symbol} ({action}):")
                     logger.info(f"   Success Factors: {res.get('success_factors')}")
                     logger.info(f"   Key Signals: {res.get('key_signals')}")
                     logger.info(f"   MVP Member: {res.get('mvp_member')}")
@@ -298,7 +298,7 @@ async def _record_committee_outcome(symbol: str, exit_price: float, exit_reason:
                     logger.info(f"   Lessons: {res.get('lessons_learned')}")
                     
                     msg = (
-                        f"Ã°Å¸Â§Â  <b>Trade Attribution: {symbol} ({action})</b>\n"
+                        f"🧠 <b>Trade Attribution: {symbol} ({action})</b>\n"
                         f"PnL: ${realized_pnl:.2f}\n"
                         f"<i>{res.get('success_factors')}</i>\n\n"
                         f"<b>MVP:</b> {res.get('mvp_member')}\n"
@@ -503,7 +503,7 @@ async def process_signal_for_symbol(symbol: str, current_price: float, risk_mana
                         client_order_id=client_order_id,
                     )
                     logger.info(f"Trailing Stop Executed: {symbol}")
-                    await send_telegram_alert(f"ð <b>Trailing Stop Triggered</b>\nSymbol: {symbol}\nClosed {qty} @ ${current_price:.2f}")
+                    await send_telegram_alert(f"🔔 <b>Trailing Stop Triggered</b>\nSymbol: {symbol}\nClosed {qty} @ ${current_price:.2f}")
                     _state.cooldowns[symbol] = time.time() + settings.COOLDOWN_SECONDS_BUY
                     # Reset position pyramid/scale-in tracking on close
                     _state.position_adds.pop(symbol, None)
@@ -525,11 +525,11 @@ async def process_signal_for_symbol(symbol: str, current_price: float, risk_mana
             if signal["action"] == "close":
                 pass # proceed directly to close logic below
             else:
-                # Ã¢â€�?â‚¬Ã¢â€�?â‚¬ 5-BRAIN ENSEMBLE COMMITTEE EVALUATION Ã¢â€�?â‚¬Ã¢â€�?â‚¬
+                # ─── 5-BRAIN ENSEMBLE COMMITTEE EVALUATION ───
                 from src.committee.committee import run_committee
                 committee_result = await run_committee(symbol, current_price, signal)
     
-                # Ã¢â€�?â‚¬Ã¢â€�?â‚¬ BUILD REGIME DASHBOARD Ã¢â€�?â‚¬Ã¢â€�?â‚¬
+                # ─── BUILD REGIME DASHBOARD ───
                 dashboard = []
                 dashboard.append("==============================")
                 dashboard.append(f"{symbol}")
@@ -588,7 +588,7 @@ async def process_signal_for_symbol(symbol: str, current_price: float, risk_mana
                 signal["confidence"] = committee_result.score
     
             if signal["action"] in ["buy", "sell"]:
-                # Ã¢â€�?â‚¬Ã¢â€�?â‚¬ REGIME SWITCH CHECK (Only for ENTRY, not EXIT) Ã¢â€�?â‚¬Ã¢â€�?â‚¬
+                # ─── REGIME SWITCH CHECK (Only for ENTRY, not EXIT) ───
                 if signal["action"] == "buy":
                     if regime_flag is None:
                         regime_flag = read_regime_flag()
@@ -600,7 +600,7 @@ async def process_signal_for_symbol(symbol: str, current_price: float, risk_mana
                         print("\n".join(dashboard), flush=True)
                         return
     
-                # Ã¢â€�?â‚¬Ã¢â€�?â‚¬ BANNED SYMBOLS CHECK Ã¢â€�?â‚¬Ã¢â€�?â‚¬
+                # ─── BANNED SYMBOLS CHECK ───
                 if banned_symbols is None:
                     banned = get_banned_symbols()
                 else:
@@ -697,7 +697,7 @@ async def process_signal_for_symbol(symbol: str, current_price: float, risk_mana
                 committee_mult = getattr(committee_result, "size_multiplier", 1.0)
                 position_size = position_size * committee_mult
                 position_size = round(position_size, 6)
-                logger.info(f"Ã°Å¸â€œÅ  Applied Committee Sizing Multiplier ({committee_mult:.2f}x based on score {committee_result.score:.2f}) Ã¢â€ â€™ Final Qty: {position_size}")
+                logger.info(f"📊 Applied Committee Sizing Multiplier ({committee_mult:.2f}x based on score {committee_result.score:.2f}) → Final Qty: {position_size}")
     
                 # Atomically check and reserve exposure to prevent a race condition
                 # where concurrently-evaluated symbols could each pass an individual
@@ -839,7 +839,7 @@ async def process_signal_for_symbol(symbol: str, current_price: float, risk_mana
 
                 logger.info(f"[TRADE] Order executed: {signal['action'].upper()} {position_size} {symbol} @ ${current_price:.2f}")
                 logger.debug(f"[TRADE] Order result: {order_result}")
-                await send_telegram_alert(f"Ã°Å¸â€œË† <b>Order Executed</b>\nSymbol: {symbol}\nAction: {signal['action'].upper()}\nQty: {position_size}\nPrice: ${current_price:.2f}")
+                await send_telegram_alert(f"📈 <b>Order Executed</b>\nSymbol: {symbol}\nAction: {signal['action'].upper()}\nQty: {position_size}\nPrice: ${current_price:.2f}")
     
                 # Persist committee decision snapshot for the adaptive meta-learner
                 # (fail-safe; closed out with realized PnL when the position exits).
@@ -904,7 +904,7 @@ async def process_signal_for_symbol(symbol: str, current_price: float, risk_mana
                     
                     logger.info(f"[TRADE] Position closed: {symbol} (was {qty}) - reason: {signal.get('reason', 'unknown')}")
                     logger.debug(f"[TRADE] Close order result: {order_result}")
-                    await send_telegram_alert(f"ð <b>Position Closed</b>\nSymbol: {symbol}\nReason: {signal.get('reason', 'unknown')}")
+                    await send_telegram_alert(f"✅ <b>Position Closed</b>\nSymbol: {symbol}\nReason: {signal.get('reason', 'unknown')}")
                     _state.cooldowns[symbol] = time.time() + settings.COOLDOWN_SECONDS_BUY
                     # Reset position pyramid/scale-in tracking on close
                     _state.position_adds.pop(symbol, None)
@@ -1569,7 +1569,7 @@ async def run_trading_bot() -> None:
         # Helper: log any unhandled exception from a background task before
         # removing it from active_tasks. Without this, a crashing killswitch /
         # heartbeat / analyzer silently disappears with no log entry and never
-        # restarts Ã¢â‚¬â€�? leaving safety mechanisms offline.
+        # restarts -- leaving safety mechanisms offline.
         def _on_task_done(task: asyncio.Task) -> None:
             active_tasks.discard(task)
             if not task.cancelled():
