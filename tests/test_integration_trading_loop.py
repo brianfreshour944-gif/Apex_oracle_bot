@@ -315,5 +315,57 @@ class TestGracefulShutdown:
         assert True  # Placeholder
 
 
+class TestSameRegimePositionCounting:
+    """Tests for _count_same_regime_open_positions, the regime-clustering
+    proxy used to cap correlated exposure (real return-series correlation
+    isn't wired up anywhere live -- see calculate_position_size's unused
+    returns_matrix parameter)."""
+
+    def _make_strategy(self, regime_by_symbol):
+        import time
+        strat = MagicMock()
+        strat._regime_cache = {
+            sym: (time.monotonic(), {"regime": regime})
+            for sym, regime in regime_by_symbol.items()
+        }
+        return strat
+
+    def test_counts_matching_regime_only(self):
+        from src.bot import _count_same_regime_open_positions
+        strat = self._make_strategy({
+            "BTC/USD": "high_volatility",
+            "ETH/USD": "high_volatility",
+            "SOL/USD": "sideways",
+            "DOGE/USD": "high_volatility",
+        })
+        positions = [
+            {"symbol": "BTCUSD"}, {"symbol": "ETHUSD"}, {"symbol": "SOLUSD"},
+        ]
+        count = _count_same_regime_open_positions("DOGE/USD", positions, strat)
+        assert count == 2  # BTC + ETH, not SOL
+
+    def test_excludes_candidate_itself(self):
+        from src.bot import _count_same_regime_open_positions
+        strat = self._make_strategy({"BTC/USD": "trending", "ETH/USD": "trending"})
+        positions = [{"symbol": "BTCUSD"}, {"symbol": "ETHUSD"}]
+        # BTC/USD is itself already open and is the "candidate" here -- must
+        # not count itself, only the other trending position (ETH).
+        assert _count_same_regime_open_positions("BTC/USD", positions, strat) == 1
+
+    def test_no_cached_regime_for_candidate_returns_zero(self):
+        from src.bot import _count_same_regime_open_positions
+        strat = self._make_strategy({"BTC/USD": "trending"})
+        positions = [{"symbol": "BTCUSD"}]
+        # DOGE/USD has no cache entry -> candidate_regime is None -> can't
+        # meaningfully compare, must return 0 rather than error or guess.
+        assert _count_same_regime_open_positions("DOGE/USD", positions, strat) == 0
+
+    def test_empty_positions_or_missing_strategy_is_safe(self):
+        from src.bot import _count_same_regime_open_positions
+        strat = self._make_strategy({"BTC/USD": "trending"})
+        assert _count_same_regime_open_positions("BTC/USD", [], strat) == 0
+        assert _count_same_regime_open_positions("BTC/USD", [{"symbol": "BTCUSD"}], None) == 0
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

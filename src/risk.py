@@ -1,6 +1,7 @@
 """Modern risk management with position sizing and killswitch logic."""
 
 import asyncio
+import math
 import threading
 import time
 import numpy as np
@@ -32,6 +33,15 @@ _TRAILING_REGIME_MULTIPLIERS = {
     "sideways":        (0.8, 0.8),  # lock in gains faster, trends don't persist
     "mean_reverting":  (0.8, 0.8),
 }
+
+# Correlation isn't actually wired up anywhere live (calculate_position_size's
+# returns_matrix parameter has no real caller), so this uses regime as a cheap,
+# already-available proxy: symbols currently classified in the same regime
+# tend to move together. Cap how much of the position-count budget can pile
+# into one regime cluster instead of requiring real return-series correlation.
+# floor() (not ceil()) so this has a real effect even at small MAX_OPEN_POSITIONS
+# values like the current default of 3 -- ceil(3*0.67)=3 (no-op), floor=2.
+_MAX_SAME_REGIME_FRACTION = 0.67
 
 class RiskManager:
     """Modern risk management with position sizing and drawdown protection."""
@@ -588,7 +598,12 @@ class RiskManager:
             del self._reserved_exposure[idx]
             logger.debug(f"Released largest reserved exposure: ${notional:.2f}")
 
-    async def reserve_position_slot(self, symbol: str, open_position_count: int) -> Tuple[bool, str]:
+    async def reserve_position_slot(
+        self,
+        symbol: str,
+        open_position_count: int,
+        same_regime_open_count: int = 0,
+    ) -> Tuple[bool, str]:
         """Atomically check and reserve a new-position slot against MAX_OPEN_POSITIONS.
 
         Call this once per symbol, only for a genuinely NEW entry (not a
@@ -602,6 +617,11 @@ class RiskManager:
         or after a successful order (the next cycle's fresh position count
         will reflect it from then on) -- same lifecycle as
         check_and_reserve_exposure/release_reserved_exposure.
+
+        `same_regime_open_count` (default 0, a no-op) is the number of
+        currently open positions classified in the same regime as `symbol` --
+        see _MAX_SAME_REGIME_FRACTION. Caps how concentrated the portfolio
+        can get in one regime cluster, independent of the overall count cap.
         """
         async with self._exposure_lock:
             now = datetime.now(timezone.utc)
@@ -619,6 +639,15 @@ class RiskManager:
                     f"reserved={reserved_count} cap={settings.MAX_OPEN_POSITIONS}"
                 )
                 return False, "max_open_positions_would_be_exceeded"
+
+            same_regime_cap = max(1, math.floor(settings.MAX_OPEN_POSITIONS * _MAX_SAME_REGIME_FRACTION))
+            if same_regime_open_count >= same_regime_cap:
+                logger.warning(
+                    f"Position slot reservation denied for {symbol}: {same_regime_open_count} open "
+                    f"position(s) already share its regime (cluster cap {same_regime_cap})"
+                )
+                return False, "same_regime_cluster_cap_reached"
+
             self._reserved_new_position_symbols[symbol] = now
             return True, "ok"
 

@@ -105,6 +105,38 @@ def test_position_size_tapers_at_deep_drawdown():
     assert abs((size_deep / size_normal) - 0.25) < 0.001
 
 
+@pytest.mark.asyncio
+async def test_reserve_position_slot_same_regime_cluster_cap():
+    """Same-regime clustering is capped independently of (and can be
+    tighter than) the overall MAX_OPEN_POSITIONS count cap -- regime is a
+    cheap proxy for correlated exposure since real return-series
+    correlation isn't wired up anywhere live."""
+    from src.config import settings
+    settings.MAX_OPEN_POSITIONS = 3  # cluster cap = floor(3*0.67) = 2
+
+    rm = RiskManager(AsyncMock())
+    # 2 open positions already share this regime; overall count (2 open + 0
+    # reserved = 2 < 3) would pass, but the cluster cap should reject it.
+    ok, reason = await rm.reserve_position_slot("SOL/USD", open_position_count=2, same_regime_open_count=2)
+    assert not ok and reason == "same_regime_cluster_cap_reached"
+
+    # A different-regime entry with the same open_position_count is unaffected.
+    rm2 = RiskManager(AsyncMock())
+    ok2, reason2 = await rm2.reserve_position_slot("SOL/USD", open_position_count=2, same_regime_open_count=0)
+    assert ok2
+
+
+@pytest.mark.asyncio
+async def test_reserve_position_slot_same_regime_default_is_noop():
+    """Omitting same_regime_open_count (default 0) must be byte-identical
+    to explicitly passing 0 -- regression guard for existing callers."""
+    rm1 = RiskManager(AsyncMock())
+    result1 = await rm1.reserve_position_slot("BTC/USD", open_position_count=0)
+    rm2 = RiskManager(AsyncMock())
+    result2 = await rm2.reserve_position_slot("BTC/USD", open_position_count=0, same_regime_open_count=0)
+    assert result1 == result2
+
+
 def test_trailing_stop_no_position():
     """When qty=0 (no position), trailing stop returns 'hold' or 'close'."""
     rm = RiskManager(AsyncMock())
