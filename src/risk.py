@@ -117,6 +117,14 @@ class RiskManager:
             cash = float(account.get("cash", 0))
             portfolio_value = float(account.get("portfolio_value", 0))
 
+            if not np.isfinite(equity) or equity <= 0:
+                logger.critical(f"Corrupted equity read from exchange: {equity!r}. Refusing to trade until this clears.")
+                return {
+                    "status": "error",
+                    "error": f"non-finite or non-positive equity: {equity!r}",
+                    "action": "stand_aside",
+                }
+
             # Update peak equity for drawdown calculation (protected by lock)
             async with self._equity_lock:
                 if equity > self.peak_equity:
@@ -337,6 +345,10 @@ class RiskManager:
         Handles both long and short positions.
         """
         if not settings.TRAILING_STOP_ENABLED or avg_entry_price <= 0:
+            return "hold"
+
+        if not np.isfinite(current_price) or current_price <= 0:
+            logger.warning(f"[{symbol}] check_trailing_stop got a non-finite price ({current_price!r}); skipping this check.")
             return "hold"
 
         is_long = float(qty) > 0

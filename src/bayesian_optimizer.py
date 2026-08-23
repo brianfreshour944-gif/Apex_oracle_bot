@@ -600,6 +600,8 @@ async def run_bayesian_optimization_cycle() -> None:
 
 def apply_best_params_to_live() -> None:
     """Apply best-found parameters to live components."""
+    from src.committee.committee import get_meta_learner
+
     meta_opt = get_meta_learner_optimizer()
     learner = get_meta_learner()
     

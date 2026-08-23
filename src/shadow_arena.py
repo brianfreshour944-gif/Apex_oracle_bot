@@ -91,6 +91,7 @@ def _invalidate_candidates_cache():
     _candidates_cache_mtime = 0.0
 
 def get_candidates():
+    global _candidates_cache_mtime
     if not _TORCH_AVAILABLE:
         return {}
 

@@ -333,6 +333,10 @@ class AlertingEngine:
             key=f"system:{component}",
         )
     
+    async def check_brain_failure_alert(self, brain_name: str, error: str) -> None:
+        """Alert when a committee brain raises during evaluation."""
+        await self.alert_system_health(brain_name, "failed", {"error": error})
+
     async def run_monitoring_cycle(self) -> None:
         """Periodic check of exposure and drawdown against risk_manager state.
 

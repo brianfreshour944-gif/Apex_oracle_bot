@@ -6,6 +6,7 @@ import os as _os
 import sys
 import time
 import traceback
+import numpy as np
 from datetime import datetime, timezone
 from typing import Dict, Any, Optional
 
