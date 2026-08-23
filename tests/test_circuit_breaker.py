@@ -141,6 +141,80 @@ class TestCircuitBreakerIntegration:
 
             assert exchange.circuit_breaker.state == CircuitState.OPEN
 
+    @pytest.mark.asyncio
+    async def test_get_account_trips_breaker_via_real_method_call(self):
+        """
+        Regression test: self.circuit_breaker was created in __init__ but no
+        AlpacaExchange method ever routed its Alpaca call through
+        self.circuit_breaker.call(...), so failures never actually reached
+        it -- the breaker existed but was permanently inert. This calls the
+        real get_account() method (not circuit_breaker.call() directly, the
+        way the pre-existing test above does) and confirms repeated
+        failures trip it.
+
+        get_account uses the rate-limit-only retry predicate, so a plain
+        RuntimeError isn't retried internally -- each call below is exactly
+        one real (mocked) attempt, no backoff sleeps involved.
+        """
+        from src.exchange import AlpacaExchange
+
+        with patch.object(AlpacaExchange, '__init__', lambda self: None):
+            exchange = AlpacaExchange()
+            exchange.circuit_breaker = CircuitBreaker("test_get_account", failure_threshold=2, open_seconds=60)
+            exchange.trading_client = MagicMock()
+            exchange.trading_client.get_account = MagicMock(side_effect=RuntimeError("API down"))
+
+            for _ in range(2):
+                with pytest.raises(RuntimeError):
+                    await exchange.get_account()
+
+            assert exchange.circuit_breaker.state == CircuitState.OPEN
+
+            # Once OPEN, a further call must fail fast WITHOUT even
+            # attempting the underlying client call.
+            calls_before = exchange.trading_client.get_account.call_count
+            with pytest.raises(RuntimeError, match="is OPEN"):
+                await exchange.get_account()
+            assert exchange.trading_client.get_account.call_count == calls_before
+
+    @pytest.mark.asyncio
+    async def test_get_positions_trips_breaker_via_real_method_call(self):
+        """
+        get_positions uses the "retry unless circuit is open" predicate
+        (it used to retry on ANY exception before this fix), so a single
+        call's own internal tenacity retries are enough to trip the breaker
+        -- failure_threshold=1 keeps this to one ~2s backoff sleep rather
+        than tenacity's full 5-attempt exponential schedule.
+        """
+        from src.exchange import AlpacaExchange
+
+        with patch.object(AlpacaExchange, '__init__', lambda self: None):
+            exchange = AlpacaExchange()
+            exchange.circuit_breaker = CircuitBreaker("test_get_positions", failure_threshold=1, open_seconds=60)
+            exchange.trading_client = MagicMock()
+            exchange.trading_client.get_all_positions = MagicMock(side_effect=RuntimeError("API down"))
+
+            with pytest.raises(RuntimeError):
+                await exchange.get_positions()
+
+            assert exchange.circuit_breaker.state == CircuitState.OPEN
+
+    @pytest.mark.asyncio
+    async def test_create_order_trips_breaker_via_real_method_call(self):
+        """Same as test_get_positions above, for create_order's submit_order call."""
+        from src.exchange import AlpacaExchange
+
+        with patch.object(AlpacaExchange, '__init__', lambda self: None):
+            exchange = AlpacaExchange()
+            exchange.circuit_breaker = CircuitBreaker("test_create_order", failure_threshold=1, open_seconds=60)
+            exchange.trading_client = MagicMock()
+            exchange.trading_client.submit_order = MagicMock(side_effect=RuntimeError("API down"))
+
+            with pytest.raises(RuntimeError):
+                await exchange.create_order("BTC/USD", 1.0, "buy", confirm=False)
+
+            assert exchange.circuit_breaker.state == CircuitState.OPEN
+
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

@@ -40,6 +40,31 @@ def _retry_on_rate_limit(exception: Exception) -> bool:
     return _is_rate_limit_error(exception)
 
 
+def _is_circuit_open_error(exception: Exception) -> bool:
+    """True if `exception` is the RuntimeError CircuitBreaker.call() raises
+    when the circuit is OPEN (message: "Circuit '<name>' is OPEN - calls
+    blocked")."""
+    return isinstance(exception, RuntimeError) and "is OPEN" in str(exception)
+
+
+def _retry_unless_circuit_open(exception: Exception) -> bool:
+    """Retry predicate for methods that previously retried on ANY exception
+    (get_positions, get_order, get_orders, create_order) now that their
+    calls are routed through self.circuit_breaker.
+
+    A circuit-open signal means the breaker has already decided this
+    dependency is down -- retrying it just re-blocks for another 2-30s of
+    exponential backoff before failing anyway, which defeats the point of
+    having a circuit breaker (fail fast instead of piling onto a known-bad
+    dependency). Every other exception still retries exactly as before.
+
+    get_account/get_bars/get_latest_bar don't need this: they already use
+    _retry_on_rate_limit, which only returns True for a 429 APIError, so a
+    circuit-open RuntimeError there already stops retrying immediately.
+    """
+    return not _is_circuit_open_error(exception)
+
+
 def _rate_limit_wait(retry_state: RetryCallState) -> float:
     """Wait strategy that respects the Retry-After header when available,
     otherwise falls back to exponential backoff.
@@ -146,8 +171,8 @@ class AlpacaExchange:
         """Get account information (formatted to dict for compatibility)."""
         if not self.trading_client:
             await self.load()
-            
-        account = await asyncio.to_thread(self.trading_client.get_account)
+
+        account = await self.circuit_breaker.call(asyncio.to_thread, self.trading_client.get_account)
         # Return a dictionary mimicking old JSON response
         return {
             "id": str(account.id),
@@ -208,7 +233,7 @@ class AlpacaExchange:
         )
 
         try:
-            bars_df = await asyncio.to_thread(self.data_client.get_crypto_bars, request_params)
+            bars_df = await self.circuit_breaker.call(asyncio.to_thread, self.data_client.get_crypto_bars, request_params)
             if bars_df.data and symbol in bars_df.data:
                 # Get the list of Bar objects
                 bars = bars_df.data[symbol]
@@ -264,13 +289,13 @@ class AlpacaExchange:
 
         return pl.DataFrame()
 
-    @retry(stop=stop_after_attempt(5), wait=wait_exponential(multiplier=1, min=2, max=30))
+    @retry(retry=retry_if_exception(_retry_unless_circuit_open), stop=stop_after_attempt(5), wait=wait_exponential(multiplier=1, min=2, max=30))
     async def get_positions(self) -> List[Dict[str, Any]]:
         """Get open positions."""
         if not self.trading_client:
             await self.load()
-            
-        positions = await asyncio.to_thread(self.trading_client.get_all_positions)
+
+        positions = await self.circuit_breaker.call(asyncio.to_thread, self.trading_client.get_all_positions)
         result = []
         for p in positions:
             result.append({
@@ -283,13 +308,13 @@ class AlpacaExchange:
             })
         return result
 
-    @retry(stop=stop_after_attempt(5), wait=wait_exponential(multiplier=1, min=2, max=30))
+    @retry(retry=retry_if_exception(_retry_unless_circuit_open), stop=stop_after_attempt(5), wait=wait_exponential(multiplier=1, min=2, max=30))
     async def get_order(self, order_id: str) -> Dict[str, Any]:
         """Fetch order details by order ID."""
         if not self.trading_client:
             await self.load()
-            
-        order = await asyncio.to_thread(self.trading_client.get_order_by_id, order_id)
+
+        order = await self.circuit_breaker.call(asyncio.to_thread, self.trading_client.get_order_by_id, order_id)
         return {
             "id": str(order.id),
             "symbol": str(order.symbol),
@@ -300,7 +325,7 @@ class AlpacaExchange:
             "type": str(order.type.value) if hasattr(order.type, "value") else str(order.type),
         }
 
-    @retry(stop=stop_after_attempt(5), wait=wait_exponential(multiplier=1, min=2, max=30))
+    @retry(retry=retry_if_exception(_retry_unless_circuit_open), stop=stop_after_attempt(5), wait=wait_exponential(multiplier=1, min=2, max=30))
     async def get_orders(
         self,
         status: Optional[str] = None,
@@ -338,7 +363,7 @@ class AlpacaExchange:
             direction="desc",
         )
         
-        orders = await asyncio.to_thread(self.trading_client.get_orders, request)
+        orders = await self.circuit_breaker.call(asyncio.to_thread, self.trading_client.get_orders, request)
         
         results = []
         for order in orders:
@@ -358,7 +383,34 @@ class AlpacaExchange:
             })
         return results
 
-    @retry(stop=stop_after_attempt(5), wait=wait_exponential(multiplier=1, min=2, max=30))
+    async def _find_existing_order_by_client_id(self, client_order_id: str) -> Optional[Dict[str, Any]]:
+        """
+        Look up an order by client_order_id on the exchange. Used by
+        create_order to detect an already-submitted order before letting a
+        retry resubmit it (see the comment there).
+
+        Returns the formatted order dict if found, or None if not found OR
+        the lookup itself failed. Both cases are treated the same
+        (fail safe, not fail closed): this is only trying to catch the
+        common, verifiable "it actually went through" case, not guarantee
+        it always will -- returning None just means create_order falls back
+        to its original behavior of re-raising and letting @retry resubmit.
+        """
+        try:
+            order = await self.circuit_breaker.call(
+                asyncio.to_thread, self.trading_client.get_order_by_client_id, client_order_id
+            )
+        except Exception as e:
+            logger.warning(f"Lookup by client_order_id={client_order_id!r} failed: {e}")
+            return None
+        return {
+            "id": str(order.id),
+            "symbol": str(order.symbol),
+            "qty": float(order.qty) if order.qty else 0.0,
+            "status": str(order.status.value) if hasattr(order.status, "value") else str(order.status),
+        }
+
+    @retry(retry=retry_if_exception(_retry_unless_circuit_open), stop=stop_after_attempt(5), wait=wait_exponential(multiplier=1, min=2, max=30))
     async def create_order(
         self,
         symbol: str,
@@ -408,15 +460,43 @@ class AlpacaExchange:
 
         request = MarketOrderRequest(**order_kwargs)
 
-        order = await asyncio.to_thread(self.trading_client.submit_order, request)
-        order_id = str(order.id)
-
-        order_info = {
-            "id": order_id,
-            "symbol": str(order.symbol),
-            "qty": float(order.qty) if order.qty else 0.0,
-            "status": str(order.status.value) if hasattr(order.status, "value") else str(order.status),
-        }
+        try:
+            order = await self.circuit_breaker.call(asyncio.to_thread, self.trading_client.submit_order, request)
+            order_id = str(order.id)
+            order_info = {
+                "id": order_id,
+                "symbol": str(order.symbol),
+                "qty": float(order.qty) if order.qty else 0.0,
+                "status": str(order.status.value) if hasattr(order.status, "value") else str(order.status),
+            }
+        except Exception as submit_err:
+            # submit_order can fail in a way that's ambiguous about whether
+            # Alpaca actually processed the order server-side -- e.g. the
+            # HTTP response was lost to a network error after the order was
+            # already accepted. The outer @retry would otherwise blindly
+            # resubmit with the same client_order_id; if Alpaca rejects that
+            # as a duplicate instead of deduping it silently, the caller
+            # sees a failure for a trade that actually went through, and
+            # never learns its position/exposure state needs updating.
+            #
+            # Before letting @retry resubmit, check whether an order with
+            # this client_order_id already exists on the exchange. Skip the
+            # lookup (and just re-raise) when submit_err is itself a
+            # circuit-open signal: the breaker blocked the call before it
+            # ever reached Alpaca, so nothing could have been submitted.
+            existing = None
+            if client_order_id is not None and not _is_circuit_open_error(submit_err):
+                existing = await self._find_existing_order_by_client_id(client_order_id)
+            if existing is None:
+                raise
+            logger.warning(
+                f"submit_order raised ({submit_err!r}) but an order with "
+                f"client_order_id={client_order_id!r} already exists on the "
+                f"exchange (id={existing['id']}) -- using it instead of "
+                f"letting the retry resubmit a duplicate."
+            )
+            order_id = existing["id"]
+            order_info = existing
 
         # Cache for idempotency
         if client_order_id is not None:
@@ -436,7 +516,7 @@ class AlpacaExchange:
                     logger.info(f"Order {order_id} reached final status: {status}")
                     if status == OrderStatus.FILLED.value or status == "filled":
                         try:
-                            filled_order = await asyncio.to_thread(self.trading_client.get_order_by_id, order_id)
+                            filled_order = await self.circuit_breaker.call(asyncio.to_thread, self.trading_client.get_order_by_id, order_id)
                             order_info["filled_avg_price"] = float(filled_order.filled_avg_price) if filled_order.filled_avg_price else 0.0
                             order_info["filled_qty"] = float(filled_order.filled_qty) if filled_order.filled_qty else 0.0
                             order_info["commission"] = float(filled_order.commission) if filled_order.commission else 0.0
