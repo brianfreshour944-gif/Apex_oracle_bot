@@ -81,7 +81,14 @@ class RiskManager:
         Uses exponential moving average to blend old and new observations.
         """
         if symbol not in self._realized_tx_costs:
-            self._realized_tx_costs[symbol] = {"fee_bps": fee_bps, "slippage_bps": slippage_bps, "spread_bps": spread_bps or 0.0}
+            # spread_bps isn't cleanly derivable from a single fill (no bid/ask
+            # captured at execution time), and the only production caller
+            # (bot.py) never supplies it. Default to the static estimate rather
+            # than 0.0 so total_bps doesn't silently drop the spread cost once
+            # dynamic tracking activates for a symbol -- a future caller that
+            # does have a real spread reading can still override it here.
+            default_spread = spread_bps if spread_bps is not None else getattr(settings, "TX_COST_SPREAD_BPS", DEFAULT_TX_COSTS["spread_bps"])
+            self._realized_tx_costs[symbol] = {"fee_bps": fee_bps, "slippage_bps": slippage_bps, "spread_bps": default_spread}
         else:
             # EMA with alpha=0.3 (moderate adaptation)
             alpha = 0.3
