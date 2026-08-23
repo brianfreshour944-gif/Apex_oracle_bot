@@ -120,6 +120,8 @@ async def _record_committee_outcome(symbol: str, exit_price: float, exit_reason:
         # to prevent stale peak prices from affecting future positions
         if _state.risk_manager is not None:
             _state.risk_manager.peak_prices.pop(symbol, None)
+        if _state.strategy is not None and hasattr(_state.strategy, '_trailing_peaks'):
+            _state.strategy._trailing_peaks.pop(symbol, None)
 
         # Append to the Transformer's live replay buffer, if this trade's
         # entry captured a tensor state. Matches the exact {"tensor": ...,
@@ -227,10 +229,10 @@ async def _record_committee_outcome(symbol: str, exit_price: float, exit_reason:
                          pass  # Swallow all errors
                   
 
-            # Run in background thread, don't await
-            task = asyncio.create_task(asyncio.to_thread(_online_transformer_step), name="transformer_online")
-            _state._background_tasks.add(task)
-            task.add_done_callback(_state._background_tasks.discard)
+                 # Run in background thread, don't await
+                 task = asyncio.create_task(asyncio.to_thread(_online_transformer_step), name="transformer_online")
+                 _state._background_tasks.add(task)
+                 task.add_done_callback(_state._background_tasks.discard)
         except Exception as e:
             logger.debug(f"Online Transformer step skipped (non-fatal): {e}")
 
