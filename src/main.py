@@ -4,7 +4,7 @@ import asyncio
 import sys
 import traceback
 from src.bot import run_trading_bot
-from src.config import settings
+from src.config import settings, redact_database_url
 from src.logging_config import get_logger
 
 logger = get_logger("main")
@@ -15,7 +15,7 @@ def main() -> None:
         logger.info("Starting Apex Oracle Bot v2.0.0")
         logger.info("=================================")
         logger.info("Configuration:")
-        logger.info(f"Database: {settings.DATABASE_URL}")
+        logger.info(f"Database: {redact_database_url(settings.DATABASE_URL)}")
         logger.info(f"Exchange: Alpaca Crypto")
         logger.info("=================================")
 

@@ -2,8 +2,28 @@
 
 from pathlib import Path
 from typing import List, Literal
+from urllib.parse import urlsplit, urlunsplit
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from pydantic import Field, computed_field, field_validator, model_validator
+
+
+def redact_database_url(url: str) -> str:
+    """
+    Return `url` safe to log: any embedded `user:password@` credentials in
+    the netloc are replaced with `***:***`. URLs with no credential segment
+    (e.g. the default `sqlite:///data/bot.db`, or a bare `host:port`) are
+    returned unchanged. Malformed URLs are not raised on -- returned as a
+    fixed placeholder rather than risking a partially-redacted leak.
+    """
+    try:
+        parts = urlsplit(url)
+    except ValueError:
+        return "<unparseable-database-url>"
+    if "@" not in parts.netloc:
+        return url
+    host_part = parts.netloc.rsplit("@", 1)[1]
+    redacted_netloc = f"***:***@{host_part}"
+    return urlunsplit((parts.scheme, redacted_netloc, parts.path, parts.query, parts.fragment))
 
 class TradingBotSettings(BaseSettings):
     """Modern Pydantic Settings V2 configuration with runtime validation."""
@@ -588,7 +608,7 @@ class TradingBotSettings(BaseSettings):
             "================== CONFIGURATION SUMMARY ====================",
             f"Bot Name: {self.BOT_NAME}",
             f"Exchange: Alpaca Crypto (Paper={self.ALPACA_BASE_URL.endswith('paper-api.alpaca.markets')})",
-            f"Database URL: {self.DATABASE_URL}",
+            f"Database URL: {redact_database_url(self.DATABASE_URL)}",
             f"Traded Assets: {self.SYMBOLS} (quote: {self.QUOTE_CURRENCY})",
             f"Risk Per Trade: {self.BASE_RISK_PERCENT*100:.2f}% (Max USD: ${self.MAX_SINGLE_TRADE_USD})",
             f"Max Portfolio Value Cap: ${self.MAX_PORTFOLIO_VALUE} | Max Open Positions: {self.MAX_OPEN_POSITIONS}",
