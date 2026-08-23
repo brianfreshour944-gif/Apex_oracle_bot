@@ -770,49 +770,49 @@ async def process_signal_for_symbol(symbol: str, current_price: float, risk_mana
                         return
                 
                 # Position pyramid/scale-in gates: prevent unlimited re-buying
-                    # of an already-open position without meaningful improvement
-                    if signal["action"] == "buy":
-                        current_position = None
-                        for p in positions:
-                            if p["symbol"].replace("/", "") == symbol.replace("/", ""):
-                                current_position = p
-                                break
+                # of an already-open position without meaningful improvement
+                if signal["action"] == "buy":
+                    current_position = None
+                    for p in positions:
+                        if p["symbol"].replace("/", "") == symbol.replace("/", ""):
+                            current_position = p
+                            break
                     
-                        if current_position is not None:
-                            # There's already a position - check scale-in gates
-                            add_info = _state.position_adds.get(symbol, {"count": 0, "last_add_time": 0.0, "last_add_score": 0.0})
-                            now = time.time()
+                    if current_position is not None:
+                        # There's already a position - check scale-in gates
+                        add_info = _state.position_adds.get(symbol, {"count": 0, "last_add_time": 0.0, "last_add_score": 0.0})
+                        now = time.time()
                             
-                            # Gate 1: Max adds cap
-                            if add_info["count"] >= MAX_POSITION_ADDS:
-                                logger.info(f"[{symbol}] Scale-in vetoed: max adds ({MAX_POSITION_ADDS}) reached (current: {add_info['count']})")
-                                return
+                        # Gate 1: Max adds cap
+                        if add_info["count"] >= MAX_POSITION_ADDS:
+                            logger.info(f"[{symbol}] Scale-in vetoed: max adds ({MAX_POSITION_ADDS}) reached (current: {add_info['count']})")
+                            return
                             
-                            # Gate 2: Minimum time since last add
-                            if now - add_info["last_add_time"] < POSITION_ADD_MIN_SECONDS:
-                                logger.info(f"[{symbol}] Scale-in vetoed: minimum time between adds not met ({now - add_info['last_add_time']:.0f}s < {POSITION_ADD_MIN_SECONDS}s)")
-                                return
+                        # Gate 2: Minimum time since last add
+                        if now - add_info["last_add_time"] < POSITION_ADD_MIN_SECONDS:
+                            logger.info(f"[{symbol}] Scale-in vetoed: minimum time between adds not met ({now - add_info['last_add_time']:.0f}s < {POSITION_ADD_MIN_SECONDS}s)")
+                            return
                             
-                            # Gate 3: Minimum score improvement
-                            committee_score = committee_result.score
-                            if committee_score - add_info["last_add_score"] < POSITION_ADD_MIN_SCORE_INCREASE:
-                                logger.info(f"[{symbol}] Scale-in vetoed: insufficient score improvement ({committee_score:.3f} - {add_info['last_add_score']:.3f} < {POSITION_ADD_MIN_SCORE_INCREASE})")
-                                return
+                        # Gate 3: Minimum score improvement
+                        committee_score = committee_result.score
+                        if committee_score - add_info["last_add_score"] < POSITION_ADD_MIN_SCORE_INCREASE:
+                            logger.info(f"[{symbol}] Scale-in vetoed: insufficient score improvement ({committee_score:.3f} - {add_info['last_add_score']:.3f} < {POSITION_ADD_MIN_SCORE_INCREASE})")
+                            return
                             
-                            # All gates passed - apply size decay
-                            decay_factor = POSITION_ADD_SIZE_DECAY ** add_info["count"]
-                            position_size = round(position_size * decay_factor, 6)
-                            logger.info(f"[{symbol}] Scale-in add #{add_info['count'] + 1}: size decayed by {decay_factor:.2f}x to {position_size}")
+                        # All gates passed - apply size decay
+                        decay_factor = POSITION_ADD_SIZE_DECAY ** add_info["count"]
+                        position_size = round(position_size * decay_factor, 6)
+                        logger.info(f"[{symbol}] Scale-in add #{add_info['count'] + 1}: size decayed by {decay_factor:.2f}x to {position_size}")
                             
-                            # Update tracking
-                            _state.position_adds[symbol] = {
-                                "count": add_info["count"] + 1,
-                                "last_add_time": now,
-                                "last_add_score": committee_score
-                            }
-                        else:
-                            # No existing position - reset tracking
-                            _state.position_adds[symbol] = {"count": 0, "last_add_time": 0.0, "last_add_score": 0.0}
+                        # Update tracking
+                        _state.position_adds[symbol] = {
+                            "count": add_info["count"] + 1,
+                            "last_add_time": now,
+                            "last_add_score": committee_score
+                        }
+                    else:
+                        # No existing position - reset tracking
+                        _state.position_adds[symbol] = {"count": 0, "last_add_time": 0.0, "last_add_score": 0.0}
 
                 # Reserve a new-position slot to prevent multiple concurrently-evaluated
                 # symbols in the same cycle from all passing a stale, cycle-start

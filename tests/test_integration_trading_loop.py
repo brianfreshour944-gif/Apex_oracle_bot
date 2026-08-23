@@ -233,6 +233,58 @@ class TestFullTradingLoop:
         assert call_args.kwargs["side"] == "sell"
         assert call_args.kwargs["qty"] == 0.1
 
+    @pytest.mark.asyncio
+    async def test_scale_in_gates_enforced_without_exposure_scaling(self, mock_exchange, mock_strategy, mock_risk_manager):
+        """
+        Regression test for the position-pyramid safety gates being nested
+        one level too deep -- inside `if approved_notional < notional:` --
+        so they only ran when the order was scaled down due to exposure
+        headroom. In the normal case (full notional approved, no scaling)
+        the bot could pyramid into an existing position with none of
+        MAX_POSITION_ADDS / POSITION_ADD_MIN_SECONDS /
+        POSITION_ADD_MIN_SCORE_INCREASE / POSITION_ADD_SIZE_DECAY applied.
+
+        This constructs exactly the previously-broken case: approved_notional
+        == notional (echoed back by check_and_reserve_exposure regardless of
+        the exact position_size, so this doesn't depend on predicting the
+        committee/regime size multipliers upstream), with the symbol already
+        at MAX_POSITION_ADDS -- and asserts the gate still vetoes the add.
+        """
+        from src.bot import process_signal_for_symbol, _state
+
+        symbol = "BTC/USD"
+        current_price = 50050.0
+
+        # Echo back whatever notional was requested -> approved_notional ==
+        # notional always, i.e. no exposure-headroom scaling ever occurs.
+        async def _approve_in_full(notional, current_exposure=None):
+            return (notional, "ok")
+        mock_risk_manager.check_and_reserve_exposure = AsyncMock(side_effect=_approve_in_full)
+
+        # Already at the MAX_POSITION_ADDS cap (default 2) for this symbol --
+        # a further add must be vetoed regardless of exposure scaling.
+        _state.position_adds[symbol] = {"count": 2, "last_add_time": 0.0, "last_add_score": 0.0}
+        try:
+            existing_position = {"symbol": symbol, "qty": "0.1", "avg_entry_price": 49000.0, "market_value": 5000.0}
+            mock_exchange.get_positions = AsyncMock(return_value=[existing_position])
+
+            await process_signal_for_symbol(
+                symbol=symbol,
+                current_price=current_price,
+                risk_manager=mock_risk_manager,
+                strategy=mock_strategy,
+                ex=mock_exchange,
+                positions=[existing_position],
+                regime_flag=None,
+                banned_symbols=set(),
+            )
+
+            # The MAX_POSITION_ADDS gate must have vetoed this add -- no
+            # order should have been placed.
+            mock_exchange.create_order.assert_not_called()
+        finally:
+            _state.position_adds.pop(symbol, None)
+
 
 class TestCommitteeErrorHandling:
     """Tests for committee error handling."""
