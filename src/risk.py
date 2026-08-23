@@ -556,6 +556,12 @@ class RiskManager:
                 current_exposure -= actual_value
                 results.append({"symbol": symbol, "closed_qty": qty, "order": order_result})
                 logger.warning(f"Closed {symbol} to reduce exposure (was ${market_value:.2f}, actual=${actual_value:.2f})")
+                # Clear stale peak-price tracking for this symbol so a future
+                # re-entry doesn't inherit a leftover peak from this closed
+                # position (same reasoning as _record_committee_outcome's
+                # cleanup for normal closes -- this path bypasses that).
+                self.peak_prices.pop(symbol, None)
+                self._reserved_new_position_symbols.pop(symbol, None)
             logger.warning(f"Exposure reduction complete. New exposure: ${current_exposure:.2f} (cap: ${max_portfolio_abs:.2f})")
             return {"status": "exposure_reduced", "results": results, "final_exposure": current_exposure}
         except Exception as e:
@@ -590,6 +596,12 @@ class RiskManager:
                     "original_qty": qty,
                     "close_order": order_result
                 })
+                # Clear stale peak-price tracking for this symbol so a future
+                # re-entry doesn't inherit a leftover peak from this closed
+                # position (same reasoning as _record_committee_outcome's
+                # cleanup for normal closes -- this path bypasses that).
+                self.peak_prices.pop(symbol, None)
+                self._reserved_new_position_symbols.pop(symbol, None)
 
             logger.critical("ALL POSITIONS LIQUIDATED - KILLSWITCH ACTIVATED")
             return {
