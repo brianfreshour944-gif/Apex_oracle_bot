@@ -849,22 +849,27 @@ async def process_signal_for_symbol(symbol: str, current_price: float, risk_mana
                     logger.error(f"[{symbol}] Order placement failed: {_describe_exception(order_e)}")
                     raise
 
-# Release the reserved exposure now that the order has been
-                # placed successfully -- the actual portfolio value will be
-                # reflected on the next cycle's update_account_status() call.
-                # Deliberately NOT releasing the position-slot reservation here
-                # (unlike exposure): reproduced with a real asyncio race test
-                # that releasing it immediately on success reopens the exact
-                # race reserve_position_slot exists to prevent, for any
-                # sibling symbol whose evaluation reaches the reserve step
-                # later in the SAME cycle -- open_position_count is one shared,
-                # cycle-start snapshot, so a slot freed mid-cycle lets a later
-                # sibling reserve against the same stale count and collectively
-                # exceed MAX_OPEN_POSITIONS. Left to expire via the 30s TTL in
-                # reserve_position_slot instead -- costs a few phantom-reserved
-                # seconds of new-entry throughput after a fill, never a cap
-                # breach.
-                risk_manager.release_reserved_exposure(approved_notional)
+# Deliberately NOT releasing either reservation here on success --
+                # reproduced with real asyncio race tests that releasing
+                # EITHER one immediately on a successful fill reopens the
+                # exact race both reservations exist to prevent, for any
+                # sibling symbol whose evaluation (data fetch, committee
+                # brains, possibly an LLM call) reaches its own reserve step
+                # later in the SAME cycle. `current_exposure` and
+                # `open_position_count` are each one stale, cycle-start
+                # snapshot shared by every concurrently-evaluated symbol; a
+                # reservation freed mid-cycle lets a later sibling reserve
+                # against that same stale snapshot too, and the two
+                # collectively exceed the cap the reservation exists to
+                # enforce (measured: a 3-way race with a $10k exposure cap
+                # and $8k already-stale exposure landed at $13.4k -- 34% over
+                # cap -- when released eagerly on success). Both are instead
+                # left to expire via their own 30s TTL prune (see
+                # check_and_reserve_exposure / reserve_position_slot) --
+                # costs a few phantom-reserved seconds of new-entry
+                # throughput after a fill, never a cap breach. The next
+                # cycle's fresh update_account_status()/open_position_count
+                # will reflect the fill regardless, once the TTL clears it.
 
                 # Track trade for churn alert
                 _state.trade_timestamps.append(time.time())

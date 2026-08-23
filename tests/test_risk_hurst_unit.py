@@ -163,6 +163,35 @@ async def test_reserve_position_slot_survives_fast_sibling_fill_race():
     assert not ok_b and reason_b == "max_open_positions_would_be_exceeded"
 
 
+@pytest.mark.asyncio
+async def test_reserved_exposure_survives_fast_sibling_fill_race():
+    """Same meticulous-audit finding as test_reserve_position_slot_survives_
+    fast_sibling_fill_race, applied to check_and_reserve_exposure /
+    release_reserved_exposure: a reservation must NOT be released just
+    because its own order filled successfully. Releasing on success let a
+    slower-evaluated sibling (reading the same stale current_exposure
+    snapshot) reserve against it too and collectively exceed the portfolio
+    exposure cap within one cycle -- reproduced directly (a 3-way race with
+    an $8k stale exposure and a $10k cap landed at $13.4k, 34% over cap).
+    This asserts the cap holds when callers correctly leave a successful
+    reservation in place."""
+    rm = RiskManager(AsyncMock())
+    rm._get_max_portfolio_cap = lambda: 10000.0
+    stale_exposure = 8000.0  # shared, unchanged snapshot for the whole simulated cycle -> $2000 headroom
+
+    approved_a, reason_a = await rm.check_and_reserve_exposure(1800.0, current_exposure=stale_exposure)
+    assert approved_a == 1800.0 and reason_a == "ok"
+    # Correct caller behavior: symbol A's order fills successfully -- its
+    # reservation is intentionally left in place (no release_reserved_exposure call).
+
+    # A slower-evaluated sibling, still reading the same stale exposure, gets
+    # only the remaining $200 of headroom rather than a second full $1800.
+    approved_b, reason_b = await rm.check_and_reserve_exposure(1800.0, current_exposure=stale_exposure)
+    assert reason_b == "ok"
+    assert approved_b == pytest.approx(200.0, abs=0.01)
+    assert stale_exposure + approved_a + approved_b <= 10000.0 + 1e-6
+
+
 def test_trailing_stop_no_position():
     """When qty=0 (no position), trailing stop returns 'hold' or 'close'."""
     rm = RiskManager(AsyncMock())

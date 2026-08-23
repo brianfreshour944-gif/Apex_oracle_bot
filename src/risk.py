@@ -586,11 +586,20 @@ class RiskManager:
 
     def release_reserved_exposure(self, notional: float) -> None:
         """Release a previously-reserved exposure amount back to the pool.
-        
-        Called when an order fails, is cancelled, or the reserved amount
-        was never actually used. Without this, reserved exposure leaks
-        and permanently blocks new entries even though the actual portfolio
-        value is well under the cap.
+
+        Call this when an order fails, is cancelled, or the reserved amount
+        was never actually used. Do NOT call this after a successful fill --
+        reproduced with a real asyncio race test that doing so reopens the
+        exact race check_and_reserve_exposure exists to prevent: a
+        fast-filling symbol's release mid-cycle lets a slower-evaluated
+        sibling (still reading the same stale `current_exposure` snapshot)
+        reserve against it too, and the two together can exceed the
+        portfolio exposure cap within one cycle (measured: $13.4k landed
+        exposure against a $10k cap, $8k already-stale, 3 concurrent $1.8k
+        reservations racing a release-on-success). A successful reservation
+        is instead left to expire via the 30s TTL prune in
+        check_and_reserve_exposure -- the next cycle's fresh
+        update_account_status() reflects the real fill once that clears it.
         """
         if notional <= 0:
             return
