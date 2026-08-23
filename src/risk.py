@@ -42,6 +42,13 @@ class RiskManager:
         self._reserved_exposure = []  # list of (notional_amount, reserved_at) tuples
         # Transaction cost tracking for dynamic model
         self._realized_tx_costs: Dict[str, Dict[str, float]] = {}  # symbol -> {fee_bps, slippage_bps, spread_bps}
+        # Reserved new-position slots: symbol -> reserved_at. Mirrors
+        # _reserved_exposure's pattern (same lock, same TTL) but for
+        # MAX_OPEN_POSITIONS instead of dollar exposure -- without this,
+        # multiple concurrently-evaluated symbols in the same cycle all see
+        # the same stale, cycle-start position count and can all pass the
+        # naive position-count check simultaneously.
+        self._reserved_new_position_symbols: Dict[str, datetime] = {}
 
     def get_transaction_costs(self, symbol: str) -> Dict[str, float]:
         """Get transaction cost estimates for a symbol.
@@ -483,6 +490,44 @@ class RiskManager:
             idx = max(range(len(self._reserved_exposure)), key=lambda i: self._reserved_exposure[i][0])
             del self._reserved_exposure[idx]
             logger.debug(f"Released largest reserved exposure: ${notional:.2f}")
+
+    async def reserve_position_slot(self, symbol: str, open_position_count: int) -> Tuple[bool, str]:
+        """Atomically check and reserve a new-position slot against MAX_OPEN_POSITIONS.
+
+        Call this once per symbol, only for a genuinely NEW entry (not a
+        scale-in add to an existing position), immediately before placing
+        the order -- mirrors check_and_reserve_exposure's reservation
+        pattern for the same reason: `open_position_count` is a stale,
+        cycle-start snapshot shared by every concurrently-evaluated symbol,
+        so without a reservation, multiple symbols could all see the same
+        under-cap count and all pass simultaneously. Release via
+        release_position_slot() on any failure to place/confirm the order,
+        or after a successful order (the next cycle's fresh position count
+        will reflect it from then on) -- same lifecycle as
+        check_and_reserve_exposure/release_reserved_exposure.
+        """
+        async with self._exposure_lock:
+            now = datetime.now(timezone.utc)
+            # Prune stale reservations (30s TTL, matching _reserved_exposure)
+            self._reserved_new_position_symbols = {
+                s: t for s, t in self._reserved_new_position_symbols.items()
+                if (now - t).total_seconds() < 30
+            }
+            if symbol in self._reserved_new_position_symbols:
+                return False, "position_slot_already_reserved"
+            reserved_count = len(self._reserved_new_position_symbols)
+            if open_position_count + reserved_count >= settings.MAX_OPEN_POSITIONS:
+                logger.warning(
+                    f"Position slot reservation denied for {symbol}: open={open_position_count} "
+                    f"reserved={reserved_count} cap={settings.MAX_OPEN_POSITIONS}"
+                )
+                return False, "max_open_positions_would_be_exceeded"
+            self._reserved_new_position_symbols[symbol] = now
+            return True, "ok"
+
+    def release_position_slot(self, symbol: str) -> None:
+        """Release a previously-reserved new-position slot."""
+        self._reserved_new_position_symbols.pop(symbol, None)
 
     async def reduce_exposure_to_cap(self) -> Dict[str, Any]:
         """Close positions, worst unrealized P&L first, until exposure is

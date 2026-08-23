@@ -752,7 +752,22 @@ async def process_signal_for_symbol(symbol: str, current_price: float, risk_mana
                         else:
                             # No existing position - reset tracking
                             _state.position_adds[symbol] = {"count": 0, "last_add_time": 0.0, "last_add_score": 0.0}
-     
+
+                # Reserve a new-position slot to prevent multiple concurrently-evaluated
+                # symbols in the same cycle from all passing a stale, cycle-start
+                # position-count check and collectively exceeding MAX_OPEN_POSITIONS.
+                # Only applies to a genuinely new entry -- a scale-in add to an
+                # existing position doesn't increase the open-position count.
+                is_new_entry = current_position is None
+                if is_new_entry:
+                    slot_ok, slot_reason = await risk_manager.reserve_position_slot(
+                        symbol, risk_status.get("open_positions", 0)
+                    )
+                    if not slot_ok:
+                        logger.warning(f"[{symbol}] Order vetoed: {slot_reason}")
+                        risk_manager.release_reserved_exposure(approved_notional)
+                        return
+
                 # Place order
                 client_order_id = f"{symbol}_{signal['action']}_{position_size}_{int(time.time())}"
                 try:
@@ -767,13 +782,17 @@ async def process_signal_for_symbol(symbol: str, current_price: float, risk_mana
                     # Release reserved exposure on order failure so the
                     # headroom isn't permanently leaked.
                     risk_manager.release_reserved_exposure(approved_notional)
+                    if is_new_entry:
+                        risk_manager.release_position_slot(symbol)
                     logger.error(f"[{symbol}] Order placement failed: {order_e}")
                     raise
-                
+
 # Release the reserved exposure now that the order has been
                 # placed successfully -- the actual portfolio value will be
                 # reflected on the next cycle's update_account_status() call.
                 risk_manager.release_reserved_exposure(approved_notional)
+                if is_new_entry:
+                    risk_manager.release_position_slot(symbol)
                 
                 # Track trade for churn alert
                 _state.trade_timestamps.append(time.time())

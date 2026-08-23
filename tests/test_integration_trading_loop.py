@@ -74,6 +74,8 @@ class TestFullTradingLoop:
         rm.check_trailing_stop = MagicMock(return_value="hold")
         rm.calculate_position_size = MagicMock(return_value=(0.1, "ok"))
         rm.check_and_reserve_exposure = AsyncMock(return_value=(1000.0, "ok"))
+        rm.reserve_position_slot = AsyncMock(return_value=(True, "ok"))
+        rm.release_position_slot = MagicMock()
         rm.peak_prices = {}
         rm.record_fill_costs = MagicMock()
         return rm
