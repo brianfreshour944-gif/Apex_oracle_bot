@@ -20,6 +20,19 @@ DEFAULT_TX_COSTS = {
     "spread_bps": 2.0,
 }
 
+# Regime -> (activation_multiplier, distance_multiplier) for check_trailing_stop.
+# Unrecognized/None regime always maps to (1.0, 1.0) -- exact match to the
+# static (unscaled) behavior. Starting values, easy to tune once observed.
+_TRAILING_REGIME_MULTIPLIERS = {
+    "high_volatility": (1.5, 1.5),  # wider both ways -- avoid noise-driven stopouts
+    "low_volatility":  (0.6, 0.6),  # tighter -- capture smaller moves when noise is low
+    "trending":        (1.0, 1.3),  # let winners run further, same entry bar
+    "bull":            (1.0, 1.3),
+    "bear":            (1.0, 1.3),
+    "sideways":        (0.8, 0.8),  # lock in gains faster, trends don't persist
+    "mean_reverting":  (0.8, 0.8),
+}
+
 class RiskManager:
     """Modern risk management with position sizing and drawdown protection."""
 
@@ -365,11 +378,38 @@ class RiskManager:
             return 0.0, f"error: {e}"
 
 
-    def check_trailing_stop(self, symbol: str, current_price: float, avg_entry_price: float, qty: float) -> str:
+    def _get_trailing_params(self, regime: Optional[str]) -> Tuple[float, float]:
+        """Scale TRAILING_ACTIVATION_PCT/TRAILING_DISTANCE_PCT by regime.
+
+        Unrecognized or missing regime maps to (1.0, 1.0) -- exact match to
+        the previous static behavior. Enforces the same invariant
+        config.py validates statically for the base settings (distance must
+        stay smaller than activation) since a multiplier combination could
+        otherwise produce a stop that triggers immediately upon activation
+        instead of trailing.
+        """
+        act_mult, dist_mult = _TRAILING_REGIME_MULTIPLIERS.get(regime, (1.0, 1.0))
+        activation = settings.TRAILING_ACTIVATION_PCT * act_mult
+        distance = settings.TRAILING_DISTANCE_PCT * dist_mult
+        if distance >= activation:
+            logger.warning(
+                f"Trailing distance ({distance:.4f}) >= activation ({activation:.4f}) "
+                f"for regime {regime!r} -- clamping distance"
+            )
+            distance = activation * 0.9
+        return activation, distance
+
+    def check_trailing_stop(self, symbol: str, current_price: float, avg_entry_price: float, qty: float, regime: Optional[str] = None) -> str:
         """
         Check if a trailing stop should be activated or triggered.
         Returns: 'close' if triggered, 'hold' otherwise.
         Handles both long and short positions.
+
+        `regime` (if supplied) scales the activation/distance percentages
+        via _TRAILING_REGIME_MULTIPLIERS -- e.g. wider in high_volatility to
+        avoid noise-driven stopouts, tighter in low_volatility/sideways to
+        lock in gains faster. None or an unrecognized regime is a no-op,
+        identical to the previous unscaled behavior.
         """
         if not settings.TRAILING_STOP_ENABLED or avg_entry_price <= 0:
             return "hold"
@@ -378,12 +418,14 @@ class RiskManager:
             logger.warning(f"[{symbol}] check_trailing_stop got a non-finite price ({current_price!r}); skipping this check.")
             return "hold"
 
+        activation_pct, distance_pct = self._get_trailing_params(regime)
+
         is_long = float(qty) > 0
 
         if is_long:
             unrealized_pct = (current_price - avg_entry_price) / avg_entry_price
 
-            if unrealized_pct >= settings.TRAILING_ACTIVATION_PCT:
+            if unrealized_pct >= activation_pct:
                 with self._peak_prices_lock:
                     if symbol not in self.peak_prices or current_price > self.peak_prices[symbol]:
                         self.peak_prices[symbol] = current_price
@@ -393,7 +435,7 @@ class RiskManager:
                     peak = self.peak_prices[symbol]
                     drawdown_from_peak = (peak - current_price) / peak
 
-                    if drawdown_from_peak >= settings.TRAILING_DISTANCE_PCT:
+                    if drawdown_from_peak >= distance_pct:
                         logger.info(f"Trailing stop triggered for {symbol}: Peak {peak:.2f}, Current {current_price:.2f}")
                         del self.peak_prices[symbol]
                         return "close"
@@ -401,7 +443,7 @@ class RiskManager:
         else:
             unrealized_pct = (avg_entry_price - current_price) / avg_entry_price
 
-            if unrealized_pct >= settings.TRAILING_ACTIVATION_PCT:
+            if unrealized_pct >= activation_pct:
                 with self._peak_prices_lock:
                     if symbol not in self.peak_prices or current_price < self.peak_prices[symbol]:
                         self.peak_prices[symbol] = current_price
@@ -411,7 +453,7 @@ class RiskManager:
                     trough = self.peak_prices[symbol]
                     drawdown_from_trough = (current_price - trough) / trough
 
-                    if drawdown_from_trough >= settings.TRAILING_DISTANCE_PCT:
+                    if drawdown_from_trough >= distance_pct:
                         logger.info(f"Trailing stop triggered for {symbol} (short): Trough {trough:.2f}, Current {current_price:.2f}")
                         del self.peak_prices[symbol]
                         return "close"

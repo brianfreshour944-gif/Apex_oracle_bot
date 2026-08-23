@@ -91,6 +91,73 @@ def test_trailing_stop_short_position():
     assert result in ("hold", "close")
 
 
+def test_trailing_stop_regime_scaling_widens_in_high_volatility():
+    """high_volatility should widen the trailing distance vs. the unscaled baseline.
+
+    A 4.0% drop from peak: should NOT trigger at the scaled 4.5% threshold
+    (base 3% * 1.5 high_volatility multiplier), but WOULD trigger at the
+    unscaled 3% threshold -- proving the scaling actually changes behavior,
+    not just that both paths happen to agree.
+    """
+    peak = 51000.0
+    current = peak * (1 - 0.04)
+
+    rm_scaled = RiskManager(AsyncMock())
+    rm_scaled.peak_prices["BTC/USD"] = peak
+    assert rm_scaled.check_trailing_stop("BTC/USD", current, 48000.0, 1.0, regime="high_volatility") == "hold"
+
+    rm_unscaled = RiskManager(AsyncMock())
+    rm_unscaled.peak_prices["BTC/USD"] = peak
+    assert rm_unscaled.check_trailing_stop("BTC/USD", current, 48000.0, 1.0, regime=None) == "close"
+
+
+def test_trailing_stop_regime_scaling_tightens_in_low_volatility():
+    """low_volatility should tighten the trailing distance vs. the unscaled baseline.
+
+    A 2.0% drop from peak: SHOULD trigger at the scaled 1.8% threshold
+    (base 3% * 0.6 low_volatility multiplier), but would NOT trigger at the
+    unscaled 3% threshold.
+    """
+    peak = 3000.0
+    current = peak * (1 - 0.02)
+
+    rm_scaled = RiskManager(AsyncMock())
+    rm_scaled.peak_prices["ETH/USD"] = peak
+    assert rm_scaled.check_trailing_stop("ETH/USD", current, 2900.0, 1.0, regime="low_volatility") == "close"
+
+    rm_unscaled = RiskManager(AsyncMock())
+    rm_unscaled.peak_prices["ETH/USD"] = peak
+    assert rm_unscaled.check_trailing_stop("ETH/USD", current, 2900.0, 1.0, regime=None) == "hold"
+
+
+def test_trailing_stop_unrecognized_regime_matches_baseline():
+    """None, 'neutral', and an unrecognized regime string must all behave
+    identically to each other -- regression guard for the regime-scaling
+    feature: anything not explicitly mapped must be a strict no-op."""
+    peak = 50000.0
+    for pct_off_peak in (0.02, 0.03, 0.04):
+        current = peak * (1 - pct_off_peak)
+        results = []
+        for regime in (None, "neutral", "totally_made_up_regime"):
+            rm = RiskManager(AsyncMock())
+            rm.peak_prices["BTC/USD"] = peak
+            results.append(rm.check_trailing_stop("BTC/USD", current, 49000.0, 1.0, regime=regime))
+        assert len(set(results)) == 1, f"unrecognized regimes diverged at {pct_off_peak*100:.0f}% off peak: {results}"
+
+
+def test_trailing_stop_params_clamp_unsafe_multiplier():
+    """A multiplier combination that would let distance reach/exceed
+    activation must be clamped, never producing a stop that triggers
+    immediately upon activation instead of trailing."""
+    from unittest.mock import patch
+    import src.risk as risk_mod
+
+    rm = RiskManager(AsyncMock())
+    with patch.dict(risk_mod._TRAILING_REGIME_MULTIPLIERS, {"_unsafe_test": (1.0, 2.0)}):
+        activation, distance = rm._get_trailing_params("_unsafe_test")
+        assert distance < activation
+
+
 def test_hurst_random_walk():
     """Hurst exponent for a random walk should be near 0.5."""
     np.random.seed(42)

@@ -489,7 +489,14 @@ async def process_signal_for_symbol(symbol: str, current_price: float, risk_mana
             if current_position:
                 avg_entry_price = float(current_position.get("avg_entry_price", 0))
                 qty = float(current_position.get("qty", 0))
-                trailing_action = risk_manager.check_trailing_stop(symbol, current_price, avg_entry_price, qty)
+                # Regime isn't freshly computed yet at this point in the cycle
+                # (that happens below, in generate_trading_signal) -- read the
+                # last cached regime for this symbol instead of restructuring
+                # the evaluation order. None (no cache entry yet, e.g. first
+                # evaluation of a symbol) is treated as neutral/unscaled.
+                cached_regime = _state.strategy._regime_cache.get(symbol) if _state.strategy is not None else None
+                regime_for_trailing = cached_regime[1].get("regime") if cached_regime else None
+                trailing_action = risk_manager.check_trailing_stop(symbol, current_price, avg_entry_price, qty, regime=regime_for_trailing)
                 
                 if trailing_action == "close":
                     side = "sell" if qty > 0 else "buy"
