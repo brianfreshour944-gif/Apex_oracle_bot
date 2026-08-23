@@ -35,10 +35,14 @@ class TradingStrategy:
 
     async def analyze_market_regime(self, symbol: str, timeframe: str = "1D", limit: int = 100) -> Dict[str, Any]:
         """Analyze market regime using Hurst exponent, ATR, and RSI with TTL caching."""
-        now = time.monotonic()
+        # Named distinctly from `now` (reused below, reassigned via time.time()
+        # for the derivatives/sentiment sub-caches) so this TTL check can't be
+        # silently clobbered by that unrelated reassignment -- see the fix
+        # that gave this its own variable for why that used to matter.
+        regime_cache_now = time.monotonic()
         if symbol in self._regime_cache:
             cached_time, cached_res = self._regime_cache[symbol]
-            if now - cached_time < self._cache_ttl:
+            if regime_cache_now - cached_time < self._cache_ttl:
                 return cached_res
 
         try:
@@ -231,7 +235,7 @@ class TradingStrategy:
                 "event_type": event_type,
                 "sentiment_conf": sentiment_conf,
             }
-            self._regime_cache[symbol] = (now, res)
+            self._regime_cache[symbol] = (regime_cache_now, res)
             return res
 
 

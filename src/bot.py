@@ -1522,7 +1522,13 @@ async def run_trading_bot() -> None:
             logger.warning(f"Deployment registry registration failed (non-fatal): {e}")
 
         # Initialize trading strategy and risk manager
-        _state.strategy = TradingStrategy(_state.ex)
+        # cache_ttl defaults to 60s, same as LOOP_INTERVAL_SEC's default -- in
+        # practice a full cycle (sleep + processing overhead) almost always
+        # takes slightly longer than exactly 60s, so the regime cache was
+        # nearly always just-expired by the next check, refetching
+        # multi-timeframe bars every cycle regardless. Give it real headroom
+        # over the actual configured loop interval instead.
+        _state.strategy = TradingStrategy(_state.ex, cache_ttl=settings.LOOP_INTERVAL_SEC * 1.5)
         _state.risk_manager = RiskManager(_state.ex)
         logger.info("Trading strategy and risk manager initialized")
 

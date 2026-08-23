@@ -43,3 +43,18 @@ async def test_regime_analysis_ttl_cache():
         res2 = await strat.analyze_market_regime("BTC/USD")
         assert ex.get_bars.call_count == 1
         assert res1["regime"] == res2["regime"]
+
+        # Third call, simulated to be well past the 5s TTL -> must MISS the
+        # cache and refetch. Regression test for a bug where the cache
+        # timestamp (originally time.monotonic()) got silently clobbered by
+        # the derivatives/sentiment sub-caches reassigning the same `now`
+        # variable to time.time() later in the same function -- comparing a
+        # monotonic clock against a wall-clock epoch is always a huge
+        # negative number, so the cache never expired at all, regardless of
+        # cache_ttl. The two tests above only ever exercised an immediate
+        # re-call, which passes whether or not that bug is present -- this
+        # is the one that actually catches it.
+        cached_time, cached_res = strat._regime_cache["BTC/USD"]
+        strat._regime_cache["BTC/USD"] = (cached_time - 10.0, cached_res)
+        res3 = await strat.analyze_market_regime("BTC/USD")
+        assert ex.get_bars.call_count == 2
