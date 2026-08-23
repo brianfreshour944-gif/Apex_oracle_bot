@@ -638,7 +638,12 @@ async def process_signal_for_symbol(symbol: str, current_price: float, risk_mana
                 
                 # Combined edge estimate (capped at reasonable bounds)
                 raw_edge = regime_edge + score_edge * 0.02 - entropy_penalty  # scale score edge to ~2%
-                expected_return_pct = max(-0.02, min(0.05, raw_edge)) * 100  # cap at -2% to +5%
+                # calculate_position_size() expects this as a fraction (its own
+                # PROFIT_TARGET_PCT fallback is 0.03, not 3.0) and converts it to
+                # bps internally via `* 10000`. Do NOT also multiply by 100 here --
+                # that produced a 100x-inflated "expected edge", which silently
+                # defeated the min-edge-after-costs rejection gate below.
+                expected_return_pct = max(-0.02, min(0.05, raw_edge))  # cap at -2% to +5% (fraction, e.g. 0.03 = 3%)
                 position_size, sizing_status = risk_manager.calculate_position_size(
                     symbol,
                     current_price,
