@@ -20,7 +20,7 @@ from collections import defaultdict, deque
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Dict, Any, Optional, Callable
+from typing import Dict, Any, Optional
 from pathlib import Path
 
 from src.config import settings
@@ -421,106 +421,6 @@ def reset_alerting_engine():
     _alerting_engine = None
 
 
-# Convenience functions for common alerts
-async def alert_exposure_saturation(current: float, max_exp: float, pct: float):
-    await get_alerting_engine().alert_exposure_saturation(current, max_exp, pct)
-
-async def alert_repeated_vetoes(count: int, window: int, regime: str, reasons: list):
-    await get_alerting_engine().alert_repeated_vetoes(count, window, regime, reasons)
-
-async def alert_drawdown_approaching(current: float, max_dd: float, pct: float):
-    await get_alerting_engine().alert_drawdown_approaching_killswitch(current, max_dd, pct)
-
-async def alert_model_load_failure(model: str, error: str, fallback: str = ""):
-    await get_alerting_engine().alert_model_load_failure(model, error, fallback)
-
-async def alert_churn_detected(count: int, window: int, symbols: list, avg_pnl: float = 0):
-    await get_alerting_engine().alert_churn_detected(count, window, symbols, avg_pnl)
-
-async def alert_circuit_breaker_trip(name: str, failures: int, reason: str):
-    await get_alerting_engine().alert_circuit_breaker_trip(name, failures, reason)
-
-async def alert_data_integrity_failure(check: str, mismatches: int, details: Dict[str, Any]):
-    await get_alerting_engine().alert_data_integrity_failure(check, mismatches, details)
-
-async def alert_killswitch_activated(reason: str, action: str, details: Dict[str, Any]):
-    await get_alerting_engine().alert_killswitch_activated(reason, action, details)
-
-
-# ─── Background Monitoring Task ───
-async def monitoring_loop(
-    get_risk_status: Callable,
-    get_committee_stats: Callable,
-    get_model_status: Callable,
-    interval_sec: int = 30,
-):
-    """
-    Background task that monitors system health and fires alerts.
-    
-    Args:
-        get_risk_status: Callable returning risk status dict
-        get_committee_stats: Callable returning committee stats dict  
-        get_model_status: Callable returning model status dict
-        interval_sec: Check interval
-    """
-    engine = get_alerting_engine()
-    veto_history = deque(maxlen=100)
-    trade_history = deque(maxlen=1000)
-    
-    logger.info("Starting alerting monitoring loop")
-    
-    while True:
-        try:
-            # 1. Check exposure
-            risk_status = await get_risk_status()
-            if risk_status.get("status") == "risk_ok":
-                exposure = risk_status.get("current_exposure", 0)
-                max_exp = risk_status.get("max_portfolio_value", settings.ACCOUNT_BASE * settings.MAX_PORTFOLIO_PCT)
-                if max_exp > 0:
-                    pct = exposure / max_exp
-                    if pct >= 0.8:
-                        await engine.alert_exposure_saturation(exposure, max_exp, pct)
-            
-            # 2. Check drawdown
-            if risk_status.get("status") == "risk_ok":
-                drawdown = risk_status.get("drawdown_pct", 0)
-                max_dd = abs(settings.MAX_DRAWDOWN_STOP)
-                if max_dd > 0 and drawdown < 0:
-                    pct_of_max = abs(drawdown) / max_dd
-                    if pct_of_max >= 0.7:
-                        await engine.alert_drawdown_approaching(drawdown, -max_dd, pct_of_max)
-            
-            # 3. Check committee vetoes
-            committee_stats = await get_committee_stats()
-            recent_vetoes = committee_stats.get("recent_vetoes", [])
-            if len(recent_vetoes) >= 5:
-                reasons = [v.get("reason", "unknown") for v in recent_vetoes]
-                regime = committee_stats.get("current_regime", "unknown")
-                await engine.alert_repeated_vetoes(len(recent_vetoes), 300, regime, reasons)
-            
-            # 4. Check churn
-            recent_trades = committee_stats.get("recent_trades", [])
-            if len(recent_trades) >= 15:
-                symbols = list(set(t.get("symbol") for t in recent_trades))
-                avg_pnl = sum(t.get("pnl", 0) for t in recent_trades) / len(recent_trades)
-                await engine.alert_churn_detected(len(recent_trades), 300, symbols, avg_pnl)
-            
-            # 5. Check model status
-            model_status = await get_model_status()
-            for model_name, status in model_status.items():
-                if status.get("status") == "failed":
-                    await engine.alert_model_load_failure(
-                        model_name, 
-                        status.get("error", "unknown"),
-                        status.get("fallback", "")
-                    )
-            
-        except Exception as e:
-            logger.error(f"Alerting monitoring loop error: {e}")
-        
-        await asyncio.sleep(interval_sec)
-
-
 if __name__ == "__main__":
     # Test the alerting engine
     async def test():
@@ -535,7 +435,7 @@ if __name__ == "__main__":
         await engine.alert_repeated_vetoes(12, 300, "sideways", ["low confidence", "sentinel veto"])
         
         # Test drawdown alert
-        await engine.alert_drawdown_approaching(-8.0, -10.0, 0.8)
+        await engine.alert_drawdown_approaching_killswitch(-8.0, -10.0, 0.8)
         
         # Test model failure
         await engine.alert_model_load_failure("DecisionTransformer", "File not found", "Using baseline")
