@@ -240,6 +240,33 @@ class RiskManager:
                 "action": "stand_aside"
             }
 
+    def _get_drawdown_taper_multiplier(self, drawdown_pct: Optional[float]) -> float:
+        """Additional risk-amount taper as equity drawdown approaches the killswitch.
+
+        current_equity (see calculate_position_size) already shrinks
+        risk_amount proportionally with equity. This tapers MORE
+        aggressively as drawdown approaches MAX_DRAWDOWN_STOP -- a soft
+        landing so the bot pulls back further before the hard killswitch
+        trips, instead of trading at full (if proportionally-smaller) size
+        right up until the moment it's forcibly liquidated.
+
+        No taper (1.0x) below 50% of the way to the killswitch threshold;
+        linear taper down to a 0.25x floor from 50% to 100%+ of the way
+        there. None or a non-negative drawdown (at/above peak equity) is a
+        no-op, matching the previous (untapered) behavior exactly.
+        """
+        if drawdown_pct is None or drawdown_pct >= 0:
+            return 1.0
+        max_drawdown = settings.MAX_DRAWDOWN_STOP  # negative, e.g. -10.0
+        if max_drawdown >= 0:
+            return 1.0
+        pct_of_max = drawdown_pct / max_drawdown  # both negative -> positive ratio
+        if pct_of_max <= 0.5:
+            return 1.0
+        floor = 0.25
+        progress = min((pct_of_max - 0.5) / 0.5, 1.0)
+        return 1.0 - progress * (1.0 - floor)
+
     def calculate_position_size(
         self,
         symbol: str,
@@ -250,6 +277,7 @@ class RiskManager:
         returns_matrix: Optional[Dict[str, np.ndarray]] = None,
         expected_return_pct: float = 0.0,
         current_equity: Optional[float] = None,
+        drawdown_pct: Optional[float] = None,
     ) -> Tuple[float, str]:
         """Portfolio Optimization: Volatility Parity, Correlation VaR, and Cash Allocation.
 
@@ -266,6 +294,10 @@ class RiskManager:
         equity silently grows the deeper a drawdown gets. Falls back to
         peak_equity (previous behavior) when not supplied, so existing
         callers (backtests, tests) are unaffected.
+
+        `drawdown_pct` (from the same snapshot, if available) additionally
+        tapers risk as the account approaches MAX_DRAWDOWN_STOP -- see
+        _get_drawdown_taper_multiplier. None is a no-op.
         """
         try:
             # 1. Dynamic Cash Allocation (base risk scales with actual equity, not hardcoded base)
@@ -288,6 +320,16 @@ class RiskManager:
             # is base_risk * conf_weight, not an opaque position-size inflation.
             conf_weight = np.clip(confidence, 0.5, 1.5)
             risk_amount *= conf_weight
+
+            # 2b. Additional taper as drawdown approaches the killswitch --
+            # soft landing on top of the equity-proportional shrink above.
+            taper_mult = self._get_drawdown_taper_multiplier(drawdown_pct)
+            if taper_mult < 1.0:
+                logger.info(
+                    f"Drawdown taper active for {symbol}: {taper_mult:.2f}x "
+                    f"(drawdown={drawdown_pct:.2f}%, killswitch at {settings.MAX_DRAWDOWN_STOP:.2f}%)"
+                )
+            risk_amount *= taper_mult
 
             # 3. Transaction Cost Model - Get costs and adjust effective risk
             tx_costs = self.get_transaction_costs(symbol)

@@ -61,6 +61,50 @@ def test_position_size_confidence_adjustment():
     assert size_high_conf >= size_low_conf
 
 
+def test_drawdown_taper_curve_checkpoints():
+    """Hand-calculated checkpoints for _get_drawdown_taper_multiplier against
+    the default MAX_DRAWDOWN_STOP=-10.0: no-op below 50% of the way to the
+    killswitch, linear taper from 50% to 100%, floor at 0.25x beyond that."""
+    rm = RiskManager(AsyncMock())
+    cases = [
+        (None, 1.0), (0.0, 1.0), (-3.0, 1.0), (-5.0, 1.0),
+        (-7.0, 0.70), (-10.0, 0.25), (-15.0, 0.25),
+    ]
+    for drawdown_pct, expected in cases:
+        actual = rm._get_drawdown_taper_multiplier(drawdown_pct)
+        assert abs(actual - expected) < 1e-6, f"drawdown={drawdown_pct}: expected {expected}, got {actual}"
+
+
+def test_position_size_drawdown_taper_regression_safe():
+    """Callers that don't pass drawdown_pct must get identical sizing to
+    before this parameter existed (no drawdown_pct kwarg at all, and
+    drawdown_pct=None explicitly, must produce the same size)."""
+    rm1 = RiskManager(AsyncMock())
+    size_omitted, _ = rm1.calculate_position_size(
+        "BTC/USD", 50000.0, "neutral", confidence=1.0, current_equity=5000.0,
+    )
+    rm2 = RiskManager(AsyncMock())
+    size_none, _ = rm2.calculate_position_size(
+        "BTC/USD", 50000.0, "neutral", confidence=1.0, current_equity=5000.0, drawdown_pct=None,
+    )
+    assert size_omitted == size_none
+
+
+def test_position_size_tapers_at_deep_drawdown():
+    """At the killswitch threshold, position size should be exactly 25% of
+    the untapered size (the taper floor), isolated from the current_equity
+    effect by holding equity constant across both calls."""
+    rm_normal = RiskManager(AsyncMock())
+    size_normal, _ = rm_normal.calculate_position_size(
+        "BTC/USD", 50000.0, "neutral", confidence=1.0, current_equity=5000.0,
+    )
+    rm_deep = RiskManager(AsyncMock())
+    size_deep, _ = rm_deep.calculate_position_size(
+        "BTC/USD", 50000.0, "neutral", confidence=1.0, current_equity=5000.0, drawdown_pct=-10.0,
+    )
+    assert abs((size_deep / size_normal) - 0.25) < 0.001
+
+
 def test_trailing_stop_no_position():
     """When qty=0 (no position), trailing stop returns 'hold' or 'close'."""
     rm = RiskManager(AsyncMock())
