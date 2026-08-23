@@ -650,7 +650,8 @@ async def process_signal_for_symbol(symbol: str, current_price: float, risk_mana
                     signal["regime"],
                     atr=signal.get("atr"),
                     confidence=signal.get("confidence", 1.0),
-                    expected_return_pct=expected_return_pct
+                    expected_return_pct=expected_return_pct,
+                    current_equity=risk_status.get("equity"),
                 )
     
                 if sizing_status != "ok":

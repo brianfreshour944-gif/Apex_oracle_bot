@@ -236,17 +236,30 @@ class RiskManager:
         confidence: float = 1.0,
         returns_matrix: Optional[Dict[str, np.ndarray]] = None,
         expected_return_pct: float = 0.0,
+        current_equity: Optional[float] = None,
     ) -> Tuple[float, str]:
         """Portfolio Optimization: Volatility Parity, Correlation VaR, and Cash Allocation.
-        
+
         Now includes transaction cost model:
         - Round-trip costs = 2 * (fee + slippage + half_spread) in bps
         - Effective risk reduced by expected costs
         - Trades rejected if expected edge < TX_COST_MIN_EDGE_BPS
+
+        `current_equity` should be passed in by the caller (from the same
+        update_account_status() snapshot used for the exposure/position-limit
+        checks) whenever available, so risk-per-trade scales down with actual
+        capital during a drawdown instead of staying pinned to the account's
+        historical peak_equity -- otherwise risk as a fraction of *current*
+        equity silently grows the deeper a drawdown gets. Falls back to
+        peak_equity (previous behavior) when not supplied, so existing
+        callers (backtests, tests) are unaffected.
         """
         try:
             # 1. Dynamic Cash Allocation (base risk scales with actual equity, not hardcoded base)
-            account_equity = self.peak_equity if self.peak_equity > 0 else settings.ACCOUNT_BASE
+            if current_equity is not None and current_equity > 0:
+                account_equity = current_equity
+            else:
+                account_equity = self.peak_equity if self.peak_equity > 0 else settings.ACCOUNT_BASE
             risk_amount = account_equity * settings.BASE_RISK_PERCENT
 
             # 2. Apply regime-specific adjustments to RISK AMOUNT (not position size),
