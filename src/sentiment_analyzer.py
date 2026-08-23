@@ -117,7 +117,7 @@ async def call_groq_llm(headlines: str, api_key: str) -> Dict[str, Any]:
                 {"role": "system", "content": "You are a quantitative finance sentiment extraction system. Output only raw JSON."},
                 {"role": "user", "content": prompt}
             ],
-            model="llama-3.3-70b-versatile",
+            model="openai/gpt-oss-120b",  # llama-3.3-70b-versatile was deprecated/shut down 08/16/26
             temperature=0.1,
             response_format={"type": "json_object"}
         )

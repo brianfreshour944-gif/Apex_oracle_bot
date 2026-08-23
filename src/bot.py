@@ -9,6 +9,7 @@ import traceback
 import numpy as np
 from datetime import datetime, timezone
 from typing import Dict, Any, Optional
+from tenacity import RetryError
 
 from src.config import settings, COOLDOWN_SECONDS_BUY, MAX_POSITION_ADDS, POSITION_ADD_MIN_SECONDS, POSITION_ADD_MIN_SCORE_INCREASE, POSITION_ADD_SIZE_DECAY
 from src.logging_config import get_logger
@@ -24,6 +25,25 @@ from src.population_trainer import get_pbt_trainer, run_pbt_cycle
 from src.ood_discriminator import get_ood_discriminator
 from scripts.deployment_registry import register_process, heartbeat_process, cleanup_stale
 import argparse
+
+
+def _describe_exception(e: Exception) -> str:
+    """Unwrap tenacity.RetryError to show the actual underlying failure.
+
+    str(RetryError) is just "RetryError[<Future at 0x... state=finished
+    raised APIError>]" -- it never shows the real error message, which is
+    exactly the information needed to diagnose why an order was rejected
+    (insufficient buying power, invalid qty, symbol not tradable, etc).
+    """
+    if isinstance(e, RetryError) and e.last_attempt is not None:
+        try:
+            inner = e.last_attempt.exception()
+            if inner is not None:
+                return f"{inner!r} (after retries exhausted)"
+        except Exception:
+            pass
+    return str(e)
+
 
 # Structured logging setup
 class StructuredLogger:
@@ -785,7 +805,7 @@ async def process_signal_for_symbol(symbol: str, current_price: float, risk_mana
                     risk_manager.release_reserved_exposure(approved_notional)
                     if is_new_entry:
                         risk_manager.release_position_slot(symbol)
-                    logger.error(f"[{symbol}] Order placement failed: {order_e}")
+                    logger.error(f"[{symbol}] Order placement failed: {_describe_exception(order_e)}")
                     raise
 
 # Release the reserved exposure now that the order has been
@@ -894,7 +914,7 @@ async def process_signal_for_symbol(symbol: str, current_price: float, risk_mana
                     await _record_committee_outcome(symbol, current_price, exit_reason=signal.get('reason', 'unknown'))
     
         except Exception as e:
-            logger.error(f"Error processing {symbol}: {e}")
+            logger.error(f"Error processing {symbol}: {_describe_exception(e)}")
     
     
 async def scan_heartbeat_loop() -> None:
@@ -1647,7 +1667,7 @@ async def run_trading_bot() -> None:
             while not _state._shutdown_requested:
                 try:
                     await asyncio.sleep(60)  # Heartbeat every 60 seconds
-                    cleanup_stale(None)
+                    cleanup_stale()
                     heartbeat_process(None)
                 except Exception as e:
                     logger.warning(f"Deployment heartbeat failed: {e}")
@@ -1742,7 +1762,7 @@ async def run_trading_bot() -> None:
                         active_tasks.add(task)
                         task.add_done_callback(active_tasks.discard)
                     except Exception as sym_e:
-                        logger.error(f"[MAIN_LOOP] Error processing {symbol}: {sym_e}")
+                        logger.error(f"[MAIN_LOOP] Error processing {symbol}: {_describe_exception(sym_e)}")
 
                 # Wait for the next evaluation cycle
                 await asyncio.sleep(settings.LOOP_INTERVAL_SEC)

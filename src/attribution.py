@@ -109,7 +109,7 @@ async def _call_groq_attribution(prompt: str, api_key: str) -> Optional[Dict[str
                 {"role": "system", "content": "You are a quantitative finance attribution system. Output only raw JSON."},
                 {"role": "user", "content": prompt}
             ],
-            model="llama-3.1-8b-instant",
+            model="openai/gpt-oss-20b",  # llama-3.1-8b-instant was deprecated/shut down 08/16/26
             temperature=0.2,
             response_format={"type": "json_object"}
         )
