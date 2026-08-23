@@ -68,7 +68,12 @@ class AlertingEngine:
     - Prometheus metrics integration
     """
     
-    def __init__(self):
+    def __init__(self, risk_manager: Optional[Any] = None, exchange: Optional[Any] = None):
+        # Optional refs used by run_monitoring_cycle() for periodic exposure/
+        # drawdown checks. Alerts can still be fired manually via the
+        # alert_*() convenience methods without these being set.
+        self.risk_manager = risk_manager
+        self.exchange = exchange
         self._alert_history: deque = deque(maxlen=1000)
         self._category_cooldowns: Dict[AlertCategory, float] = {}
         self._alert_counts: Dict[str, int] = defaultdict(int)
@@ -328,6 +333,43 @@ class AlertingEngine:
             key=f"system:{component}",
         )
     
+    async def run_monitoring_cycle(self) -> None:
+        """Periodic check of exposure and drawdown against risk_manager state.
+
+        Called every 30s from bot.py's alerting_monitoring_loop. No-op if
+        this engine wasn't constructed with a risk_manager.
+        """
+        if self.risk_manager is None:
+            return
+        status = await self.risk_manager.update_account_status()
+        if status.get("status") != "risk_ok":
+            return
+
+        max_exposure = self.risk_manager._get_max_portfolio_cap()
+        current_exposure = status.get("current_exposure", 0.0)
+        if max_exposure > 0:
+            exposure_pct = current_exposure / max_exposure
+            if exposure_pct >= 0.8:
+                await self.alert_exposure_saturation(current_exposure, max_exposure, exposure_pct)
+
+        max_drawdown = settings.MAX_DRAWDOWN_STOP  # negative, e.g. -10.0
+        drawdown_pct = status.get("drawdown_pct", 0.0)  # negative or 0
+        if max_drawdown < 0:
+            pct_of_max = drawdown_pct / max_drawdown  # both negative -> positive ratio
+            if pct_of_max >= 0.5:
+                await self.alert_drawdown_approaching_killswitch(drawdown_pct, max_drawdown, pct_of_max)
+
+    async def check_churn_alert(self, trades_last_hour: int, threshold: int = 20) -> None:
+        """Fire a churn alert when trade frequency over the last hour is abnormally high."""
+        if trades_last_hour >= threshold:
+            await self.alert_churn_detected(trades_last_hour, 3600, list(settings.SYMBOLS))
+
+    async def check_exchange_failure_alert(self, message: str, failure_count: int) -> None:
+        """Fire a system-health alert on consecutive exchange failures."""
+        threshold = getattr(settings, "CIRCUIT_FAILURE_THRESHOLD", 5)
+        status = "down" if failure_count >= threshold else "degraded"
+        await self.alert_system_health("exchange", status, {"message": message, "failure_count": failure_count})
+
     def get_recent_alerts(self, limit: int = 50) -> list:
         """Get recent alert history."""
         return [

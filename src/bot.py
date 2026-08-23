@@ -1421,6 +1421,12 @@ async def run_periodic_db_maintenance() -> None:
 async def run_trading_bot() -> None:
     """Main trading bot loop."""
 
+    # Declared before anything else in the try block so the `finally` below
+    # can always reference it -- otherwise an exception raised during early
+    # startup (before the tasks are created) hits an UnboundLocalError in
+    # `finally` that masks the real error.
+    active_tasks: set[asyncio.Task] = set()
+
     try:
         logger.info("Initializing Apex Oracle Bot v2.0.0")
         logger.info("=================================")
@@ -1525,7 +1531,6 @@ async def run_trading_bot() -> None:
                     pass
 
         # Start Killswitch monitor
-        active_tasks: set[asyncio.Task] = set()
         ks_task = asyncio.create_task(monitor_killswitch(_state.risk_manager), name="killswitch")
         active_tasks.add(ks_task)
         ks_task.add_done_callback(_on_task_done)
