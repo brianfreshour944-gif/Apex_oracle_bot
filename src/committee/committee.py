@@ -15,7 +15,7 @@ from typing import Dict, Any, Optional
 
 from src.config import settings
 from src.logging_config import get_logger
-from src.alerts import AlertingEngine
+from src.alerting import AlertingEngine
 
 from .models import CommitteeResult, BrainVote
 from .adaptive_meta import AdaptiveMetaLearner

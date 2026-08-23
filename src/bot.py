@@ -17,7 +17,7 @@ from src.api import start_fastapi_server_async
 from src.strategies import TradingStrategy
 from src.risk import RiskManager
 from src.telegram_alerts import send_telegram_alert
-from src.alerts import AlertingEngine
+from src.alerting import AlertingEngine
 from src.committee.transformer_brain import _model_inference_lock
 from src.population_trainer import get_pbt_trainer, run_pbt_cycle
 from src.ood_discriminator import get_ood_discriminator
