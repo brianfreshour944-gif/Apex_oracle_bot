@@ -137,6 +137,32 @@ async def test_reserve_position_slot_same_regime_default_is_noop():
     assert result1 == result2
 
 
+@pytest.mark.asyncio
+async def test_reserve_position_slot_survives_fast_sibling_fill_race():
+    """Meticulous-audit regression: a reservation must NOT be released just
+    because its own order filled successfully -- callers must only call
+    release_position_slot() on a failed order. If a fast-filling symbol's
+    reservation were released mid-cycle, a slower-evaluated sibling
+    (reading the same stale, cycle-start open_position_count) could reserve
+    a slot too, collectively exceeding MAX_OPEN_POSITIONS within one cycle.
+    This directly reproduces that scenario and asserts the cap holds when
+    callers correctly leave a successful reservation in place."""
+    from src.config import settings
+    settings.MAX_OPEN_POSITIONS = 3
+    rm = RiskManager(AsyncMock())
+    stale_open_count = 2  # shared, unchanged snapshot for the whole simulated cycle
+
+    ok_a, _ = await rm.reserve_position_slot("BTC/USD", open_position_count=stale_open_count)
+    assert ok_a
+    # Correct caller behavior: BTC/USD's order fills successfully -- its
+    # reservation is intentionally left in place (no release_position_slot call).
+
+    # A slower-evaluated sibling, still reading the same stale count, must be
+    # rejected while BTC/USD's reservation is outstanding.
+    ok_b, reason_b = await rm.reserve_position_slot("ETH/USD", open_position_count=stale_open_count)
+    assert not ok_b and reason_b == "max_open_positions_would_be_exceeded"
+
+
 def test_trailing_stop_no_position():
     """When qty=0 (no position), trailing stop returns 'hold' or 'close'."""
     rm = RiskManager(AsyncMock())

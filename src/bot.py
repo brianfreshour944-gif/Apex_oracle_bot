@@ -852,10 +852,20 @@ async def process_signal_for_symbol(symbol: str, current_price: float, risk_mana
 # Release the reserved exposure now that the order has been
                 # placed successfully -- the actual portfolio value will be
                 # reflected on the next cycle's update_account_status() call.
+                # Deliberately NOT releasing the position-slot reservation here
+                # (unlike exposure): reproduced with a real asyncio race test
+                # that releasing it immediately on success reopens the exact
+                # race reserve_position_slot exists to prevent, for any
+                # sibling symbol whose evaluation reaches the reserve step
+                # later in the SAME cycle -- open_position_count is one shared,
+                # cycle-start snapshot, so a slot freed mid-cycle lets a later
+                # sibling reserve against the same stale count and collectively
+                # exceed MAX_OPEN_POSITIONS. Left to expire via the 30s TTL in
+                # reserve_position_slot instead -- costs a few phantom-reserved
+                # seconds of new-entry throughput after a fill, never a cap
+                # breach.
                 risk_manager.release_reserved_exposure(approved_notional)
-                if is_new_entry:
-                    risk_manager.release_position_slot(symbol)
-                
+
                 # Track trade for churn alert
                 _state.trade_timestamps.append(time.time())
 

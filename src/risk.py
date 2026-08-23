@@ -264,11 +264,20 @@ class RiskManager:
         linear taper down to a 0.25x floor from 50% to 100%+ of the way
         there. None or a non-negative drawdown (at/above peak equity) is a
         no-op, matching the previous (untapered) behavior exactly.
+
+        A non-finite drawdown_pct (NaN/inf) also no-ops rather than silently
+        propagating NaN into risk_amount: `nan >= 0` is False in Python, so
+        an un-guarded NaN would fall through the checks below instead of
+        being caught by them, poisoning every downstream multiplication.
+        No live caller can trigger this today (update_account_status already
+        rejects non-finite equity before drawdown_pct is derived from it),
+        but this method takes an Optional[float] from any caller, present
+        or future, so it guards its own input rather than relying on that.
         """
-        if drawdown_pct is None or drawdown_pct >= 0:
+        if drawdown_pct is None or not math.isfinite(drawdown_pct) or drawdown_pct >= 0:
             return 1.0
         max_drawdown = settings.MAX_DRAWDOWN_STOP  # negative, e.g. -10.0
-        if max_drawdown >= 0:
+        if max_drawdown >= 0 or not math.isfinite(max_drawdown):
             return 1.0
         pct_of_max = drawdown_pct / max_drawdown  # both negative -> positive ratio
         if pct_of_max <= 0.5:
@@ -612,11 +621,20 @@ class RiskManager:
         pattern for the same reason: `open_position_count` is a stale,
         cycle-start snapshot shared by every concurrently-evaluated symbol,
         so without a reservation, multiple symbols could all see the same
-        under-cap count and all pass simultaneously. Release via
-        release_position_slot() on any failure to place/confirm the order,
-        or after a successful order (the next cycle's fresh position count
-        will reflect it from then on) -- same lifecycle as
-        check_and_reserve_exposure/release_reserved_exposure.
+        under-cap count and all pass simultaneously.
+
+        Unlike check_and_reserve_exposure/release_reserved_exposure, do NOT
+        release this on a successful order -- only call release_position_slot()
+        on a failure to place/confirm the order. Releasing on success was
+        tried first and reproducibly reopens the same race this exists to
+        prevent: a fast-filling symbol's release mid-cycle lets a
+        slower-evaluated sibling (still reading the same stale
+        open_position_count) reserve a slot too, collectively exceeding
+        MAX_OPEN_POSITIONS within one cycle. A successful reservation is
+        instead left to expire via the 30s TTL below -- a symbol briefly
+        looks "reserved" to its siblings for up to 30s after it actually
+        fills, which only costs a little new-entry throughput, never a cap
+        breach.
 
         `same_regime_open_count` (default 0, a no-op) is the number of
         currently open positions classified in the same regime as `symbol` --

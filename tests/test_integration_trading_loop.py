@@ -133,6 +133,13 @@ class TestFullTradingLoop:
         assert call_args.kwargs["side"] == "buy"
         assert call_args.kwargs["type"] == "market"
 
+        # A successful new-entry fill must NOT release its position-slot
+        # reservation -- doing so reopens the exact race reserve_position_slot
+        # exists to prevent for any sibling symbol evaluated later in the same
+        # cycle (see risk.py reserve_position_slot docstring). The reservation
+        # should instead be left to expire via its own 30s TTL.
+        mock_risk_manager.release_position_slot.assert_not_called()
+
     @pytest.mark.asyncio
     async def test_close_position_flow(self, mock_exchange, mock_strategy, mock_risk_manager):
         """Test position close flow."""
