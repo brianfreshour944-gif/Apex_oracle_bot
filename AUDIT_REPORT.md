@@ -10,7 +10,7 @@
 
 | Category | Status | Critical Findings |
 |----------|--------|-------------------|
-| Financial Correctness | ⚠️ **ISSUES FOUND** | 2 bugs in PnL/slippage calculations |
+| Financial Correctness | ✅ **PASS** | 2 initially-flagged bugs verified as false positives (see below) |
 | Concurrency/Race Conditions | ⚠️ **ISSUES FOUND** | 9 race conditions, 5 check-then-act patterns |
 | API Rate-Limit Compliance | ✅ **PASS** | Well under limits, but burst risk exists |
 | Security Audit | ✅ **PASS** | No secrets in logs/git; 1 minor CVE in httpx |
@@ -26,30 +26,32 @@
 - **Stop Loss**: 4% trigger works correctly  
 - **Trailing Stop**: Both long/short logic verified (4% activation, 3% distance)
 
-### ❌ BUGS FOUND
+### ✅ Findings Retracted (Verified False Positives — 2026-08-23)
 
-#### Bug 1: Short Position PnL Sign Error (`src/bot.py` lines 81-86)
+Both bugs originally listed here were re-investigated by tracing the actual data flow and do not hold up. Details below for the record.
+
+#### Retracted Bug 1: "Short Position PnL Sign Error" (`src/bot.py` lines 81-86)
 **Location:** `_record_committee_outcome()` function
 ```python
-# Current (buggy):
 if action == "buy":
     realized_pnl = (exit_price - entry_price) * qty
 else:  # sell / short
-    realized_pnl = (entry_price - exit_price) * qty  # BUG: qty can be negative!
+    realized_pnl = (entry_price - exit_price) * qty
 ```
 
-**Impact:** Short positions that profit show negative PnL when qty comes from exchange (negative for shorts). Return % is correct but realized PnL sign is wrong.
+**Original claim:** `qty` comes from the exchange and is negative for shorts, flipping the PnL sign.
 
-**Fix:** Use `abs(qty)` or ensure qty is always positive in snapshot.
+**Why it's false:** `qty` here comes from the decision snapshot (`snap.get("qty")`), populated at entry from `bot.py:809` as `qty=position_size`. `position_size` originates from `RiskManager.calculate_position_size()` (`risk.py:283`, `effective_risk_amount / stop_distance`), built entirely from positive quantities and only ever scaled down or capped — never negated (confirmed by tracing every multiplier applied to it, and by `tests/test_performance_fixes.py:96` which also assumes a positive `qty`). It is unrelated to the exchange's signed position quantity used elsewhere (e.g. `bot.py:468`). Since `qty` here is always a positive magnitude, the existing sign logic is correct as written.
 
-#### Bug 2: Close Path Slippage Calculation (`src/bot.py` lines 847-850)
+#### Retracted Bug 2: "Close Path Slippage Calculation" (`src/bot.py` lines 847-850)
 ```python
-# Current (buggy):
-expected_price = current_price  # Should be entry_price!
+expected_price = current_price
 slippage_bps = abs(filled_price - expected_price) / expected_price * 10000
 ```
 
-**Impact:** Slippage always calculated as 0 for closes since `filled_price == expected_price == current_price`.
+**Original claim:** Slippage always calculates as 0 for closes since `filled_price == expected_price == current_price`.
+
+**Why it's false:** `current_price` is a function parameter set once per scan cycle from the last fetched bar (`bot.py:1692`); `filled_price` comes from the broker's actual fill response (`order_result.get("filled_avg_price")`). These are independently-sourced values that differ whenever the market moves between signal evaluation and fill, or execution slippage occurs — they are not the same variable. This pattern is identical to (and consistent with) the entry-path slippage calc at `bot.py:776`.
 
 ---
 
@@ -168,8 +170,6 @@ Both place orders → Total exposure exceeds cap
 
 | Priority | Issue | File:Line |
 |----------|-------|-----------|
-| 🔴 CRITICAL | Short PnL sign bug | bot.py:81-86 |
-| 🔴 CRITICAL | Close slippage calc bug | bot.py:847-850 |
 | 🟠 HIGH | Exposure check-then-act race | bot.py:686-763 |
 | 🟠 HIGH | Position limit check-then-act | bot.py:598-612 |
 | 🟠 HIGH | Race conditions (9 locations) | Multiple |
@@ -193,10 +193,9 @@ Both place orders → Total exposure exceeds cap
 
 ## Next Steps
 
-1. **Immediate:** Fix 2 critical financial bugs (PnL sign, slippage calc)
-2. **High:** Add locks for 9 race conditions; fix 2 check-then-act patterns
-3. **Medium:** Add proactive rate limiter; consolidate dependencies
-4. **Low:** Execute 24h soak test per plan; monitor for leaks
+1. **High:** Add locks for 9 race conditions; fix 2 check-then-act patterns
+2. **Medium:** Add proactive rate limiter; consolidate dependencies
+3. **Low:** Execute 24h soak test per plan; monitor for leaks
 
 ---
 
