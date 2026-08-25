@@ -49,7 +49,14 @@ def push_dataset():
     else:
         logger.warning(f"No live data found at {live_data_path}. Uploading empty dataset.")
         open(os.path.join(dataset_dir, "live_experiences.jsonl"), 'w').close()
-        
+
+    # Copy historical (bootstrap) experiences if it exists
+    hist_data_path = "data/historical_experiences.jsonl"
+    if os.path.exists(hist_data_path):
+        import shutil
+        shutil.copy(hist_data_path, os.path.join(dataset_dir, "historical_experiences.jsonl"))
+        logger.info("Historical experiences included in dataset.")
+
     # Create dataset metadata if it doesn't exist
     meta_path = os.path.join(dataset_dir, "dataset-metadata.json")
     if not os.path.exists(meta_path):
