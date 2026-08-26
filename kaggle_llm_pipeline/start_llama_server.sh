@@ -13,6 +13,12 @@ cd /kaggle/working
 MODEL_DIR="/kaggle/working/models"
 MODEL_PATH="$MODEL_DIR/qwen3-coder-32b-q5_k_m.gguf"
 
+# Free up the ~20GB /kaggle/working quota FIRST: remove partial copies
+# from earlier failed runs and pip caches. Must run BEFORE the model
+# symlink is created below. HF cache in /root is untouched.
+rm -rf /kaggle/working/llama.cpp /kaggle/working/llama.zip \
+       /root/.cache/pip 2>/dev/null || true
+
 # Download model from Hugging Face if not already present this session
 if [ ! -f "$MODEL_PATH" ]; then
   echo "Downloading Qwen3-Coder-30B-A3B-Instruct-Q5_K_M from Hugging Face (~10 min)..."
@@ -38,12 +44,6 @@ if [ ! -f "$MODEL_PATH" ]; then
   echo "ERROR: model download failed."
   exit 1
 fi
-
-# Free up the ~20GB /kaggle/working quota: remove partial copies from
-# earlier failed runs and pip caches. The HF cache in /root is untouched.
-rm -rf /kaggle/working/models/qwen3-coder-32b-q5_k_m.gguf \
-       /kaggle/working/llama.cpp /kaggle/working/llama.zip \
-       /root/.cache/pip 2>/dev/null || true
 
 # Fetch prebuilt llama.cpp Vulkan binary (works on T4s; no Linux CUDA
 # builds are published). Pinned to a release that ships it.
