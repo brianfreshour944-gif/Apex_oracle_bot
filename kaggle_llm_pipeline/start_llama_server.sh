@@ -39,18 +39,19 @@ if [ ! -f "$MODEL_PATH" ]; then
   exit 1
 fi
 
-# Fetch prebuilt llama.cpp CUDA binary if not already present in this session
+# Free up the ~20GB /kaggle/working quota: remove partial copies from
+# earlier failed runs and pip caches. The HF cache in /root is untouched.
+rm -rf /kaggle/working/models/qwen3-coder-32b-q5_k_m.gguf \
+       /kaggle/working/llama.cpp /kaggle/working/llama.zip \
+       /root/.cache/pip 2>/dev/null || true
+
+# Fetch prebuilt llama.cpp Vulkan binary (works on T4s; no Linux CUDA
+# builds are published). Pinned to a release that ships it.
 if [ ! -x ./llama-server ]; then
-  echo "Fetching llama.cpp CUDA build..."
-  pip install -q llama-cpp-python 2>/dev/null || true
-  # Prefer the official release binary; fall back to building from source.
-  curl -sL https://github.com/ggml-org/llama.cpp/releases/latest/download/llama-b-bin-ubuntu-x64.zip -o llama.zip \
-    && unzip -o -j llama.zip '*/llama-server' && rm llama.zip \
-    || { echo "Prebuilt binary unavailable — building from source (~10 min)..."
-         git clone --depth 1 https://github.com/ggml-org/llama.cpp.git
-         cmake -S llama.cpp -B llama.cpp/build -DGGML_CUDA=ON -DLLAMA_CURL=OFF
-         cmake --build llama.cpp/build --config Release -j2 --target llama-server
-         cp llama.cpp/build/bin/llama-server .; }
+  echo "Fetching llama.cpp Vulkan build..."
+  curl -sL "https://github.com/ggml-org/llama.cpp/releases/download/b6100/llama-b6100-bin-ubuntu-vulkan-x64.zip" -o llama.zip
+  unzip -o -j llama.zip 'llama-server' && rm llama.zip
+  chmod +x ./llama-server
 fi
 
 echo "Pre-warming page cache..."
