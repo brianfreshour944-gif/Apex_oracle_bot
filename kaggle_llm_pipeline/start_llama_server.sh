@@ -25,8 +25,13 @@ path = hf_hub_download(
     repo_id="unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF",
     filename="Qwen3-Coder-30B-A3B-Instruct-Q5_K_M.gguf",
 )
-os.makedirs(os.path.dirname(os.environ.get("MODEL_PATH", "/kaggle/working/models/")), exist_ok=True)
-shutil.copy(path, os.environ["MODEL_PATH"])
+dst = os.environ["MODEL_PATH"]
+if os.path.islink(dst) or os.path.exists(dst):
+    os.remove(dst)
+os.makedirs(os.path.dirname(dst), exist_ok=True)
+# Symlink (not copy): /kaggle/working has a ~20GB cap, the model is ~21GB.
+# The HF cache lives outside that quota, so we link to it instead.
+os.symlink(path, dst)
 EOF
 fi
 if [ ! -f "$MODEL_PATH" ]; then
