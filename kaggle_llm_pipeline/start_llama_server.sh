@@ -47,20 +47,21 @@ fi
 
 # Fetch prebuilt llama.cpp Vulkan binary (works on T4s; no Linux CUDA
 # builds are published). Pinned to a release that ships it.
-if [ ! -x ./llama-server ]; then
+if [ ! -x ./bin/llama-server ]; then
   echo "Fetching llama.cpp Vulkan build..."
   curl -sL "https://github.com/ggml-org/llama.cpp/releases/download/b6100/llama-b6100-bin-ubuntu-vulkan-x64.zip" -o llama.zip
-  unzip -o llama.zip '*/llama-server' -d extracted
-  find extracted -name llama-server -exec mv {} ./llama-server \;
-  rm -rf llama.zip extracted
-  chmod +x ./llama-server
+  # Extract EVERYTHING — the binary needs its bundled .so libraries
+  unzip -o -j llama.zip -d ./bin
+  rm llama.zip
+  chmod +x ./bin/*
+  export LD_LIBRARY_PATH="/kaggle/working/bin:$LD_LIBRARY_PATH"
 fi
 
 echo "Pre-warming page cache..."
 cat "$MODEL_PATH" > /dev/null
 
 echo "Starting llama-server (32k ctx, q8_0 KV cache, split across both T4s)..."
-./llama-server \
+./bin/llama-server \
   -m "$MODEL_PATH" \
   --split-mode layer \
   --tensor-split 1,1 \
