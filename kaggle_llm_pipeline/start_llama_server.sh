@@ -70,6 +70,7 @@ echo "Starting llama-server (32k ctx, q8_0 KV cache, split across both T4s)..."
   -c 32768 \
   --cache-type-k q8_0 \
   --cache-type-v q8_0 \
+  --jinja \
   --host 0.0.0.0 \
   --port 8080
 
