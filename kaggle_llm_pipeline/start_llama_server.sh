@@ -10,19 +10,41 @@
 set -e
 cd /kaggle/working
 
-MODEL_PATH="/kaggle/input/qwen3-coder-32b-gguf/qwen3-coder-32b-q5_k_m.gguf"
+MODEL_DIR="/kaggle/working/models"
+MODEL_PATH="$MODEL_DIR/qwen3-coder-32b-q5_k_m.gguf"
 
+# Download model from Hugging Face if not already present this session
 if [ ! -f "$MODEL_PATH" ]; then
-  echo "ERROR: model not found at $MODEL_PATH"
-  echo "Attach your GGUF as a Kaggle Dataset (Add Input -> Datasets) first."
+  echo "Downloading Qwen3-Coder-32B Q5_K_M from Hugging Face (~10 min)..."
+  pip install -q -U huggingface_hub 2>/dev/null || true
+  python3 - <<'EOF'
+from huggingface_hub import hf_hub_download
+import shutil, os
+path = hf_hub_download(
+    repo_id="Qwen/Qwen3-Coder-30B-A3B-Instruct-GGUF",
+    filename="Qwen3-Coder-30B-A3B-Instruct-Q5_K_M.gguf",
+)
+os.makedirs(os.path.dirname(os.environ.get("MODEL_PATH", "/kaggle/working/models/")), exist_ok=True)
+shutil.copy(path, os.environ["MODEL_PATH"])
+EOF
+fi
+if [ ! -f "$MODEL_PATH" ]; then
+  echo "ERROR: model download failed."
   exit 1
 fi
 
 # Fetch prebuilt llama.cpp CUDA binary if not already present in this session
 if [ ! -x ./llama-server ]; then
   echo "Fetching llama.cpp CUDA build..."
-  URL="https://github.com/ggml-org/llama.cpp/releases/latest/download/llama-b-bin-ubuntu-x64.zip"
-  curl -sL "$URL" -o llama.zip && unzip -o -j llama.zip '*/llama-server' && rm llama.zip
+  pip install -q llama-cpp-python 2>/dev/null || true
+  # Prefer the official release binary; fall back to building from source.
+  curl -sL https://github.com/ggml-org/llama.cpp/releases/latest/download/llama-b-bin-ubuntu-x64.zip -o llama.zip \
+    && unzip -o -j llama.zip '*/llama-server' && rm llama.zip \
+    || { echo "Prebuilt binary unavailable — building from source (~10 min)..."
+         git clone --depth 1 https://github.com/ggml-org/llama.cpp.git
+         cmake -S llama.cpp -B llama.cpp/build -DGGML_CUDA=ON -DLLAMA_CURL=OFF
+         cmake --build llama.cpp/build --config Release -j2 --target llama-server
+         cp llama.cpp/build/bin/llama-server .; }
 fi
 
 echo "Pre-warming page cache..."
