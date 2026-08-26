@@ -50,7 +50,9 @@ rm -rf /kaggle/working/models/qwen3-coder-32b-q5_k_m.gguf \
 if [ ! -x ./llama-server ]; then
   echo "Fetching llama.cpp Vulkan build..."
   curl -sL "https://github.com/ggml-org/llama.cpp/releases/download/b6100/llama-b6100-bin-ubuntu-vulkan-x64.zip" -o llama.zip
-  unzip -o -j llama.zip 'llama-server' && rm llama.zip
+  unzip -o llama.zip '*/llama-server' -d extracted
+  find extracted -name llama-server -exec mv {} ./llama-server \;
+  rm -rf llama.zip extracted
   chmod +x ./llama-server
 fi
 
