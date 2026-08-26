@@ -49,7 +49,7 @@ fi
 # builds are published). Pinned to a release that ships it.
 if [ ! -x ./bin/llama-server ]; then
   echo "Fetching llama.cpp Vulkan build..."
-  curl -sL "https://github.com/ggml-org/llama.cpp/releases/download/b6100/llama-b6100-bin-ubuntu-vulkan-x64.zip" -o llama.zip
+  curl -sL "https://github.com/ggml-org/llama.cpp/releases/download/b7200/llama-b7200-bin-ubuntu-vulkan-x64.zip" -o llama.zip
   # Extract EVERYTHING — the binary needs its bundled .so libraries
   unzip -o -j llama.zip -d ./bin
   rm llama.zip
