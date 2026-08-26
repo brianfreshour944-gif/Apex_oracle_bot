@@ -15,8 +15,9 @@ MODEL_PATH="$MODEL_DIR/qwen3-coder-32b-q5_k_m.gguf"
 
 # Download model from Hugging Face if not already present this session
 if [ ! -f "$MODEL_PATH" ]; then
-  echo "Downloading Qwen3-Coder-32B Q5_K_M from Hugging Face (~10 min)..."
+  echo "Downloading Qwen3-Coder-30B-A3B-Instruct-Q5_K_M from Hugging Face (~10 min)..."
   pip install -q -U huggingface_hub 2>/dev/null || true
+  export MODEL_PATH
   python3 - <<'EOF'
 from huggingface_hub import hf_hub_download
 import shutil, os
