@@ -21,7 +21,7 @@ if [ ! -f "$MODEL_PATH" ]; then
 from huggingface_hub import hf_hub_download
 import shutil, os
 path = hf_hub_download(
-    repo_id="Qwen/Qwen3-Coder-30B-A3B-Instruct-GGUF",
+    repo_id="unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF",
     filename="Qwen3-Coder-30B-A3B-Instruct-Q5_K_M.gguf",
 )
 os.makedirs(os.path.dirname(os.environ.get("MODEL_PATH", "/kaggle/working/models/")), exist_ok=True)
