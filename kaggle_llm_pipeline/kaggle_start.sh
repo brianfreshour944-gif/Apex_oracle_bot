@@ -1,3 +1,26 @@
+# =====================================================================
+# ⚠️  OBSOLETE — DO NOT USE  ⚠️
+# =====================================================================
+# This script used Cloudflare Tunnel (cloudflared), which has been
+# REPLACED by FRP (Fast Reverse Proxy) as of August 2026.
+#
+# Reason: Tailscale was tried first for the Oracle<->Kaggle connection
+# but gets killed by Kaggle's sandbox within ~5 seconds. FRP was found
+# to work reliably instead.
+#
+# The current, working startup script is NOT in this repo — it lives
+# in the user's private notes and is pasted directly into a fresh
+# Kaggle notebook cell each session. It:
+#   1. Loads models from the cached 'trading-bot-llms' Kaggle Dataset
+#   2. Loads dependencies from the cached 'trading-bot-wheels' Dataset
+#   3. Starts llama-cpp-python servers on ports 8001/8002
+#   4. Connects via FRP client to Oracle's frps server (port 7000),
+#      tunneling to fixed ports 7001 (Mistral) and 7002 (DeepSeek)
+#
+# See CONNECTIONS.md / the Oracle-Kaggle reference doc for full details.
+# This file is kept only for historical reference. Do not run it.
+# =====================================================================
+
 #!/bin/bash
 # =====================================================================
 # Kaggle LLM Setup - One-command startup script
@@ -13,7 +36,7 @@ echo "This will take ~15 minutes on first run (builds CUDA llama.cpp)"
 
 cd /kaggle/working/Apex_oracle_bot/kaggle_llm_pipeline
 
-MODEL="/kaggle/working/models/qwen3-coder-32b-q5_k_m.gguf"
+MODEL="/kaggle/tmp/models/qwen3-coder-32b-q4_k_m.gguf"
 
 # 1. Download model if not cached
 if [ ! -f "$MODEL" ]; then
@@ -24,10 +47,10 @@ from huggingface_hub import hf_hub_download
 import os, shutil
 path = hf_hub_download(
     repo_id="unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF",
-    filename="Qwen3-Coder-30B-A3B-Instruct-Q5_K_M.gguf"
+    filename="Qwen3-Coder-30B-A3B-Instruct-Q4_K_M.gguf"
 )
-os.makedirs(os.path.dirname("/kaggle/working/models/"), exist_ok=True)
-shutil.copy(path, "/kaggle/working/models/qwen3-coder-32b-q5_k_m.gguf")
+os.makedirs(os.path.dirname("/kaggle/tmp/models/"), exist_ok=True)
+shutil.copy(path, "/kaggle/tmp/models/qwen3-coder-32b-q4_k_m.gguf")
 EOF
     echo "✅ Model downloaded"
 else
@@ -58,7 +81,7 @@ fi
 # 3. Start llama-server (detached)
 echo "🚀 Starting llama-server..."
 nohup ./llama-cuda \
-  -m /kaggle/working/models/qwen3-coder-32b-q5_k_m.gguf \
+  -m /kaggle/tmp/models/qwen3-coder-32b-q4_k_m.gguf \
   --split-mode layer --tensor-split 1,1 -ngl 999 \
   -c 32768 --cache-type-k q8_0 --cache-type-v q8_0 --jinja \
   --host 0.0.0.0 --port 8080 > server.log 2>&1 &
@@ -76,6 +99,12 @@ for i in {1..24}; do
 done
 
 # 4. Start Cloudflare tunnel (detached)
+if [ ! -x ./cloudflared ]; then
+    echo " Downloading cloudflared..."
+    wget -q https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 -O cloudflared
+    chmod +x cloudflared
+fi
+
 echo "🌐 Starting Cloudflare tunnel..."
 nohup ./cloudflared tunnel --url http://localhost:8080 --no-autoupdate > tunnel.log 2>&1 &
 
