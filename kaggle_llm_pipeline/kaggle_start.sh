@@ -1,3 +1,26 @@
+# =====================================================================
+# ⚠️  OBSOLETE — DO NOT USE  ⚠️
+# =====================================================================
+# This script used Cloudflare Tunnel (cloudflared), which has been
+# REPLACED by FRP (Fast Reverse Proxy) as of August 2026.
+#
+# Reason: Tailscale was tried first for the Oracle<->Kaggle connection
+# but gets killed by Kaggle's sandbox within ~5 seconds. FRP was found
+# to work reliably instead.
+#
+# The current, working startup script is NOT in this repo — it lives
+# in the user's private notes and is pasted directly into a fresh
+# Kaggle notebook cell each session. It:
+#   1. Loads models from the cached 'trading-bot-llms' Kaggle Dataset
+#   2. Loads dependencies from the cached 'trading-bot-wheels' Dataset
+#   3. Starts llama-cpp-python servers on ports 8001/8002
+#   4. Connects via FRP client to Oracle's frps server (port 7000),
+#      tunneling to fixed ports 7001 (Mistral) and 7002 (DeepSeek)
+#
+# See CONNECTIONS.md / the Oracle-Kaggle reference doc for full details.
+# This file is kept only for historical reference. Do not run it.
+# =====================================================================
+
 #!/bin/bash
 # =====================================================================
 # Kaggle LLM Setup - One-command startup script
