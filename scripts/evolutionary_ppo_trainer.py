@@ -311,6 +311,20 @@ async def main() -> int:
             champion_score = score
             current_model = candidate
             logger.info(f"🏆 NEW CHAMPION: {current_model}")
+            try:
+                from src.db import save_experiment_record
+                import uuid
+                save_experiment_record(
+                    experiment_id=str(uuid.uuid4()),
+                    generation_type="GA-PPO",
+                    architecture_details=current_model,
+                    sharpe=composite_sharpe,
+                    max_dd=worst_dd,
+                    total_return=avg_ret,
+                    status="Champion",
+                )
+            except Exception as save_err:
+                logger.warning(f"Failed to save experiment record (non-fatal): {save_err}")
             
     # Include real closed live/paper trade outcomes alongside the synthetic
     # backtest-survived snapshots above, so the PPO Meta-Learner also learns

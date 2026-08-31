@@ -182,6 +182,33 @@ def save_experiment_record(
         return False
 
 
+def get_latest_experiment_stats():
+    """Return the most recent experiment's computed performance stats."""
+    try:
+        _ensure_tables()
+        with get_db_session() as session:
+            stmt = (
+                select(ExperimentRecord)
+                .order_by(ExperimentRecord.created_at.desc())
+                .limit(1)
+            )
+            rec = session.execute(stmt).scalar_one_or_none()
+            if rec is None:
+                return None
+            return {
+                "experiment_id": rec.experiment_id,
+                "sharpe": rec.sharpe,
+                "max_drawdown_pct": rec.max_dd,
+                "total_return_pct": rec.total_return,
+                "profit_factor": rec.profit_factor,
+                "status": rec.status,
+                "computed_at": rec.created_at.isoformat() if rec.created_at else None,
+            }
+    except Exception as e:
+        logger.warning(f"get_latest_experiment_stats failed (non-fatal): {e}")
+        return None
+
+
 def save_order_record(
     *,
     order_id: str,
