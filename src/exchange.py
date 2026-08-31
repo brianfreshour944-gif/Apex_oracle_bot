@@ -521,11 +521,37 @@ class AlpacaExchange:
                             order_info["filled_qty"] = float(filled_order.filled_qty) if filled_order.filled_qty else 0.0
                             order_info["commission"] = float(filled_order.commission) if filled_order.commission else 0.0
                             order_info["slippage"] = 0.0
-                        except Exception:
-                            order_info["filled_avg_price"] = 0.0
-                            order_info["filled_qty"] = 0.0
-                            order_info["commission"] = 0.0
-                            order_info["slippage"] = 0.0
+                        except Exception as fetch_err:
+                            # The order reached FILLED status (confirmed above), but
+                            # fetching the precise fill details failed transiently.
+                            # Do NOT zero out the price/qty -- that silently corrupts
+                            # trade records with a real, non-zero fill. Fall back to
+                            # the last known poll_info (which reflects the fill we
+                            # just detected) and retry the detail fetch once before
+                            # giving up, so a single transient error doesn't cost us
+                            # the real fill data.
+                            logger.warning(
+                                f"Order {order_id} filled but fetching fill details failed "
+                                f"({fetch_err!r}); retrying once before falling back."
+                            )
+                            try:
+                                await asyncio.sleep(0.5)
+                                filled_order = await self.circuit_breaker.call(asyncio.to_thread, self.trading_client.get_order_by_id, order_id)
+                                order_info["filled_avg_price"] = float(filled_order.filled_avg_price) if filled_order.filled_avg_price else 0.0
+                                order_info["filled_qty"] = float(filled_order.filled_qty) if filled_order.filled_qty else 0.0
+                                order_info["commission"] = float(filled_order.commission) if filled_order.commission else 0.0
+                                order_info["slippage"] = 0.0
+                            except Exception as retry_err:
+                                logger.error(
+                                    f"Order {order_id} filled but fill details could not be "
+                                    f"retrieved after retry ({retry_err!r}). Falling back to "
+                                    f"poll_info (may be less precise than the true fill price)."
+                                )
+                                order_info["filled_avg_price"] = float(poll_info.get("filled_avg_price", 0.0) or 0.0)
+                                order_info["filled_qty"] = float(poll_info.get("qty", order_info.get("qty", 0.0)) or 0.0)
+                                order_info["commission"] = 0.0
+                                order_info["slippage"] = 0.0
+                                order_info["fill_data_incomplete"] = True
                     # Update status to final status before returning
                     order_info["status"] = status
                     return order_info
