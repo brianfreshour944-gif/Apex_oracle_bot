@@ -617,5 +617,6 @@ def get_db_health() -> bool:
         with engine.connect() as conn:
             conn.execute(text("SELECT 1"))
         return True
-    except Exception:
-        return True  # Assume healthy if we can't verify
+    except Exception as e:
+        logger.warning(f"Database health check failed: {e}")
+        return False

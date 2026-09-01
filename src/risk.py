@@ -769,3 +769,55 @@ class RiskManager:
                 "status": "liquidation_failed",
                 "error": str(e)
             }
+
+    def cleanup_stale_state(self, max_age_seconds: float = 3600, active_symbols: Optional[list] = None) -> Dict[str, int]:
+        """Clean up stale state entries to prevent memory leaks.
+        
+        Args:
+            max_age_seconds: Maximum age of peak_prices entries before cleanup
+            active_symbols: List of currently active trading symbols (from settings)
+            
+        Returns:
+            Dict with counts of cleaned entries per category
+        """
+        now = datetime.now(timezone.utc)
+        active_symbols = set(active_symbols) if active_symbols else set()
+        cleaned = {
+            "peak_prices": 0,
+            "realized_tx_costs": 0,
+            "reserved_exposure": 0,
+            "reserved_position_slots": 0,
+        }
+        
+        # Clean peak_prices for symbols not in active trading or very old
+        # We can't easily track age, so we clean symbols not in active_symbols
+        stale_peaks = [k for k in self.peak_prices.keys() if k not in active_symbols]
+        for k in stale_peaks:
+            del self.peak_prices[k]
+        cleaned["peak_prices"] = len(stale_peaks)
+        
+        # Clean realized_tx_costs for symbols not in active trading
+        stale_costs = [k for k in self._realized_tx_costs.keys() if k not in active_symbols]
+        for k in stale_costs:
+            del self._realized_tx_costs[k]
+        cleaned["realized_tx_costs"] = len(stale_costs)
+        
+        # Clean reserved_exposure (already has 30s TTL in check_and_reserve_exposure)
+        # This is an additional safety net
+        old_reserved = len(self._reserved_exposure)
+        self._reserved_exposure = [
+            (a, t) for a, t in self._reserved_exposure 
+            if (now - t).total_seconds() < max(30, max_age_seconds)
+        ]
+        cleaned["reserved_exposure"] = old_reserved - len(self._reserved_exposure)
+        
+        # Clean reserved_new_position_symbols for inactive symbols
+        stale_slots = [k for k in self._reserved_new_position_symbols.keys() if k not in active_symbols]
+        for k in stale_slots:
+            del self._reserved_new_position_symbols[k]
+        cleaned["reserved_position_slots"] = len(stale_slots)
+        
+        if any(v > 0 for v in cleaned.values()):
+            logger.debug(f"RiskManager cleaned stale state: {cleaned}")
+        
+        return cleaned

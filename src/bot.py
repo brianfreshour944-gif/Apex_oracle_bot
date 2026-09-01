@@ -428,6 +428,58 @@ class BotState:
         self.cooldowns.clear()
         self.position_adds.clear()
         self._symbol_locks.clear()
+
+    def cleanup_stale_state(self, max_age_seconds: float = 3600) -> Dict[str, int]:
+        """Clean up stale state entries to prevent memory leaks.
+        
+        Args:
+            max_age_seconds: Maximum age of entries before cleanup (default 1 hour)
+            
+        Returns:
+            Dict with counts of cleaned entries per category
+        """
+        now = time.time()
+        cleaned = {
+            "cooldowns": 0,
+            "position_adds": 0,
+            "symbol_locks": 0,
+            "scan_results": 0,
+            "trade_timestamps": 0,
+        }
+        
+        # Clean cooldowns (expired entries)
+        expired_cooldowns = [k for k, v in self.cooldowns.items() if v < now]
+        for k in expired_cooldowns:
+            del self.cooldowns[k]
+        cleaned["cooldowns"] = len(expired_cooldowns)
+        
+        # Clean position_adds for symbols that no longer have positions
+        # Note: This is conservative - we only clean if explicitly told
+        # The actual cleanup happens in clear_position_adds() on position close
+        
+        # Clean symbol locks for symbols not in active trading
+        # We keep locks for symbols in SYMBOLS config to avoid recreating
+        active_symbols = set(settings.SYMBOLS)
+        stale_locks = [k for k in self._symbol_locks.keys() if k not in active_symbols]
+        for k in stale_locks:
+            del self._symbol_locks[k]
+        cleaned["symbol_locks"] = len(stale_locks)
+        
+        # Clean scan results for symbols not in active trading
+        stale_results = [k for k in self.latest_scan_results.keys() if k not in active_symbols]
+        for k in stale_results:
+            del self.latest_scan_results[k]
+        cleaned["scan_results"] = len(stale_results)
+        
+        # Clean trade timestamps older than max_age_seconds
+        old_count = len(self.trade_timestamps)
+        self.trade_timestamps = [ts for ts in self.trade_timestamps if now - ts < max_age_seconds]
+        cleaned["trade_timestamps"] = old_count - len(self.trade_timestamps)
+        
+        if any(v > 0 for v in cleaned.values()):
+            logger.debug(f"Cleaned stale state: {cleaned}")
+        
+        return cleaned
         self._background_tasks.clear()
         self._shutdown_requested = False
         self._regime_flag_cache.clear()
@@ -1726,6 +1778,32 @@ async def run_trading_bot() -> None:
         active_tasks.add(db_maintenance_task)
         db_maintenance_task.add_done_callback(_on_task_done)
         logger.info("Periodic Database Maintenance task started")
+
+        # Start periodic state cleanup (runs every 5 minutes)
+        async def state_cleanup_loop() -> None:
+            while not _state._shutdown_requested:
+                try:
+                    await asyncio.sleep(300)  # 5 minutes
+                    cleaned = _state.cleanup_stale_state(max_age_seconds=3600)
+                    if any(v > 0 for v in cleaned.values()):
+                        logger.info(f"Periodic state cleanup: {cleaned}")
+                    
+                    # Also clean RiskManager state
+                    if _state.risk_manager is not None:
+                        rm_cleaned = _state.risk_manager.cleanup_stale_state(
+                            max_age_seconds=3600,
+                            active_symbols=settings.SYMBOLS
+                        )
+                        if any(v > 0 for v in rm_cleaned.values()):
+                            logger.info(f"RiskManager cleanup: {rm_cleaned}")
+                except Exception as e:
+                    logger.error(f"State cleanup error: {e}")
+                    await asyncio.sleep(60)
+
+        cleanup_task = asyncio.create_task(state_cleanup_loop(), name="state_cleanup")
+        active_tasks.add(cleanup_task)
+        cleanup_task.add_done_callback(_on_task_done)
+        logger.info("Periodic state cleanup task started")
 
 # Start deployment registry heartbeat
         async def deployment_heartbeat_loop():
