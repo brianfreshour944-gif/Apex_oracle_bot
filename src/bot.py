@@ -1802,7 +1802,11 @@ async def run_trading_bot() -> None:
                     del _state.cooldowns[k]
 
                 # Fetch positions once per cycle (was fetched redundantly per symbol)
-                positions = await _state.ex.get_positions()
+                try:
+                    positions = await _state.ex.get_positions()
+                except Exception as pos_e:
+                    logger.error(f"[MAIN_LOOP] Error fetching positions: {_describe_exception(pos_e)}")
+                    positions = []
 
                 for symbol, bar_result in zip(settings.SYMBOLS, bar_results):
                     try:
