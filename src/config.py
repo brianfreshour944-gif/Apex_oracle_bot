@@ -557,6 +557,21 @@ class TradingBotSettings(BaseSettings):
                 v = "https://" + v
         return v
 
+    @field_validator("DATABASE_URL")
+    @classmethod
+    def validate_database_url(cls, v: str) -> str:
+        """Validate database URL format, detect common PostgreSQL URL errors."""
+        if v.startswith(("postgres://", "postgresql://")):
+            from urllib.parse import urlparse
+            parsed = urlparse(v)
+            if not parsed.path and parsed.port:
+                # URL like postgres://host:5432dbname (missing / before dbname)
+                raise ValueError(
+                    f"Invalid PostgreSQL DATABASE_URL: missing '/' before database name. "
+                    f"Got: {v}. Expected format: postgres://user:pass@host:port/dbname"
+                )
+        return v
+
     @model_validator(mode="after")
     def validate_credentials(self) -> "TradingBotSettings":
         """Ensure Alpaca credentials are provided."""

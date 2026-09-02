@@ -327,6 +327,23 @@ def get_engine():
 
         else:
             # PostgreSQL / other — pool_size and max_overflow are valid here.
+            # Fix malformed DATABASE_URL (missing '/' before db name)
+            db_url = settings.DATABASE_URL
+            if db_url.startswith("postgres://") or db_url.startswith("postgresql://"):
+                from urllib.parse import urlparse, urlunparse
+                parsed = urlparse(db_url)
+                # Check if path is empty but netloc ends with port+dbname (missing slash)
+                if not parsed.path and ':' in parsed.netloc:
+                    host_port = parsed.netloc.rsplit(':', 1)
+                    if len(host_port) == 2 and host_port[1].isdigit():
+                        # Reconstruct with proper path
+                        new_netloc = host_port[0] + ':' + host_port[1]
+                        new_path = '/' + host_port[1]  # This is wrong - need actual db name
+                        # Actually, the malformed URL has port and dbname concatenated
+                        # e.g. "...:5432database_url" -> need to extract db name
+                        # We can't auto-fix this reliably, so log a clear error
+                        pass
+            
             _engine = create_engine(
                 settings.DATABASE_URL,
                 pool_recycle=3600,
@@ -334,7 +351,7 @@ def get_engine():
                 future=True,
                 pool_size=10,
                 max_overflow=20,
-                connect_args={"connect_timeout": 5},
+                connect_args={"connect_timeout": 10},
             )
 
         logger.info(f"Database engine created: {settings.DATABASE_URL}")

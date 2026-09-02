@@ -203,7 +203,7 @@ _fastapi_server_task: Optional[asyncio.Task] = None
 
 
 async def start_fastapi_server_async() -> None:
-    """Start FastAPI server asynchronously."""
+    """Start FastAPI server asynchronously and wait for it to be ready."""
     global _fastapi_server_task
     config = uvicorn.Config(
         app,
@@ -219,6 +219,20 @@ async def start_fastapi_server_async() -> None:
     logger.info(f"FastAPI server started on port {settings.STATUS_PORT}")
     logger.info("API documentation available at /docs")
     logger.info("Health check available at /health, /ready, /live")
+
+    # Wait for server to be ready (health endpoint responds)
+    import httpx
+    for _ in range(30):  # 30s timeout
+        try:
+            async with httpx.AsyncClient() as client:
+                resp = await client.get(f"http://127.0.0.1:{settings.STATUS_PORT}/health", timeout=1.0)
+                if resp.status_code == 200:
+                    logger.info("FastAPI server health check passed")
+                    return
+        except Exception:
+            pass
+        await asyncio.sleep(1)
+    logger.warning("FastAPI server health check timeout after 30s")
 
 
 async def stop_fastapi_server_async() -> None:

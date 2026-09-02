@@ -1621,9 +1621,13 @@ async def run_trading_bot() -> None:
         # before we start evaluating live signals. By this point it has
         # been running concurrently with DB init, exchange auth, and the
         # FastAPI server start, so this await is typically a no-op.
+        # Add timeout to prevent indefinite blocking on model load.
         try:
-            await model_warmup_task
+            await asyncio.wait_for(model_warmup_task, timeout=60.0)
             logger.info("Transformer model warmup complete")
+        except asyncio.TimeoutError:
+            logger.warning("Transformer model warmup timed out after 60s (will fall back to signal-only voting)")
+            model_warmup_task.cancel()
         except Exception as e:
             logger.warning(f"Transformer model warmup failed (will fall back to signal-only voting): {e}")
 
