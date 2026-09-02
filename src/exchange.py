@@ -153,10 +153,18 @@ class AlpacaExchange:
             account = await asyncio.to_thread(self.trading_client.get_account)
             if account.account_blocked:
                 raise RuntimeError("Alpaca account is blocked.")
-        except Exception as e:
+        except APIError as e:
+            # Auth/config errors (401, 403, etc.) - these are fatal configuration issues
             self.trading_client = None
             self.data_client = None
-            raise RuntimeError(f"Failed to initialize Alpaca clients: {e}")
+            if getattr(e, "status_code", None) in (401, 403):
+                raise RuntimeError(f"Alpaca authentication failed: {e}")
+            raise  # Re-raise other API errors as-is for retry logic
+        except Exception as e:
+            # Network/transient errors - let caller decide retry/offline mode
+            self.trading_client = None
+            self.data_client = None
+            raise
             
         logger.info(f"Alpaca client initialized (Paper={self.paper})")
 

@@ -1580,9 +1580,14 @@ async def run_trading_bot() -> None:
         try:
             await _state.ex.load()
             logger.info("Alpaca exchange connected")
-        except RuntimeError:
-            # Re-raise configuration and auth errors which are fatal
-            raise
+        except RuntimeError as e:
+            # Re-raise ONLY authentication/configuration errors which are fatal
+            # Other RuntimeErrors (network issues, etc.) should fall through to offline mode
+            if "authentication failed" in str(e).lower() or "unauthorized" in str(e).lower():
+                logger.error(f"Alpaca authentication failed (fatal): {e}")
+                raise
+            # Other RuntimeErrors - treat as transient, start in offline mode
+            logger.warning(f"Alpaca exchange connection failed on startup: {e}. Bot will start in offline/retry mode.")
         except Exception as e:
             logger.warning(f"Alpaca exchange connection failed on startup: {e}. Bot will start in offline/retry mode.")
 

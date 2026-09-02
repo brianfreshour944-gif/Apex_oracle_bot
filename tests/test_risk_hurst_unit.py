@@ -11,6 +11,7 @@ import numpy as np
 from unittest.mock import AsyncMock
 from src.risk import RiskManager
 from src.strategies import TradingStrategy
+from src.config import settings
 
 
 def test_position_size_basic():
@@ -225,39 +226,54 @@ def test_trailing_stop_short_position():
 def test_trailing_stop_regime_scaling_widens_in_high_volatility():
     """high_volatility should widen the trailing distance vs. the unscaled baseline.
 
-    A 4.0% drop from peak: should NOT trigger at the scaled 4.5% threshold
-    (base 3% * 1.5 high_volatility multiplier), but WOULD trigger at the
-    unscaled 3% threshold -- proving the scaling actually changes behavior,
-    not just that both paths happen to agree.
+    Uses actual TRAILING_DISTANCE_PCT from settings to calculate thresholds.
     """
+    # Get actual distance from settings
+    base_distance = settings.TRAILING_DISTANCE_PCT
+    high_vol_distance = base_distance * 1.5  # high_volatility multiplier
+    
+    # Use a drop that's between base and high_vol thresholds
+    # e.g., if base=1%, high_vol=1.5%, use 1.2% drop
+    drop_pct = base_distance * 1.2
+    
     peak = 51000.0
-    current = peak * (1 - 0.04)
+    current = peak * (1 - drop_pct)
 
     rm_scaled = RiskManager(AsyncMock())
     rm_scaled.peak_prices["BTC/USD"] = peak
+    # Should NOT trigger at scaled (wider) distance
     assert rm_scaled.check_trailing_stop("BTC/USD", current, 48000.0, 1.0, regime="high_volatility") == "hold"
 
     rm_unscaled = RiskManager(AsyncMock())
     rm_unscaled.peak_prices["BTC/USD"] = peak
+    # SHOULD trigger at unscaled (base) distance
     assert rm_unscaled.check_trailing_stop("BTC/USD", current, 48000.0, 1.0, regime=None) == "close"
 
 
 def test_trailing_stop_regime_scaling_tightens_in_low_volatility():
     """low_volatility should tighten the trailing distance vs. the unscaled baseline.
 
-    A 2.0% drop from peak: SHOULD trigger at the scaled 1.8% threshold
-    (base 3% * 0.6 low_volatility multiplier), but would NOT trigger at the
-    unscaled 3% threshold.
+    Uses actual TRAILING_DISTANCE_PCT from settings to calculate thresholds.
     """
+    # Get actual distance from settings
+    base_distance = settings.TRAILING_DISTANCE_PCT
+    low_vol_distance = base_distance * 0.6  # low_volatility multiplier
+    
+    # Use a drop that's between low_vol and base thresholds
+    # e.g., if base=1%, low_vol=0.6%, use 0.8% drop
+    drop_pct = base_distance * 0.8
+    
     peak = 3000.0
-    current = peak * (1 - 0.02)
+    current = peak * (1 - drop_pct)
 
     rm_scaled = RiskManager(AsyncMock())
     rm_scaled.peak_prices["ETH/USD"] = peak
+    # SHOULD trigger at scaled (tighter) distance
     assert rm_scaled.check_trailing_stop("ETH/USD", current, 2900.0, 1.0, regime="low_volatility") == "close"
 
     rm_unscaled = RiskManager(AsyncMock())
     rm_unscaled.peak_prices["ETH/USD"] = peak
+    # Should NOT trigger at unscaled (base) distance
     assert rm_unscaled.check_trailing_stop("ETH/USD", current, 2900.0, 1.0, regime=None) == "hold"
 
 
