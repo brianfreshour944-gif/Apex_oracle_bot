@@ -34,17 +34,17 @@ RUN groupadd -g 10001 botuser && \
 # Copy dependency manifests first so this layer stays cacheable
 COPY pyproject.toml requirements.txt ./
 
-# Single resolve+install. torch is pinned to the +cpu build (it only exists on
-# the PyTorch index; the pin keeps uv from resolving the CUDA build from PyPI
-# - the same effect the old two-step install achieved, in one pass). The venv
-# stays root-owned like before; the runtime user only needs read+execute.
+# Two-step install: torch first, scoped ONLY to the PyTorch CPU index (no
+# --extra-index-url here), so uv can't get confused about which index "owns"
+# the torch package. Then requirements.txt against default PyPI. Combining
+# these into one call with both indexes made uv treat PyPI as authoritative
+# for torch and fail to find the +cpu build - see incident 2026-09-03.
+# The venv stays root-owned like before; the runtime user only needs
+# read+execute.
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv venv /app/.venv && \
-    uv pip install \
-        --index-url https://download.pytorch.org/whl/cpu \
-        --extra-index-url https://pypi.org/simple \
-        "torch==2.14.0+cpu" \
-        -r requirements.txt
+    uv pip install --index-url https://download.pytorch.org/whl/cpu "torch==2.14.0+cpu" --python /app/.venv && \
+    uv pip install -r requirements.txt --python /app/.venv
 
 # Copy source code (venv stays root-owned/read-only for botuser)
 COPY --chown=botuser:botuser . .
