@@ -354,6 +354,33 @@ class BotState:
         self.trade_timestamps: list[float] = []
         self.exchange_failure_count: int = 0
 
+        # Crash-recovery: restore cooldowns and scale-in tracking persisted by
+        # a previous process (audit F2/F3). Without this, a restart forgets the
+        # post-SL cooldown (whipsaw re-entry) and resets the scale-in cap and
+        # size decay (re-adds beyond MAX_POSITION_ADDS at full size). Stale
+        # cooldown entries self-expire via the existing main-loop pruning.
+        # Fail-safe: any error just means cold-start behavior, as before.
+        try:
+            from src.persistent_state import load_persistent_state
+            saved = load_persistent_state()
+            saved_cooldowns = saved.get("cooldowns", {})
+            if isinstance(saved_cooldowns, dict):
+                now = time.time()
+                self.cooldowns = {
+                    str(sym): float(ts) for sym, ts in saved_cooldowns.items()
+                    if isinstance(ts, (int, float)) and ts > now  # drop already-expired
+                }
+            saved_adds = saved.get("position_adds", {})
+            if isinstance(saved_adds, dict):
+                self.position_adds = {
+                    str(sym): info for sym, info in saved_adds.items()
+                    if isinstance(info, dict)
+                    and isinstance(info.get("count"), int)
+                    and info["count"] >= 0
+                }
+        except Exception as e:
+            logger.warning(f"Failed to restore cooldowns/scale-in state (starting cold): {e}")
+
     def get_regime_flag(self) -> Dict[str, Any]:
         """Read the regime flag file, cached and only re-read when the file's mtime changes."""
         default = {
@@ -515,6 +542,101 @@ def read_regime_flag():
     return _state.get_regime_flag()
 
 
+# ── Crash-recovery state persistence (audit F1-F3) ───────────────────────────
+# One debounced writer for the whole process. The main loop calls
+# flush_crash_recovery_state() once per cycle; mutations elsewhere just set
+# the dirty flag. Never throws -- persistence problems must not block trading.
+from src.persistent_state import PersistentBotState, save_persistent_state
+
+_crash_state_writer = PersistentBotState(flush_interval=5.0)
+
+
+def flush_crash_recovery_state(force: bool = False) -> None:
+    """Persist peak_prices / cooldowns / position_adds if (or when) dirty."""
+    try:
+        snapshot = {
+            "peak_prices": _state.risk_manager.persist_peak_prices() if _state.risk_manager else {},
+            "trailing_peaks": dict(getattr(_state.strategy, "_trailing_peaks", {}) or {}) if _state.strategy else {},
+            "cooldowns": dict(_state.cooldowns),
+            "position_adds": dict(_state.position_adds),
+        }
+        if _state.risk_manager is not None:
+            _state.risk_manager.consume_peaks_dirty()
+        if force:
+            _crash_state_writer.flush(snapshot)
+        else:
+            _crash_state_writer.flush_if_due(snapshot)
+    except Exception as e:
+        logger.debug(f"Crash-recovery state flush skipped (non-fatal): {e}")
+
+
+async def reconcile_open_snapshots(exchange: AlpacaExchange) -> None:
+    """Startup reconciliation pass (audit F4).
+
+    After a crash or an out-of-bot close (manual close on the exchange while
+    the process was down), decision snapshots can be left status='open'
+    forever. Compare every open snapshot against the exchange's actual
+    positions:
+      - snapshot for a symbol with NO exchange position -> the position was
+        closed outside the bot; close the snapshot with the last known price
+        so the DB doesn't accumulate ghosts and the adaptive meta-learner
+        still sees the outcome.
+      - exchange position with NO open snapshot (restart gap) -> warn.
+    Fully fail-safe: any error is logged and skipped.
+    """
+    from src.db import get_all_open_snapshots, close_decision_snapshot
+    open_snaps = await asyncio.to_thread(get_all_open_snapshots)
+    if not open_snaps:
+        return
+    try:
+        positions = await exchange.get_positions()
+    except Exception as e:
+        logger.warning(f"Snapshot reconciliation skipped: could not fetch positions: {e}")
+        return
+    held_symbols = {p["symbol"].replace("/", "") for p in positions}
+
+    for snap in open_snaps:
+        sym = snap["symbol"]
+        sym_clean = sym.replace("/", "")
+        if sym_clean in held_symbols:
+            continue  # genuinely open position -> snapshot is correct
+        exit_price = 0.0
+        try:
+            bars = await exchange.get_latest_bar(sym)
+            if not bars.is_empty():
+                exit_price = float(bars["close"][0])
+        except Exception as e:
+            logger.debug(f"[RECONCILE] No price available for {sym}: {e}")
+        entry_price = float(snap.get("entry_price", 0.0))
+        qty = float(snap.get("qty", 0.0))
+        action = snap.get("final_action", "buy")
+        if exit_price > 0 and entry_price > 0 and qty != 0:
+            pnl = (exit_price - entry_price) * qty if action == "buy" else (entry_price - exit_price) * qty
+        else:
+            pnl = 0.0
+        closed = await asyncio.to_thread(
+            close_decision_snapshot,
+            snap["decision_id"],
+            realized_pnl=pnl,
+            return_pct=(pnl / (entry_price * qty) * 100.0) if (entry_price > 0 and qty != 0 and pnl is not None) else 0.0,
+            exit_reason="reconciled_after_restart",
+        )
+        logger.warning(
+            f"[RECONCILE] Closed ghost snapshot {snap['decision_id']} for {sym} "
+            f"(no exchange position; exit_price={exit_price}, pnl={pnl:.2f}, closed={closed})"
+        )
+
+    # Inverse check: exchange positions the bot has no snapshot for.
+    snap_symbols = {s["symbol"].replace("/", "") for s in open_snaps}
+    for held in held_symbols:
+        if held not in snap_symbols:
+            logger.warning(
+                f"[RECONCILE] Exchange reports an open position in {held} with no open "
+                f"decision snapshot (opened before/outside this process). It will be "
+                f"managed normally, but its committee votes were not recorded."
+            )
+
+
 def get_banned_symbols():
     """Read the banned symbols list generated by the weekly analyzer, cached."""
     return _state.get_banned_symbols()
@@ -619,6 +741,7 @@ async def process_signal_for_symbol(symbol: str, current_price: float, risk_mana
                     _state.cooldowns[symbol] = time.time() + settings.COOLDOWN_SECONDS_BUY
                     # Reset position pyramid/scale-in tracking on close
                     _state.position_adds.pop(symbol, None)
+                    _crash_state_writer.mark_dirty()
                     await _record_committee_outcome(symbol, current_price, exit_reason="trailing_stop")
                     return  # Skip standard signals
     
@@ -885,9 +1008,11 @@ async def process_signal_for_symbol(symbol: str, current_price: float, risk_mana
                             "last_add_time": now,
                             "last_add_score": committee_score
                         }
+                        _crash_state_writer.mark_dirty()
                     else:
                         # No existing position - reset tracking
                         _state.position_adds[symbol] = {"count": 0, "last_add_time": 0.0, "last_add_score": 0.0}
+                        _crash_state_writer.mark_dirty()
 
                 # Reserve a new-position slot to prevent multiple concurrently-evaluated
                 # symbols in the same cycle from all passing a stale, cycle-start
@@ -1039,6 +1164,7 @@ async def process_signal_for_symbol(symbol: str, current_price: float, risk_mana
                     _state.cooldowns[symbol] = time.time() + settings.COOLDOWN_SECONDS_BUY
                     # Reset position pyramid/scale-in tracking on close
                     _state.position_adds.pop(symbol, None)
+                    _crash_state_writer.mark_dirty()
                     # Clear trailing peaks for this symbol
                     if _state.strategy is not None and hasattr(_state.strategy, '_trailing_peaks'):
                         _state.strategy._trailing_peaks.pop(symbol, None)
@@ -1647,6 +1773,16 @@ async def run_trading_bot() -> None:
         except Exception as e:
             logger.warning(f"Database connection failed (will retry later): {e}")
             logger.info("Running in offline mode - some features may be limited")
+            # Audit F6: a broken/corrupt DB previously degraded to offline mode
+            # with ONLY this log line -- no snapshots, no meta-learner updates,
+            # no max-hold exit, indefinitely. Escalate it as a critical alert.
+            try:
+                await get_alerting_engine().alert_system_health(
+                    "database", "down",
+                    {"error": str(e), "impact": "no decision snapshots, no adaptive learning, no max-hold exit"},
+                )
+            except Exception as alert_e:
+                logger.error(f"Failed to send database-down alert: {alert_e}")
 
         logger.info(settings.log_config())
 
@@ -1687,6 +1823,14 @@ async def run_trading_bot() -> None:
         _state.strategy = TradingStrategy(_state.ex, cache_ttl=settings.LOOP_INTERVAL_SEC * 1.5)
         _state.risk_manager = RiskManager(_state.ex)
         logger.info("Trading strategy and risk manager initialized")
+
+        # Startup reconciliation (audit F4): close ghost 'open' decision
+        # snapshots whose positions no longer exist on the exchange, and warn
+        # about exchange positions with no snapshot. Fully fail-safe.
+        try:
+            await reconcile_open_snapshots(_state.ex)
+        except Exception as rec_e:
+            logger.warning(f"Startup snapshot reconciliation failed (non-fatal): {rec_e}")
 
         # Initialize AlertingEngine -- reuse the process-wide singleton that
         # src/committee/committee.py already uses for brain-failure alerts, so
@@ -1908,6 +2052,11 @@ async def run_trading_bot() -> None:
                 for k in expired:
                     del _state.cooldowns[k]
 
+                # Persist crash-recovery state (peak_prices/cooldowns/position_adds)
+                # once per cycle, debounced to 5s so this is at most one tiny
+                # atomic JSON write per interval.
+                flush_crash_recovery_state()
+
                 # Fetch positions once per cycle (was fetched redundantly per symbol)
                 try:
                     positions = await _state.ex.get_positions()
@@ -1963,6 +2112,12 @@ async def run_trading_bot() -> None:
             task.cancel()
         if _state._background_tasks:
             await asyncio.gather(*_state._background_tasks, return_exceptions=True)
+        # Force-persist crash-recovery state on graceful shutdown too, so even
+        # a controlled restart keeps trailing peaks/cooldowns/scale-in counts.
+        try:
+            flush_crash_recovery_state(force=True)
+        except Exception:
+            pass
         if _state.ex:
             await _state.ex.close()
         logger.info("Shutdown complete.")

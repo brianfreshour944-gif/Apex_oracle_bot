@@ -33,6 +33,24 @@ class TradingStrategy:
         self._cycle_derivatives_ts: float = 0.0
         self._cycle_sentiment_ts: float = 0.0
 
+        # Crash-recovery: restore trailing peaks persisted by a previous
+        # process (audit F1). _check_price_based_exits re-anchors the peak at
+        # the current price on first sight of a symbol, which after a restart
+        # erases the drawdown that should have already triggered the exit.
+        try:
+            from src.persistent_state import load_persistent_state
+            saved_peaks = load_persistent_state().get("trailing_peaks", {})
+            if isinstance(saved_peaks, dict):
+                restored = {
+                    str(sym): float(px) for sym, px in saved_peaks.items()
+                    if isinstance(px, (int, float)) and px > 0
+                }
+                if restored:
+                    self._trailing_peaks.update(restored)
+                    logger.info(f"Restored {len(restored)} strategy trailing peak(s) from persisted state")
+        except Exception as e:
+            logger.warning(f"Failed to restore strategy trailing peaks (starting cold): {e}")
+
     async def analyze_market_regime(self, symbol: str, timeframe: str = "1D", limit: int = 100) -> Dict[str, Any]:
         """Analyze market regime using Hurst exponent, ATR, and RSI with TTL caching."""
         # Named distinctly from `now` (reused below, reassigned via time.time()

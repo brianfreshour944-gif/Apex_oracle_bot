@@ -573,6 +573,32 @@ def get_open_snapshot(symbol: str) -> Optional[Dict[str, Any]]:
         return None
 
 
+def get_all_open_snapshots() -> List[Dict[str, Any]]:
+    """Return minimal info for ALL open decision snapshots.
+
+    Used by the startup reconciliation pass (bot.reconcile_open_snapshots) to
+    find ghost snapshots left open by a crash or by a position that was closed
+    outside the bot while it was down. Read-only.
+    """
+    try:
+        with get_db_session() as session:
+            stmt = select(DecisionSnapshot).where(DecisionSnapshot.status == "open")
+            rows = session.execute(stmt).scalars().all()
+            return [
+                {
+                    "decision_id": row.decision_id,
+                    "symbol": row.symbol,
+                    "final_action": row.final_action,
+                    "entry_price": row.entry_price,
+                    "qty": row.qty,
+                }
+                for row in rows
+            ]
+    except Exception as e:
+        logger.warning(f"get_all_open_snapshots failed (non-fatal): {e}")
+        return []
+
+
 def close_decision_snapshot(
     decision_id: str,
     *,

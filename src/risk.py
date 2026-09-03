@@ -73,6 +73,40 @@ class RiskManager:
         # naive position-count check simultaneously.
         self._reserved_new_position_symbols: Dict[str, datetime] = {}
 
+        # Crash-recovery: restore trailing-stop peaks persisted by a previous
+        # process. Without this, a trailing stop that should have fired before
+        # a restart never fires after it, and the peak silently re-anchors at
+        # the current (already-fallen) price. Fail-safe: missing/corrupt file
+        # just means cold-start behavior, exactly as before this existed.
+        self._persisted_peaks_dirty = False
+        try:
+            from src.persistent_state import load_persistent_state
+            saved = load_persistent_state()
+            saved_peaks = saved.get("peak_prices", {})
+            if isinstance(saved_peaks, dict):
+                self.peak_prices = {
+                    str(sym): float(px) for sym, px in saved_peaks.items()
+                    if isinstance(px, (int, float)) and math.isfinite(px) and px > 0
+                }
+                if self.peak_prices:
+                    logger.info(f"Restored {len(self.peak_prices)} trailing-stop peak(s) from persisted state")
+        except Exception as e:
+            logger.warning(f"Failed to restore trailing-stop peaks (starting cold): {e}")
+
+    def persist_peak_prices(self) -> Dict[str, float]:
+        """Snapshot of peak_prices for persistence callers (thread-safe read)."""
+        with self._peak_prices_lock:
+            return dict(self.peak_prices)
+
+    def mark_peaks_dirty(self) -> None:
+        """Flag that peak_prices changed and should be persisted soon."""
+        self._persisted_peaks_dirty = True
+
+    def consume_peaks_dirty(self) -> bool:
+        dirty = getattr(self, "_persisted_peaks_dirty", False)
+        self._persisted_peaks_dirty = False
+        return dirty
+
     def get_transaction_costs(self, symbol: str) -> Dict[str, float]:
         """Get transaction cost estimates for a symbol.
         
@@ -490,6 +524,7 @@ class RiskManager:
                 with self._peak_prices_lock:
                     if symbol not in self.peak_prices or current_price > self.peak_prices[symbol]:
                         self.peak_prices[symbol] = current_price
+                        self.mark_peaks_dirty()
 
             with self._peak_prices_lock:
                 if symbol in self.peak_prices:
@@ -499,6 +534,7 @@ class RiskManager:
                     if drawdown_from_peak >= distance_pct:
                         logger.info(f"Trailing stop triggered for {symbol}: Peak {peak:.2f}, Current {current_price:.2f}")
                         del self.peak_prices[symbol]
+                        self.mark_peaks_dirty()
                         return "close"
 
         else:
@@ -508,6 +544,7 @@ class RiskManager:
                 with self._peak_prices_lock:
                     if symbol not in self.peak_prices or current_price < self.peak_prices[symbol]:
                         self.peak_prices[symbol] = current_price
+                        self.mark_peaks_dirty()
 
             with self._peak_prices_lock:
                 if symbol in self.peak_prices:
@@ -517,6 +554,7 @@ class RiskManager:
                     if drawdown_from_trough >= distance_pct:
                         logger.info(f"Trailing stop triggered for {symbol} (short): Trough {trough:.2f}, Current {current_price:.2f}")
                         del self.peak_prices[symbol]
+                        self.mark_peaks_dirty()
                         return "close"
 
         return "hold"
