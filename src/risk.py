@@ -251,8 +251,14 @@ class RiskManager:
                     "action": "reduce_positions"
                 }
 
-            # Calculate current exposure
-            current_exposure = sum(float(p.get("market_value", 0)) for p in positions)
+            # Calculate current exposure. abs() is deliberate: Alpaca reports
+            # short positions with NEGATIVE market_value, and a signed sum
+            # nets shorts against longs -- a $3k long + $3k short would report
+            # $0 exposure and silently bypass this cap (audit finding F-C,
+            # reproduced in audit_financials.py). The cap protects gross
+            # exposure, so gross is what must be summed. Same fix applied to
+            # reduce_exposure_to_cap's exposure sum below.
+            current_exposure = sum(abs(float(p.get("market_value", 0))) for p in positions)
 
             # Check portfolio value cap (dynamic: percentage of account base if configured)
             max_portfolio_abs = self._get_max_portfolio_cap()
@@ -726,7 +732,10 @@ class RiskManager:
         try:
             positions = await self.exchange.get_positions()
             max_portfolio_abs = self._get_max_portfolio_cap()
-            current_exposure = sum(float(p.get("market_value", 0)) for p in positions)
+            # abs() for the same reason as update_account_status above: signed
+            # market_value on shorts would net against longs and hide gross
+            # exposure from this reduction pass.
+            current_exposure = sum(abs(float(p.get("market_value", 0))) for p in positions)
             if current_exposure <= max_portfolio_abs:
                 return {"status": "no_action_needed"}
             positions_sorted = sorted(positions, key=lambda p: float(p.get("unrealized_pl", 0)))

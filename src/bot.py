@@ -77,8 +77,26 @@ logger = get_logger("bot")
 structured_logger = StructuredLogger("bot")
 
 
-async def _record_committee_outcome(symbol: str, exit_price: float, exit_reason: Optional[str] = None) -> None:
+async def _record_committee_outcome(
+    symbol: str,
+    exit_price: float,
+    exit_reason: Optional[str] = None,
+    entry_price: Optional[float] = None,
+    qty: Optional[float] = None,
+    commission: float = 0.0,
+) -> None:
     """On position exit, close the open decision snapshot and update the learner.
+
+    ``entry_price``/``qty``: when supplied (callers have the exchange position
+    in hand at close time), they override the snapshot values. The snapshot
+    records the FIRST entry only, so for scale-in positions its qty/entry
+    understate the true position -- the exchange's avg_entry_price and total
+    qty are authoritative (audit finding F-A).
+
+    ``commission``: round-trip commission actually charged, subtracted from
+    realized PnL (audit finding F-B). Callers should also pass the real fill
+    price as ``exit_price`` (not the pre-order signal price) so recorded PnL
+    includes slippage.
 
     Fully fail-safe: realized-PnL bookkeeping for the adaptive layer must never
     interfere with trading. risk.py stays authoritative for the exit itself.
@@ -93,8 +111,9 @@ async def _record_committee_outcome(symbol: str, exit_price: float, exit_reason:
         if not snap:
             return
 
-        entry_price = float(snap.get("entry_price", 0.0))
-        qty = float(snap.get("qty", 0.0))
+        entry_price = float(entry_price) if entry_price is not None and entry_price > 0 \
+            else float(snap.get("entry_price", 0.0))
+        qty = abs(float(qty)) if qty is not None and qty != 0 else float(snap.get("qty", 0.0))
         action = snap.get("final_action", "buy")
         if entry_price <= 0 or qty == 0:
             return
@@ -105,6 +124,11 @@ async def _record_committee_outcome(symbol: str, exit_price: float, exit_reason:
         else:  # sell / short
             realized_pnl = (entry_price - exit_price) * qty
             return_pct = (entry_price - exit_price) / entry_price * 100.0
+
+        # Fees are real money: subtract the round-trip commission from the
+        # recorded PnL so near-zero trades don't get inflated win labels
+        # (audit finding F-B).
+        realized_pnl -= abs(float(commission))
 
         holding_sec = 0.0
         created = snap.get("created_at")
@@ -742,7 +766,19 @@ async def process_signal_for_symbol(symbol: str, current_price: float, risk_mana
                     # Reset position pyramid/scale-in tracking on close
                     _state.position_adds.pop(symbol, None)
                     _crash_state_writer.mark_dirty()
-                    await _record_committee_outcome(symbol, current_price, exit_reason="trailing_stop")
+                    # Audit F-A/F-B: record against the exchange's actual
+                    # avg entry / total qty (scale-ins make the snapshot's
+                    # first-entry values wrong), use the real fill price (not
+                    # the signal-time price), and subtract the commission.
+                    trail_fill = order_result.get("filled_avg_price", 0.0)
+                    await _record_committee_outcome(
+                        symbol,
+                        trail_fill if trail_fill > 0 else current_price,
+                        exit_reason="trailing_stop",
+                        entry_price=avg_entry_price,
+                        qty=qty_abs,
+                        commission=order_result.get("commission", 0.0),
+                    )
                     return  # Skip standard signals
     
             # Generate trading signal
@@ -1099,34 +1135,60 @@ async def process_signal_for_symbol(symbol: str, current_price: float, risk_mana
     
                 # Persist committee decision snapshot for the adaptive meta-learner
                 # (fail-safe; closed out with realized PnL when the position exits).
+                # For a scale-in ADD, do NOT create a second open snapshot -- that
+                # would record only the add's price/qty and leave the original
+                # snapshot as a ghost. Instead update the existing snapshot's
+                # entry price (weighted average) and total qty so the exit math
+                # in _record_committee_outcome is correct (audit finding F-A).
                 try:
-                    from src.db import save_decision_snapshot
-                    await asyncio.to_thread(
-                        save_decision_snapshot,
-                        decision_id=committee_result.decision_id,
-                        symbol=symbol,
-                        regime=signal.get("regime", "default"),
-                        final_action=signal["action"],
-                        confidence=committee_result.score,
-                        size_multiplier=getattr(committee_result, "size_multiplier", 1.0),
-                        entry_price=current_price,
-                        qty=position_size,
-                        brain_votes={v.name: v.action for v in committee_result.votes},
-                        feature_snapshot_json=json.dumps({
-                            "atr": signal.get("atr"),
-                            "rsi": signal.get("rsi"),
-                            "macd": signal.get("macd"),
-                            "selected_strategy": signal.get("selected_strategy"),
-                        }),
-                        causal_reasoning_json=json.dumps({
-                            v.name: getattr(v, "causal_reasoning", None) 
-                            for v in committee_result.votes if getattr(v, "causal_reasoning", None)
-                        }),
-                        tensor_state_json=json.dumps({
-                            v.name: getattr(v, "tensor_state", None) 
-                            for v in committee_result.votes if getattr(v, "tensor_state", None)
-                        })
-                    )
+                    if is_new_entry:
+                        from src.db import save_decision_snapshot
+                        await asyncio.to_thread(
+                            save_decision_snapshot,
+                            decision_id=committee_result.decision_id,
+                            symbol=symbol,
+                            regime=signal.get("regime", "default"),
+                            final_action=signal["action"],
+                            confidence=committee_result.score,
+                            size_multiplier=getattr(committee_result, "size_multiplier", 1.0),
+                            entry_price=current_price,
+                            qty=position_size,
+                            brain_votes={v.name: v.action for v in committee_result.votes},
+                            feature_snapshot_json=json.dumps({
+                                "atr": signal.get("atr"),
+                                "rsi": signal.get("rsi"),
+                                "macd": signal.get("macd"),
+                                "selected_strategy": signal.get("selected_strategy"),
+                            }),
+                            causal_reasoning_json=json.dumps({
+                                v.name: getattr(v, "causal_reasoning", None)
+                                for v in committee_result.votes if getattr(v, "causal_reasoning", None)
+                            }),
+                            tensor_state_json=json.dumps({
+                                v.name: getattr(v, "tensor_state", None)
+                                for v in committee_result.votes if getattr(v, "tensor_state", None)
+                            })
+                        )
+                    else:
+                        # Scale-in: fold this add into the existing open snapshot
+                        # (audit finding F-A). Weighted-average the entry price
+                        # over the REAL fill prices, not the signal-time price.
+                        from src.db import get_open_snapshot, update_decision_snapshot_position
+                        snap = await asyncio.to_thread(get_open_snapshot, symbol)
+                        if snap:
+                            add_fill = filled_price if filled_price > 0 else current_price
+                            prev_entry = float(snap.get("entry_price", 0.0))
+                            prev_qty = float(snap.get("qty", 0.0))
+                            if prev_entry > 0 and prev_qty > 0:
+                                new_qty = prev_qty + position_size
+                                new_avg = (prev_entry * prev_qty + add_fill * position_size) / new_qty
+                                await asyncio.to_thread(
+                                    update_decision_snapshot_position,
+                                    snap["decision_id"],
+                                    entry_price=new_avg,
+                                    qty=new_qty,
+                                )
+                                logger.info(f"[SCALE-IN] Snapshot {snap['decision_id']} updated: entry ${prev_entry:.2f} -> ${new_avg:.2f} (weighted by real fill), qty {prev_qty} -> {new_qty}")
                 except Exception as db_e:
                     logger.warning(f"Decision snapshot persist failed for {symbol} (non-fatal): {db_e}")
     
@@ -1168,7 +1230,16 @@ async def process_signal_for_symbol(symbol: str, current_price: float, risk_mana
                     # Clear trailing peaks for this symbol
                     if _state.strategy is not None and hasattr(_state.strategy, '_trailing_peaks'):
                         _state.strategy._trailing_peaks.pop(symbol, None)
-                    await _record_committee_outcome(symbol, current_price, exit_reason=signal.get('reason', 'unknown'))
+                    # Audit F-A/F-B: record against the exchange's actual avg
+                    # entry / total qty, the real fill price, minus commission.
+                    await _record_committee_outcome(
+                        symbol,
+                        filled_price if filled_price > 0 else current_price,
+                        exit_reason=signal.get('reason', 'unknown'),
+                        entry_price=float(current_position.get("avg_entry_price", 0.0)),
+                        qty=qty_abs,
+                        commission=commission,
+                    )
     
         except Exception as e:
             logger.error(f"Error processing {symbol}: {_describe_exception(e)}")

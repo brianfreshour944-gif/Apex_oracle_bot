@@ -573,6 +573,42 @@ def get_open_snapshot(symbol: str) -> Optional[Dict[str, Any]]:
         return None
 
 
+def update_decision_snapshot_position(
+    decision_id: str,
+    *,
+    entry_price: float,
+    qty: float,
+) -> bool:
+    """Update an open snapshot's entry_price/qty after a scale-in fill.
+
+    Audit finding F-A: the snapshot originally records the FIRST entry only;
+    on a scale-in add the bot folds the add into the same snapshot (weighted
+    average entry, summed qty) so the exit math in _record_committee_outcome
+    matches the exchange's actual position. Only updates status='open' rows --
+    a closed snapshot is never mutated.
+    """
+    try:
+        with get_db_session() as session:
+            row = session.get(DecisionSnapshot, decision_id)
+            if row is None or row.status != "open":
+                return False
+            row.entry_price = float(entry_price)
+            row.qty = float(qty)
+            session.commit()
+        # Keep the in-memory cache consistent with the updated row.
+        try:
+            with get_db_session() as session:
+                row = session.get(DecisionSnapshot, decision_id)
+                if row is not None:
+                    _open_snapshot_cache.pop(row.symbol, None)
+        except Exception:
+            pass
+        return True
+    except Exception as e:
+        logger.warning(f"update_decision_snapshot_position failed (non-fatal): {e}")
+        return False
+
+
 def get_all_open_snapshots() -> List[Dict[str, Any]]:
     """Return minimal info for ALL open decision snapshots.
 
