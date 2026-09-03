@@ -22,6 +22,7 @@ import torch.nn.functional as F
 
 from src.config import settings
 from src.logging_config import get_logger
+from .models import BrainVote
 
 logger = get_logger("bayesian_transformer")
 
@@ -326,7 +327,7 @@ async def bayesian_transformer_brain(
     signal: dict,
     ensemble_size: int = DEFAULT_ENSEMBLE_SIZE,
     mc_passes: int = MC_DROPOUT_PASSES,
-) -> "BrainVote":
+) -> BrainVote:
     """Bayesian transformer brain with calibrated uncertainty.
     
     Replaces the standard transformer_brain with uncertainty-aware predictions.

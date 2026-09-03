@@ -19,7 +19,7 @@ from src.api import start_fastapi_server_async
 from src.strategies import TradingStrategy
 from src.risk import RiskManager
 from src.telegram_alerts import send_telegram_alert
-from src.alerting import AlertingEngine
+from src.alerting import get_alerting_engine
 from src.committee.transformer_brain import _model_inference_lock
 from src.population_trainer import get_pbt_trainer, run_pbt_cycle
 from src.ood_discriminator import get_ood_discriminator
@@ -111,6 +111,12 @@ async def _record_committee_outcome(symbol: str, exit_price: float, exit_reason:
         if created:
             try:
                 started = datetime.fromisoformat(str(created).replace("Z", "+00:00"))
+                # sqlite DateTime columns round-trip as offset-naive values;
+                # subtracting a naive datetime from now(timezone.utc) raises
+                # TypeError (silently swallowed below, zeroing holding_sec).
+                # A naive timestamp in this column is always UTC.
+                if started.tzinfo is None:
+                    started = started.replace(tzinfo=timezone.utc)
                 holding_sec = max(0.0, (datetime.now(timezone.utc) - started).total_seconds())
             except Exception:
                 pass
@@ -557,7 +563,22 @@ async def process_signal_for_symbol(symbol: str, current_price: float, risk_mana
                 positions = await ex.get_positions()
             position_dict = {p["symbol"].replace("/", ""): p for p in positions}
             current_position = position_dict.get(symbol.replace("/", ""))
-    
+
+            # Alpaca position dicts carry no entry timestamp, which silently
+            # disabled strategies._check_price_based_exits' MAX_HOLD_HOURS
+            # check ("created_at" was never in the dict). Attach the entry
+            # time persisted on the symbol's open decision snapshot instead.
+            # Fail-safe: any error just leaves the max-hold check inert, as
+            # before -- it never blocks evaluation of the position.
+            if current_position is not None and "created_at" not in current_position:
+                try:
+                    from src.db import get_open_snapshot
+                    snap = await asyncio.to_thread(get_open_snapshot, symbol)
+                    if snap and snap.get("created_at"):
+                        current_position["created_at"] = snap["created_at"]
+                except Exception as snap_err:
+                    logger.debug(f"[{symbol}] Could not attach entry time for max-hold check: {snap_err}")
+
             # Cooldown check: block a fresh entry right after this symbol closed a
             # position, but never block evaluation of an EXISTING position's exit
             # logic (a position we're already holding must always be free to close).
@@ -608,7 +629,9 @@ async def process_signal_for_symbol(symbol: str, current_price: float, risk_mana
                 current_position
             )
     
-            logger.debug("[SCAN] Signal for {symbol} @ ${current_price:.2f}: {action} (regime: {regime}, RSI: {rsi:.2f})",
+            logger.debug(
+                "[SCAN] Signal for %s @ $%.2f: %s (regime: %s, RSI: %.2f)",
+                symbol, current_price, signal["action"], signal["regime"], signal.get("rsi", 0.0),
                          symbol=symbol, current_price=current_price, action=signal["action"],
                          regime=signal["regime"], rsi=signal.get("rsi", 0.0))
     
@@ -1665,8 +1688,14 @@ async def run_trading_bot() -> None:
         _state.risk_manager = RiskManager(_state.ex)
         logger.info("Trading strategy and risk manager initialized")
 
-        # Initialize AlertingEngine
-        alerting_engine = AlertingEngine(risk_manager=_state.risk_manager, exchange=_state.ex)
+        # Initialize AlertingEngine -- reuse the process-wide singleton that
+        # src/committee/committee.py already uses for brain-failure alerts, so
+        # cooldowns, dedup keys, and escalation counters live in ONE state
+        # store instead of two independent engines that could each send the
+        # same alert within the other's cooldown window.
+        alerting_engine = get_alerting_engine()
+        alerting_engine.risk_manager = _state.risk_manager
+        alerting_engine.exchange = _state.ex
         logger.info("Alerting engine initialized")
 
         # Make sure the model warmup (fired above) has actually finished

@@ -543,6 +543,16 @@ def get_open_snapshot(symbol: str) -> Optional[Dict[str, Any]]:
             row = session.execute(stmt).scalars().first()
             if row is None:
                 return None
+            # sqlite DateTime columns round-trip offset-naive; a naive
+            # timestamp in this column is always UTC. Emit an aware ISO
+            # string so consumers subtracting datetime.now(timezone.utc)
+            # don't hit a naive/aware TypeError (silently swallowed).
+            created_iso = None
+            if row.created_at is not None:
+                created_dt = row.created_at
+                if created_dt.tzinfo is None:
+                    created_dt = created_dt.replace(tzinfo=datetime.timezone.utc)
+                created_iso = created_dt.isoformat()
             result = {
                 "decision_id": row.decision_id,
                 "symbol": row.symbol,
@@ -554,7 +564,7 @@ def get_open_snapshot(symbol: str) -> Optional[Dict[str, Any]]:
                 "brain_votes": json.loads(row.votes_json or "{}"),
                 "feature_snapshot": json.loads(row.feature_snapshot_json or "{}"),
                 "tensor_state": json.loads(row.tensor_state_json or "{}").get("transformer"),
-                "created_at": row.created_at.isoformat() if row.created_at else None,
+                "created_at": created_iso,
             }
             _open_snapshot_cache[symbol] = result
             return result

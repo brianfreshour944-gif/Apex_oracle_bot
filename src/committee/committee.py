@@ -15,7 +15,7 @@ from typing import Dict, Any, Optional
 
 from src.config import settings
 from src.logging_config import get_logger
-from src.alerting import AlertingEngine
+from src.alerting import get_alerting_engine
 
 from .models import CommitteeResult, BrainVote
 from .adaptive_meta import AdaptiveMetaLearner
@@ -31,8 +31,12 @@ from src.ood_discriminator import get_ood_discriminator, check_ood_and_override
 
 logger = get_logger("committee")
 
-# Alerting engine for brain failure notifications
-_alerting_engine = AlertingEngine()
+# Alerting engine for brain failure notifications. Uses the process-wide
+# singleton (src.alerting.get_alerting_engine) instead of a private instance so
+# cooldowns/dedup/escalation counters are shared with bot.py's alerting loop --
+# two independent engines would let the same alert fire twice within one
+# cooldown window and split escalation counts across separate books.
+_alerting_engine = get_alerting_engine()
 
 # Default fallback if symbol lacks optimized data
 DEFAULT_SCORE_THRESHOLD = settings.DEFAULT_SCORE_THRESHOLD
@@ -432,7 +436,10 @@ async def run_committee(symbol: str, price: float, signal: Dict[str, Any]) -> Co
             explanation=explanation,
         )
 
-    if score < effective_threshold or winner in ["stand_aside", "skip"]:
+    # math.isfinite guard: score=NaN would make `score < threshold` evaluate
+    # False (NaN comparisons always are) and slip through the trade gate with
+    # the maximum size multiplier. Treat a non-finite score as no-trade.
+    if not math.isfinite(score) or score < effective_threshold or winner in ["stand_aside", "skip"]:
         final_action = "stand_aside"
         size_mult = 0.0
     else:
@@ -460,7 +467,11 @@ async def run_committee(symbol: str, price: float, signal: Dict[str, Any]) -> Co
             ood_signal = {
                 "regime": signal.get("regime", "default"),
                 "features": signal.get("features", {}),
-                "votes": signal.get("votes", []),
+                # Pass the committee's actual BrainVote objects -- the strategy
+                # signal dict never carries a "votes" key, so signal.get("votes")
+                # always yielded [] and the OOD state vector's vote dimensions
+                # were permanently zero-encoded.
+                "votes": votes,
             }
             result = check_ood_and_override(symbol, price, ood_signal, result, ood_disc)
     except Exception as e:

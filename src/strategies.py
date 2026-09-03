@@ -537,6 +537,11 @@ class TradingStrategy:
             if "created_at" in position:
                 from datetime import datetime, timezone
                 created = datetime.fromisoformat(position["created_at"].replace("Z", "+00:00"))
+                # sqlite returns offset-naive datetimes; treat naive as UTC so
+                # the subtraction below can't raise (and get silently swallowed
+                # by this method's broad except, disabling the exit entirely).
+                if created.tzinfo is None:
+                    created = created.replace(tzinfo=timezone.utc)
                 hold_hours = (datetime.now(timezone.utc) - created).total_seconds() / 3600
                 if hold_hours >= settings.MAX_HOLD_HOURS:
                     return {
