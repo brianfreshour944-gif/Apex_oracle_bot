@@ -158,7 +158,7 @@ class AlpacaExchange:
             self.trading_client = None
             self.data_client = None
             if getattr(e, "status_code", None) in (401, 403):
-                raise RuntimeError(f"Alpaca authentication failed: {e}")
+                raise RuntimeError(f"Alpaca authentication failed: {e}") from e
             raise  # Re-raise other API errors as-is for retry logic
         except Exception as e:
             # Network/transient errors - let caller decide retry/offline mode
@@ -443,6 +443,15 @@ class AlpacaExchange:
         # --- Idempotency check ---
         if client_order_id is not None:
             now = time.time()
+            # Opportunistic prune: entries expire by TTL on read but were
+            # never evicted, so the dict grew one entry per order forever
+            # (slow leak). Drop expired entries here, same pattern as
+            # alerts._in_cooldown.
+            if len(self._order_cache) > 128:
+                self._order_cache = {
+                    k: v for k, v in self._order_cache.items()
+                    if now - v[0] < self._order_cache_ttl
+                }
             cached = self._order_cache.get(client_order_id)
             if cached is not None:
                 ts, order_info = cached

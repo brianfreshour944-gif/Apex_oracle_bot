@@ -1,7 +1,9 @@
 """OOD Adversarial Discriminator — The 'Bullshit Detector'.
 
 Detects when the current market state is structurally different from training data.
-If triggered, overrides the Decision Transformer and forces safe mode (90% size reduction).
+If triggered, overrides the Decision Transformer and forces safe mode: the
+committee result is REPLACED with a full stand_aside veto (action=stand_aside,
+size_multiplier=0.0) -- the trade is blocked outright, not merely resized.
 
 Architecture: Lightweight MLP binary classifier.
 Training: Historical states (Class 0) vs. Live states (Class 1).
@@ -328,15 +330,17 @@ def check_ood_and_override(
         if is_ood:
             logger.warning(
                 f"OOD DETECTED for {symbol}: prob={ood_prob:.3f} > {ood_discriminator.threshold}. "
-                f"Overriding to SAFE MODE (90% size reduction)."
+                f"Overriding to SAFE MODE (full stand_aside veto)."
             )
             
-            # Create safe override
+            # Create safe override: full veto (not a size reduction -- the
+            # comment in the class docstring saying "90% size reduction" is
+            # stale; this result blocks the trade outright).
             from .models import CommitteeResult
             safe_result = CommitteeResult(
                 action="stand_aside",  # Force no trade
                 score=0.0,
-                size_multiplier=0.0,  # 90% reduction effectively
+                size_multiplier=0.0,  # full veto: no trade
                 entropy=1.0,
                 votes=[],
                 active_weights={},

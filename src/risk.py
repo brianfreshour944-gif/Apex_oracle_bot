@@ -726,6 +726,40 @@ class RiskManager:
         """Release a previously-reserved new-position slot."""
         self._reserved_new_position_symbols.pop(symbol, None)
 
+    async def _close_open_snapshot(self, symbol: str, exit_price: float, qty: float,
+                                   exit_reason: str) -> None:
+        """Close the symbol's open decision snapshot after a RISK-SIDE close.
+
+        reduce_exposure_to_cap / liquidate_all_positions bypass
+        bot._record_committee_outcome, so without this the snapshot stays
+        status='open' forever and the in-memory _open_snapshot_cache keeps
+        serving a stale 'open' record for the symbol (audit finding). Best
+        effort and fully fail-safe: any error is logged, never raised.
+        """
+        try:
+            import asyncio as _asyncio
+            from src import db as _db
+            snap = await _asyncio.to_thread(_db.get_open_snapshot, symbol)
+            if not snap:
+                return
+            entry_price = float(snap.get("entry_price", 0.0))
+            recorded_qty = abs(float(snap.get("qty", 0.0)) or 0.0)
+            is_buy = snap.get("final_action", "buy") == "buy"
+            # Same convention as _record_committee_outcome: buy = long.
+            pnl = ((exit_price - entry_price) if is_buy else (entry_price - exit_price)) * recorded_qty
+            await _asyncio.to_thread(
+                _db.close_decision_snapshot,
+                snap["decision_id"],
+                realized_pnl=pnl,
+                return_pct=(pnl / (entry_price * recorded_qty) * 100.0)
+                if (entry_price > 0 and recorded_qty > 0) else 0.0,
+                exit_reason=exit_reason,
+            )
+            logger.warning(f"[RISK-CLOSE] Snapshot {snap['decision_id']} for {symbol} "
+                           f"closed (exit_reason={exit_reason}, pnl={pnl:.2f})")
+        except Exception as e:
+            logger.warning(f"[RISK-CLOSE] Failed to close snapshot for {symbol} (non-fatal): {e}")
+
     async def reduce_exposure_to_cap(self) -> Dict[str, Any]:
         """Close positions, worst unrealized P&L first, until exposure is
         back under the cap. Targeted/incremental, unlike liquidate_all_positions."""
@@ -762,6 +796,12 @@ class RiskManager:
                 # cleanup for normal closes -- this path bypasses that).
                 self.peak_prices.pop(symbol, None)
                 self._reserved_new_position_symbols.pop(symbol, None)
+                # Audit: close the open decision snapshot too -- this path
+                # bypasses _record_committee_outcome, so the snapshot would
+                # stay status='open' forever and the cache would serve a
+                # stale 'open' record for the symbol.
+                await self._close_open_snapshot(symbol, filled_price if filled_price > 0 else 0.0,
+                                                qty_abs, exit_reason="exposure_reduction")
             logger.warning(f"Exposure reduction complete. New exposure: ${current_exposure:.2f} (cap: ${max_portfolio_abs:.2f})")
             return {"status": "exposure_reduced", "results": results, "final_exposure": current_exposure}
         except Exception as e:
@@ -802,6 +842,9 @@ class RiskManager:
                 # cleanup for normal closes -- this path bypasses that).
                 self.peak_prices.pop(symbol, None)
                 self._reserved_new_position_symbols.pop(symbol, None)
+                liq_fill = order_result.get("filled_avg_price", 0.0)
+                await self._close_open_snapshot(symbol, liq_fill if liq_fill > 0 else 0.0,
+                                                qty_abs, exit_reason="killswitch_liquidation")
 
             logger.critical("ALL POSITIONS LIQUIDATED - KILLSWITCH ACTIVATED")
             return {
