@@ -16,6 +16,11 @@ venv
 *.csv
 *.xlsx
 *.json
+# Model architecture configs ARE committed source (needed to load .pth
+# weights at runtime -- without them the Decision Transformer brain silently
+# disables itself in the container, see decision_transformer.py).
+!models/decision_transformer_config.json
+!models/transformer_config.json
 !pyproject.toml
 !Dockerfile
 !requirements.txt

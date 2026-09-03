@@ -1,24 +1,35 @@
-version: '3.8'
-
 services:
   bot:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: apex-oracle-bot
+    # NOTE: no `container_name` here -- Coolify renames services per deploy and
+    # a fixed name collides with leftover containers ("name already in use").
     restart: unless-stopped
     volumes:
-      - ./data:/app/data
-    ports:
-      - "8000:8000"
+      # Named volume instead of a ./data bind mount: on Coolify a relative
+      # bind mount resolves against the ephemeral per-deploy /artifacts dir,
+      # which would wipe the trade DB / crash-recovery state on every redeploy.
+      - bot_data:/app/data
+    # `expose` (not `ports`): Coolify's Traefik proxy routes the configured
+    # FQDN to this container. Publishing a fixed host port (8000:8000) collides
+    # with the previous deployment's container and any other app on the host.
+    expose:
+      - "8000"
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      # Python stdlib check (the image no longer installs curl)
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=4)"]
       interval: 30s
       timeout: 5s
-      start_period: 30s
+      # The bot imports torch and loads model weights before /health is up;
+      # give it headroom so startup isn't marked unhealthy prematurely.
+      start_period: 90s
       retries: 3
     logging:
       driver: "json-file"
       options:
         max-size: "10m"
         max-file: "3"
+
+volumes:
+  bot_data:
