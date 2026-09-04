@@ -186,7 +186,10 @@ def calculate_confidence_size_multiplier(score: float, entropy: float, threshold
     - Multiplier ranges from 0.50x (marginal confidence) to 1.75x (unanimous conviction).
     - High vote entropy (>0.8) penalizes multiplier by up to 25%.
     """
-    if score < threshold:
+        # Guard NaN/inf: a non-finite score would pass `score < threshold` (NaN
+    # comparisons are always False) and yield the maximum size multiplier.
+    # Mirrors the gate in run_committee (see isfinite check there).
+    if not math.isfinite(score) or score < threshold:
         return 0.0
     
     # Linear scale from threshold score -> 0.50x to 1.00 score -> 1.75x
