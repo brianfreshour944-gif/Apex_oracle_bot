@@ -90,7 +90,7 @@ async def analyze_closed_trade(decision_id: str) -> Optional[Dict[str, Any]]:
     gemini_key = settings.GEMINI_API_KEY
     
     res = None
-    if groq_key:
+    if groq_key and settings.GROQ_ATTRIBUTION_MODEL:
         res = await _call_groq_attribution(prompt, groq_key)
     elif gemini_key:
         res = await _call_gemini_attribution(prompt, gemini_key)

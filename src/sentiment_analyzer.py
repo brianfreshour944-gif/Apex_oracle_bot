@@ -173,7 +173,7 @@ async def extract_sentiment(symbol: str) -> Dict[str, Any]:
     groq_key = settings.GROQ_API_KEY
     gemini_key = settings.GEMINI_API_KEY
     
-    if groq_key:
+    if groq_key and settings.GROQ_SENTIMENT_MODEL:
         logger.info(f"Using Groq for Sentiment Analysis on {symbol}")
         res = await call_groq_llm(headlines, groq_key)
     elif gemini_key:
