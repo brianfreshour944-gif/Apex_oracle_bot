@@ -5,7 +5,7 @@ import math
 import threading
 import time
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, Dict, Optional
 
 import numpy as np
 
@@ -73,6 +73,11 @@ class RiskManager:
         # the same stale, cycle-start position count and can all pass the
         # naive position-count check simultaneously.
         self._reserved_new_position_symbols: dict[str, datetime] = {}
+        self._peak_prices_dirty = False
+
+    def mark_peaks_dirty(self) -> None:
+        """Mark peak prices as needing persistence."""
+        self._peak_prices_dirty = True
 
     def get_transaction_costs(self, symbol: str) -> dict[str, float]:
         """Get transaction cost estimates for a symbol.

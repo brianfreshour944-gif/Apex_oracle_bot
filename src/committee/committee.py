@@ -16,7 +16,7 @@ import uuid
 from collections import defaultdict
 from typing import Any
 
-from src.alerting import AlertingEngine
+from src.alerting import AlertingEngine, get_alerting_engine
 from src.config import settings
 from src.logging_config import get_logger
 from src.ood_discriminator import check_ood_and_override, get_ood_discriminator
