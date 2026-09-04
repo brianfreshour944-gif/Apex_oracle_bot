@@ -44,7 +44,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
         --index-url https://download.pytorch.org/whl/cpu \
         --extra-index-url https://pypi.org/simple \
         "torch==2.14.0+cpu" \
-        -r requirements.txt
+        -r requirements.txt --python /app/.venv
 
 # Copy source code (venv stays root-owned/read-only for botuser)
 COPY --chown=botuser:botuser . .

@@ -62,6 +62,11 @@ class TradingBotSettings(BaseSettings):
     # --- LLM API Keys ---
     GROQ_API_KEY: str = Field(default="", description="Groq API key for Sentiment Analysis")
     GEMINI_API_KEY: str = Field(default="", description="Gemini API key for Sentiment Analysis")
+    # NOTE: set to a LIVE Groq model via env. Empty => existing try/except
+    # falls back to the heuristic path. Do NOT use openai/gpt-oss-* -- those
+    # are not valid Groq model IDs and caused silent fallback every cycle.
+    GROQ_SENTIMENT_MODEL: str = Field(default="", description="Groq chat model for sentiment extraction (live Groq model; empty => heuristic fallback)")
+    GROQ_ATTRIBUTION_MODEL: str = Field(default="", description="Groq chat model for attribution (live Groq model; empty => skip Groq)")
 
 
 

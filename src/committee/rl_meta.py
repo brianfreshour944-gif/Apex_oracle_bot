@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from src.logging_config import get_logger
 from .models import BrainVote
 from .adaptive_meta import AdaptiveDecision
+from .regime_utils import normalize_regime
 
 logger = get_logger("rl_meta")
 
@@ -52,6 +53,9 @@ class RLMetaLearner:
         
     def _build_obs(self, brain_outputs: List[BrainVote], regime: str, features: Dict[str, Any]) -> np.ndarray:
         # 1. Regime One-Hot
+        # M1: normalize DT-8 (live classifier / DecisionTransformer) regimes into
+        # the RL-6 one-hot space so the guard below no longer silently zeroes it.
+        regime = normalize_regime(regime)
         regime_vec = np.zeros(len(REGIMES), dtype=np.float32)
         if regime in REGIMES:
             regime_vec[REGIMES.index(regime)] = 1.0
