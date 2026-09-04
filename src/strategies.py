@@ -1,19 +1,18 @@
 """Modern trading strategies using Polars for data analysis."""
 
-import polars as pl
-import numpy as np
-from typing import Dict, Any, Optional, Tuple
-from datetime import datetime, timezone
-from tenacity import retry, stop_after_attempt, wait_exponential
+import time
+from datetime import UTC
+from typing import Any
 
-from src.config import settings, FEATURE_BASE_TIMEFRAME, FEATURE_LOOKBACK_BARS
-from src.logging_config import get_logger
+import numpy as np
+
+from src.config import settings
 from src.exchange import AlpacaExchange
-from src.feature_engineering import add_features, add_multi_timeframe_features, DEFAULT_TIMEFRAMES
+from src.feature_engineering import add_multi_timeframe_features
+from src.logging_config import get_logger
 
 logger = get_logger(__name__)
 
-import time
 
 class TradingStrategy:
     """Modern trading strategy with regime classification and signal generation."""
@@ -21,19 +20,19 @@ class TradingStrategy:
     def __init__(self, exchange: AlpacaExchange, cache_ttl: float = 60.0, backtest: bool = False):
         self.exchange = exchange
         self.last_analysis_time = None
-        self._regime_cache: Dict[str, Tuple[float, Dict[str, Any]]] = {}
+        self._regime_cache: dict[str, tuple[float, dict[str, Any]]] = {}
         self._cache_ttl = cache_ttl
         self.backtest = backtest
-        self._active_strategy: Dict[str, str] = {}
-        self._trailing_peaks: Dict[str, float] = {}
+        self._active_strategy: dict[str, str] = {}
+        self._trailing_peaks: dict[str, float] = {}
         # Cycle-level caches for on-chain and sentiment data so they
         # are fetched once per cycle instead of once per symbol.
-        self._cycle_derivatives: Dict[str, Dict[str, float]] = {}
-        self._cycle_sentiment: Dict[str, Dict[str, Any]] = {}
+        self._cycle_derivatives: dict[str, dict[str, float]] = {}
+        self._cycle_sentiment: dict[str, dict[str, Any]] = {}
         self._cycle_derivatives_ts: float = 0.0
         self._cycle_sentiment_ts: float = 0.0
 
-    async def analyze_market_regime(self, symbol: str, timeframe: str = "1D", limit: int = 100) -> Dict[str, Any]:
+    async def analyze_market_regime(self, symbol: str, timeframe: str = "1D", limit: int = 100) -> dict[str, Any]:
         """Analyze market regime using Hurst exponent, ATR, and RSI with TTL caching."""
         # Named distinctly from `now` (reused below, reassigned via time.time()
         # for the derivatives/sentiment sub-caches) so this TTL check can't be
@@ -320,7 +319,7 @@ class TradingStrategy:
         atr = np.nanmean(tr) if np.any(np.isfinite(tr)) else 0.0
         return float(np.nan_to_num(atr, nan=0.0, posinf=0.0, neginf=0.0))
 
-    def _calculate_rsi(self, prices: np.ndarray, period: int = 14) -> Tuple[float, float]:
+    def _calculate_rsi(self, prices: np.ndarray, period: int = 14) -> tuple[float, float]:
         """Calculate Relative Strength Index. Returns (current_rsi, prev_rsi)."""
         if len(prices) < period + 1:
             return 50.0, 50.0
@@ -371,18 +370,18 @@ class TradingStrategy:
         else:
             return 1.0 - abs(0.5 - hurst) * 2.0
 
-    async def generate_trading_signal(self, symbol: str, current_price: float, position: Optional[Dict] = None) -> Dict[str, Any]:
+    async def generate_trading_signal(self, symbol: str, current_price: float, position: dict | None = None) -> dict[str, Any]:
         """Generate trading signal based on current regime and market conditions."""
         try:
             # Get current market regime
             regime_data = await self.analyze_market_regime(symbol)
             regime = regime_data["regime"]
             rsi = regime_data["rsi"]
-            prev_rsi = regime_data.get("prev_rsi", rsi)
+            _ = regime_data.get("prev_rsi", rsi)
 
             # AI Strategy Selection
-            from src.strategy_selector import select_best_strategy
             from src.execution_strategies import STRATEGIES
+            from src.strategy_selector import select_best_strategy
 
             if position:
                 # Reuse whichever strategy opened this position (if we have a
@@ -466,7 +465,7 @@ class TradingStrategy:
                 "features": {}
             }
 
-    def _check_price_based_exits(self, symbol: str, current_price: float, position: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    def _check_price_based_exits(self, symbol: str, current_price: float, position: dict[str, Any]) -> dict[str, Any] | None:
         """Check price-based exit conditions: stop loss, profit target, trailing stop, max hold."""
         try:
             entry_price = float(position.get("avg_entry_price", 0))
@@ -535,9 +534,9 @@ class TradingStrategy:
 
             # Max hold time check
             if "created_at" in position:
-                from datetime import datetime, timezone
+                from datetime import datetime
                 created = datetime.fromisoformat(position["created_at"].replace("Z", "+00:00"))
-                hold_hours = (datetime.now(timezone.utc) - created).total_seconds() / 3600
+                hold_hours = (datetime.now(UTC) - created).total_seconds() / 3600
                 if hold_hours >= settings.MAX_HOLD_HOURS:
                     return {
                         "symbol": symbol,

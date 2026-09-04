@@ -4,10 +4,11 @@ A standard Gymnasium environment where the agent learns to optimally
 weight the committee brains and size positions based on historical market snapshots.
 """
 
+from typing import Any
+
 import gymnasium as gym
-from gymnasium import spaces
 import numpy as np
-from typing import Dict, Any, List
+from gymnasium import spaces
 
 BRAINS = ["transformer", "quant", "momentum", "sentinel", "llm"]
 REGIMES = ["trending", "mean_reverting", "volatile", "choppy", "breakout", "default"]
@@ -30,8 +31,8 @@ class MetaDecisionEnv(gym.Env):
       - Realized PnL of the resulting theoretical trade
     """
     
-    def __init__(self, historical_snapshots: List[Dict[str, Any]]):
-        super(MetaDecisionEnv, self).__init__()
+    def __init__(self, historical_snapshots: list[dict[str, Any]]):
+        super().__init__()
         
         self.snapshots = historical_snapshots
         self.current_step = 0
@@ -114,13 +115,13 @@ class MetaDecisionEnv(gym.Env):
                 sell_score += weights[i]
                 
         final_action = "hold"
-        confidence = 0.0
+        _confidence = 0.0
         if buy_score > sell_score and buy_score > conf_thresh:
             final_action = "buy"
-            confidence = buy_score
+            _confidence = buy_score
         elif sell_score > buy_score and sell_score > conf_thresh:
             final_action = "sell"
-            confidence = sell_score
+            _confidence = sell_score
             
         # Compare to reality to get reward
         realized_pnl = snap.get("realized_pnl", 0.0)

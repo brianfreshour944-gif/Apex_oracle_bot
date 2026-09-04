@@ -1,10 +1,9 @@
 """Modern Streamlit Live Monitoring Dashboard for Apex Oracle Bot."""
 
 import asyncio
+
 import httpx
 import streamlit as st
-import polars as pl
-import pandas as pd
 
 from src.config import settings
 

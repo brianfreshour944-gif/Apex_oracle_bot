@@ -9,7 +9,7 @@ Eliminates the class of bug where a new fallback source bypasses validation.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Optional, Literal
+from typing import Literal
 
 from src.config import settings
 from src.logging_config import get_logger

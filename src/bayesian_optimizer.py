@@ -18,11 +18,10 @@ import os
 import threading
 import time
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any
 
 import numpy as np
 
-from src.config import settings
 from src.logging_config import get_logger
 
 logger = get_logger("bayes_opt")
@@ -40,18 +39,18 @@ class ParameterSpace:
     param_type: str  # 'float', 'int', 'categorical'
     low: float = 0.0
     high: float = 1.0
-    categories: List[Any] = field(default_factory=list)
+    categories: list[Any] = field(default_factory=list)
     log_scale: bool = False
 
 
 @dataclass
 class OptimizationResult:
     """Result of a single evaluation."""
-    params: Dict[str, Any]
+    params: dict[str, Any]
     objective: float  # Higher is better (e.g., Sharpe, win rate)
     timestamp: float
     regime: str
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 class GaussianProcessSurrogate:
@@ -59,13 +58,13 @@ class GaussianProcessSurrogate:
     
     def __init__(self, noise: float = 1e-4):
         self.noise = noise
-        self.X: List[np.ndarray] = []
-        self.y: List[float] = []
+        self.X: list[np.ndarray] = []
+        self.y: list[float] = []
         self._sklearn_gp = None
-        self._param_names: List[str] = []
+        self._param_names: list[str] = []
         self._fitted = False
     
-    def _vectorize_params(self, params: Dict[str, Any], param_spaces: List[ParameterSpace]) -> np.ndarray:
+    def _vectorize_params(self, params: dict[str, Any], param_spaces: list[ParameterSpace]) -> np.ndarray:
         """Convert param dict to vector."""
         vec = []
         for space in param_spaces:
@@ -83,7 +82,7 @@ class GaussianProcessSurrogate:
                     vec.append(float(val))
         return np.array(vec, dtype=np.float32)
     
-    def fit(self, results: List[OptimizationResult], param_spaces: List[ParameterSpace]) -> None:
+    def fit(self, results: list[OptimizationResult], param_spaces: list[ParameterSpace]) -> None:
         """Fit GP to observed data."""
         if len(results) < 2:
             self._fitted = False
@@ -99,7 +98,7 @@ class GaussianProcessSurrogate:
         # Try sklearn GP
         try:
             from sklearn.gaussian_process import GaussianProcessRegressor
-            from sklearn.gaussian_process.kernels import Matern, WhiteKernel, ConstantKernel
+            from sklearn.gaussian_process.kernels import ConstantKernel, Matern, WhiteKernel
             
             kernel = ConstantKernel(1.0) * Matern(length_scale=1.0, nu=2.5) + WhiteKernel(self.noise)
             self._sklearn_gp = GaussianProcessRegressor(
@@ -115,7 +114,7 @@ class GaussianProcessSurrogate:
             logger.warning("sklearn not available, using fallback acquisition")
             self._fitted = False
     
-    def predict(self, params: Dict[str, Any], param_spaces: List[ParameterSpace]) -> Tuple[float, float]:
+    def predict(self, params: dict[str, Any], param_spaces: list[ParameterSpace]) -> tuple[float, float]:
         """Predict mean and std for given params."""
         if not self._fitted or self._sklearn_gp is None or len(self.X) < 2:
             # Fallback: return mean of observed with high uncertainty
@@ -177,12 +176,12 @@ class OnlineBayesianOptimizer:
     
     def __init__(
         self,
-        param_spaces: List[ParameterSpace],
+        param_spaces: list[ParameterSpace],
         acquisition: str = 'ucb',  # 'ei', 'ucb', 'pi'
         ucb_kappa: float = 2.0,
         ei_xi: float = 0.01,
         random_fraction: float = 0.1,  # Fraction of random exploration
-        state_path: Optional[str] = None,
+        state_path: str | None = None,
     ):
         self.param_spaces = param_spaces
         self.acquisition_type = acquisition
@@ -192,9 +191,9 @@ class OnlineBayesianOptimizer:
         self.state_path = state_path or OPT_STATE_PATH
         
         self.surrogate = GaussianProcessSurrogate()
-        self.history: List[OptimizationResult] = []
-        self.regime_history: Dict[str, List[OptimizationResult]] = {}
-        self.best_params: Dict[str, Any] = {}
+        self.history: list[OptimizationResult] = []
+        self.regime_history: dict[str, list[OptimizationResult]] = {}
+        self.best_params: dict[str, Any] = {}
         self.best_objective: float = -float('inf')
         self._lock = threading.Lock()
         self._initialized = False
@@ -202,7 +201,7 @@ class OnlineBayesianOptimizer:
         if self.state_path:
             self.load()
     
-    def _get_param_bounds(self) -> List[Tuple[float, float]]:
+    def _get_param_bounds(self) -> list[tuple[float, float]]:
         """Get bounds for random sampling."""
         bounds = []
         for space in self.param_spaces:
@@ -214,7 +213,7 @@ class OnlineBayesianOptimizer:
                 bounds.append((space.low, space.high))
         return bounds
     
-    def suggest(self, regime: str = 'default') -> Dict[str, Any]:
+    def suggest(self, regime: str = 'default') -> dict[str, Any]:
         """Suggest next parameters to evaluate."""
         with self._lock:
             if len(self.history) < 3 or np.random.random() < self.random_fraction:
@@ -234,7 +233,7 @@ class OnlineBayesianOptimizer:
             best_acq = -float('inf')
             best_params = None
             
-            bounds = self._get_param_bounds()
+            _ = self._get_param_bounds()
             n_candidates = 1000
             
             for _ in range(n_candidates):
@@ -254,7 +253,7 @@ class OnlineBayesianOptimizer:
             
             return best_params or self._random_params()
     
-    def _random_params(self) -> Dict[str, Any]:
+    def _random_params(self) -> dict[str, Any]:
         """Generate random parameters within bounds."""
         params = {}
         for space in self.param_spaces:
@@ -290,7 +289,7 @@ class OnlineBayesianOptimizer:
             
             self._save_safely()
     
-    def get_best_params(self, regime: Optional[str] = None) -> Dict[str, Any]:
+    def get_best_params(self, regime: str | None = None) -> dict[str, Any]:
         """Get best parameters (overall or for specific regime)."""
         with self._lock:
             if regime and regime in self.regime_history and self.regime_history[regime]:
@@ -298,7 +297,7 @@ class OnlineBayesianOptimizer:
                 return best.params.copy()
             return self.best_params.copy()
     
-    def get_regime_summary(self, regime: str) -> Dict[str, Any]:
+    def get_regime_summary(self, regime: str) -> dict[str, Any]:
         """Get optimization summary for a regime."""
         with self._lock:
             results = self.regime_history.get(regime, [])
@@ -369,7 +368,7 @@ class OnlineBayesianOptimizer:
         if not self.state_path or not os.path.exists(self.state_path):
             return
         try:
-            with open(self.state_path, "r") as f:
+            with open(self.state_path) as f:
                 state = json.load(f)
             
             self.history = [
@@ -397,7 +396,7 @@ class OnlineBayesianOptimizer:
 
 # ── Default Parameter Spaces ────────────────────────────────────────
 
-def get_default_meta_learner_space() -> List[ParameterSpace]:
+def get_default_meta_learner_space() -> list[ParameterSpace]:
     """Parameter space for AdaptiveMetaLearner."""
     return [
         ParameterSpace("learning_rate", "float", 0.01, 0.5, log_scale=True),
@@ -409,7 +408,7 @@ def get_default_meta_learner_space() -> List[ParameterSpace]:
     ]
 
 
-def get_default_committee_space() -> List[ParameterSpace]:
+def get_default_committee_space() -> list[ParameterSpace]:
     """Parameter space for Committee combination logic."""
     return [
         ParameterSpace("entropy_penalty_factor", "float", 0.1, 0.5),
@@ -420,7 +419,7 @@ def get_default_committee_space() -> List[ParameterSpace]:
     ]
 
 
-def get_default_transformer_space() -> List[ParameterSpace]:
+def get_default_transformer_space() -> list[ParameterSpace]:
     """Parameter space for Transformer brain."""
     return [
         ParameterSpace("ensemble_size", "int", 3, 10),
@@ -430,7 +429,7 @@ def get_default_transformer_space() -> List[ParameterSpace]:
     ]
 
 
-def get_default_risk_space() -> List[ParameterSpace]:
+def get_default_risk_space() -> list[ParameterSpace]:
     """Parameter space for Risk management."""
     return [
         ParameterSpace("base_risk_percent", "float", 0.005, 0.03, log_scale=True),
@@ -468,17 +467,16 @@ def compute_meta_learner_objective(regime: str) -> float:
 
 def compute_committee_objective(regime: str) -> float:
     """Compute objective for committee: risk-adjusted return proxy."""
-    from src.metrics import get_committee_metrics  # hypothetical
     # Would integrate with actual metrics
     return compute_meta_learner_objective(regime)
 
 
 # ── Global Optimizer Instances ────────────────────────────────────
 
-_meta_learner_optimizer: Optional[OnlineBayesianOptimizer] = None
-_committee_optimizer: Optional[OnlineBayesianOptimizer] = None
-_transformer_optimizer: Optional[OnlineBayesianOptimizer] = None
-_risk_optimizer: Optional[OnlineBayesianOptimizer] = None
+_meta_learner_optimizer: OnlineBayesianOptimizer | None = None
+_committee_optimizer: OnlineBayesianOptimizer | None = None
+_transformer_optimizer: OnlineBayesianOptimizer | None = None
+_risk_optimizer: OnlineBayesianOptimizer | None = None
 
 
 def get_meta_learner_optimizer() -> OnlineBayesianOptimizer:

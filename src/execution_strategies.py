@@ -1,6 +1,7 @@
 """Distinct trading strategy implementations for the AI Strategy Selector."""
 
-from typing import Dict, Any, Optional
+from typing import Any
+
 from src.config import settings
 from src.logging_config import get_logger
 
@@ -11,7 +12,7 @@ class BaseExecutionStrategy:
     def __init__(self):
         self.name = "base"
 
-    def generate_signal(self, symbol: str, current_price: float, position: Optional[Dict], features: Dict[str, Any]) -> Dict[str, Any]:
+    def generate_signal(self, symbol: str, current_price: float, position: dict | None, features: dict[str, Any]) -> dict[str, Any]:
         """Generate a trading signal based on current features."""
         raise NotImplementedError
 
@@ -22,7 +23,7 @@ class TrendFollowingStrategy(BaseExecutionStrategy):
         super().__init__()
         self.name = "trend_following"
 
-    def generate_signal(self, symbol: str, current_price: float, position: Optional[Dict], features: Dict[str, Any]) -> Dict[str, Any]:
+    def generate_signal(self, symbol: str, current_price: float, position: dict | None, features: dict[str, Any]) -> dict[str, Any]:
         rsi = features.get("rsi", 50.0)
         prev_rsi = features.get("prev_rsi", 50.0)
         htf_trend = features.get("htf_trend", "neutral")
@@ -50,7 +51,7 @@ class MeanReversionStrategy(BaseExecutionStrategy):
         super().__init__()
         self.name = "mean_reversion"
 
-    def generate_signal(self, symbol: str, current_price: float, position: Optional[Dict], features: Dict[str, Any]) -> Dict[str, Any]:
+    def generate_signal(self, symbol: str, current_price: float, position: dict | None, features: dict[str, Any]) -> dict[str, Any]:
         rsi = features.get("rsi", 50.0)
         prev_rsi = features.get("prev_rsi", 50.0)
         price_zscore = features.get("price_zscore", 0.0)
@@ -92,7 +93,7 @@ class MomentumStrategy(BaseExecutionStrategy):
         super().__init__()
         self.name = "momentum"
 
-    def generate_signal(self, symbol: str, current_price: float, position: Optional[Dict], features: Dict[str, Any]) -> Dict[str, Any]:
+    def generate_signal(self, symbol: str, current_price: float, position: dict | None, features: dict[str, Any]) -> dict[str, Any]:
         rsi = features.get("rsi", 50.0)
         prev_rsi = features.get("prev_rsi", 50.0)
         rsi_roc = rsi - prev_rsi
@@ -125,7 +126,7 @@ class BreakoutStrategy(BaseExecutionStrategy):
         super().__init__()
         self.name = "breakout"
 
-    def generate_signal(self, symbol: str, current_price: float, position: Optional[Dict], features: Dict[str, Any]) -> Dict[str, Any]:
+    def generate_signal(self, symbol: str, current_price: float, position: dict | None, features: dict[str, Any]) -> dict[str, Any]:
         regime = features.get("regime", "neutral")
         rsi = features.get("rsi", 50.0)
 
@@ -152,7 +153,7 @@ class GridStrategy(BaseExecutionStrategy):
         super().__init__()
         self.name = "grid"
 
-    def generate_signal(self, symbol: str, current_price: float, position: Optional[Dict], features: Dict[str, Any]) -> Dict[str, Any]:
+    def generate_signal(self, symbol: str, current_price: float, position: dict | None, features: dict[str, Any]) -> dict[str, Any]:
         # Pseudo-grid using RSI bands for continuous accumulation.
         rsi = features.get("rsi", 50.0)
         
@@ -180,7 +181,7 @@ class ScalpingStrategy(BaseExecutionStrategy):
         super().__init__()
         self.name = "scalping"
 
-    def generate_signal(self, symbol: str, current_price: float, position: Optional[Dict], features: Dict[str, Any]) -> Dict[str, Any]:
+    def generate_signal(self, symbol: str, current_price: float, position: dict | None, features: dict[str, Any]) -> dict[str, Any]:
         rsi = features.get("rsi", 50.0)
         prev_rsi = features.get("prev_rsi", 50.0)
 

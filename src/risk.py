@@ -4,13 +4,14 @@ import asyncio
 import math
 import threading
 import time
+from datetime import UTC, datetime
+from typing import Any
+
 import numpy as np
-from typing import Dict, Any, Optional, Tuple
-from datetime import datetime, timezone
 
 from src.config import settings
-from src.logging_config import get_logger
 from src.exchange import AlpacaExchange
+from src.logging_config import get_logger
 
 logger = get_logger(__name__)
 
@@ -51,8 +52,8 @@ class RiskManager:
         self.peak_equity = 0.0
         self.daily_pnl = 0.0
         self.open_positions = []
-        self.peak_prices: Dict[str, float] = {}  # Tracks highest price seen while in position
-        self.last_check_time = datetime.now(timezone.utc)
+        self.peak_prices: dict[str, float] = {}  # Tracks highest price seen while in position
+        self.last_check_time = datetime.now(UTC)
         # Protects against a race condition where multiple symbols are evaluated
         # concurrently (asyncio tasks) and could each independently pass an
         # exposure-cap check before any of their sibling orders have actually
@@ -64,16 +65,16 @@ class RiskManager:
         self._peak_prices_lock = threading.Lock()
         self._reserved_exposure = []  # list of (notional_amount, reserved_at) tuples
         # Transaction cost tracking for dynamic model
-        self._realized_tx_costs: Dict[str, Dict[str, float]] = {}  # symbol -> {fee_bps, slippage_bps, spread_bps}
+        self._realized_tx_costs: dict[str, dict[str, float]] = {}  # symbol -> {fee_bps, slippage_bps, spread_bps}
         # Reserved new-position slots: symbol -> reserved_at. Mirrors
         # _reserved_exposure's pattern (same lock, same TTL) but for
         # MAX_OPEN_POSITIONS instead of dollar exposure -- without this,
         # multiple concurrently-evaluated symbols in the same cycle all see
         # the same stale, cycle-start position count and can all pass the
         # naive position-count check simultaneously.
-        self._reserved_new_position_symbols: Dict[str, datetime] = {}
+        self._reserved_new_position_symbols: dict[str, datetime] = {}
 
-    def get_transaction_costs(self, symbol: str) -> Dict[str, float]:
+    def get_transaction_costs(self, symbol: str) -> dict[str, float]:
         """Get transaction cost estimates for a symbol.
         
         Uses dynamic model (recent realized costs) if enabled and available,
@@ -130,9 +131,9 @@ class RiskManager:
 
     async def update_account_status(
         self,
-        account: Optional[Dict[str, Any]] = None,
-        positions: Optional[list] = None,
-    ) -> Dict[str, Any]:
+        account: dict[str, Any] | None = None,
+        positions: list | None = None,
+    ) -> dict[str, Any]:
         """Update account status and check risk limits.
 
         Accepts optionally pre-fetched `account`/`positions` so callers that
@@ -181,7 +182,7 @@ class RiskManager:
                 }
 
             # Reset daily PnL if new day
-            now = datetime.now(timezone.utc)
+            now = datetime.now(UTC)
             if now.day != self.last_check_time.day:
                 async with self._equity_lock:
                     self.daily_pnl = 0.0
@@ -250,7 +251,7 @@ class RiskManager:
                 "action": "stand_aside"
             }
 
-    def _get_drawdown_taper_multiplier(self, drawdown_pct: Optional[float]) -> float:
+    def _get_drawdown_taper_multiplier(self, drawdown_pct: float | None) -> float:
         """Additional risk-amount taper as equity drawdown approaches the killswitch.
 
         current_equity (see calculate_position_size) already shrinks
@@ -291,13 +292,13 @@ class RiskManager:
         symbol: str,
         current_price: float,
         regime: str,
-        atr: Optional[float] = None,
+        atr: float | None = None,
         confidence: float = 1.0,
-        returns_matrix: Optional[Dict[str, np.ndarray]] = None,
+        returns_matrix: dict[str, np.ndarray] | None = None,
         expected_return_pct: float = 0.0,
-        current_equity: Optional[float] = None,
-        drawdown_pct: Optional[float] = None,
-    ) -> Tuple[float, str]:
+        current_equity: float | None = None,
+        drawdown_pct: float | None = None,
+    ) -> tuple[float, str]:
         """Portfolio Optimization: Volatility Parity, Correlation VaR, and Cash Allocation.
 
         Now includes transaction cost model:
@@ -439,7 +440,7 @@ class RiskManager:
             return 0.0, f"error: {e}"
 
 
-    def _get_trailing_params(self, regime: Optional[str]) -> Tuple[float, float]:
+    def _get_trailing_params(self, regime: str | None) -> tuple[float, float]:
         """Scale TRAILING_ACTIVATION_PCT/TRAILING_DISTANCE_PCT by regime.
 
         Unrecognized or missing regime maps to (1.0, 1.0) -- exact match to
@@ -460,7 +461,7 @@ class RiskManager:
             distance = activation * 0.9
         return activation, distance
 
-    def check_trailing_stop(self, symbol: str, current_price: float, avg_entry_price: float, qty: float, regime: Optional[str] = None) -> str:
+    def check_trailing_stop(self, symbol: str, current_price: float, avg_entry_price: float, qty: float, regime: str | None = None) -> str:
         """
         Check if a trailing stop should be activated or triggered.
         Returns: 'close' if triggered, 'hold' otherwise.
@@ -531,8 +532,8 @@ class RiskManager:
         self,
         requested_notional: float,
         min_notional: float = 10.0,
-        current_exposure: Optional[float] = None,
-    ) -> Tuple[float, str]:
+        current_exposure: float | None = None,
+    ) -> tuple[float, str]:
         """Returns the APPROVED notional (may be smaller than requested,
         capped to remaining headroom) rather than a strict pass/fail, so
         available capacity gets used instead of sitting idle. Returns
@@ -568,7 +569,7 @@ class RiskManager:
                     return 0.0, status.get("reason", status.get("status", "risk_check_failed"))
                 current_exposure = status["current_exposure"]
 
-            now = datetime.now(timezone.utc)
+            now = datetime.now(UTC)
             # Prune stale reservations aggressively (30s TTL instead of 60s)
             # so failed/cancelled orders release their headroom faster.
             self._reserved_exposure = [(a, t) for a, t in self._reserved_exposure if (now - t).total_seconds() < 30]
@@ -621,7 +622,7 @@ class RiskManager:
         symbol: str,
         open_position_count: int,
         same_regime_open_count: int = 0,
-    ) -> Tuple[bool, str]:
+    ) -> tuple[bool, str]:
         """Atomically check and reserve a new-position slot against MAX_OPEN_POSITIONS.
 
         Call this once per symbol, only for a genuinely NEW entry (not a
@@ -651,7 +652,7 @@ class RiskManager:
         can get in one regime cluster, independent of the overall count cap.
         """
         async with self._exposure_lock:
-            now = datetime.now(timezone.utc)
+            now = datetime.now(UTC)
             # Prune stale reservations (30s TTL, matching _reserved_exposure)
             self._reserved_new_position_symbols = {
                 s: t for s, t in self._reserved_new_position_symbols.items()
@@ -682,7 +683,7 @@ class RiskManager:
         """Release a previously-reserved new-position slot."""
         self._reserved_new_position_symbols.pop(symbol, None)
 
-    async def reduce_exposure_to_cap(self) -> Dict[str, Any]:
+    async def reduce_exposure_to_cap(self) -> dict[str, Any]:
         """Close positions, worst unrealized P&L first, until exposure is
         back under the cap. Targeted/incremental, unlike liquidate_all_positions."""
         try:
@@ -721,7 +722,7 @@ class RiskManager:
             logger.error(f"Exposure reduction failed: {e}")
             return {"status": "reduction_failed", "error": str(e)}
 
-    async def liquidate_all_positions(self) -> Dict[str, Any]:
+    async def liquidate_all_positions(self) -> dict[str, Any]:
         """Liquidate all open positions."""
         try:
             positions = await self.exchange.get_positions()
@@ -760,7 +761,7 @@ class RiskManager:
             return {
                 "status": "liquidation_complete",
                 "results": results,
-                "timestamp": datetime.now(timezone.utc).isoformat()
+                "timestamp": datetime.now(UTC).isoformat()
             }
 
         except Exception as e:

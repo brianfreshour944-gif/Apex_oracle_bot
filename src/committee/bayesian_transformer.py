@@ -9,19 +9,20 @@ Wraps the existing transformer model(s) to provide:
 
 from __future__ import annotations
 
-import os
 import json
-import numpy as np
+import os
 import threading
-from typing import Dict, List, Optional, Tuple, Any
 from dataclasses import dataclass
 
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
 from src.config import settings
 from src.logging_config import get_logger
+
+from .models import BrainVote
 
 logger = get_logger("bayesian_transformer")
 
@@ -43,9 +44,9 @@ class EnsemblePrediction:
     epistemic_uncertainty: float  # Model uncertainty (ensemble variance)
     aleatoric_uncertainty: float  # Data uncertainty (MC-dropout variance)
     calibrated_prob: float
-    confidence_interval: Tuple[float, float]  # 95% CI
+    confidence_interval: tuple[float, float]  # 95% CI
     logit: float
-    all_probs: List[float]
+    all_probs: list[float]
 
 
 class TemperatureScaler(nn.Module):
@@ -72,7 +73,7 @@ class BayesianTransformerBrain:
         self.mc_passes = mc_passes
         self.calibration_path = calibration_path
         
-        self.models: List[nn.Module] = []
+        self.models: list[nn.Module] = []
         self.scaler = None
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.input_dim = 11
@@ -107,7 +108,7 @@ class BayesianTransformerBrain:
                 # Load architecture config
                 config_path = os.path.join(os.path.dirname(base_model_path), "transformer_config.json")
                 if os.path.exists(config_path):
-                    with open(config_path, "r") as f:
+                    with open(config_path) as f:
                         arch = json.load(f)
                     model = self._create_model(arch)
                 else:
@@ -125,7 +126,7 @@ class BayesianTransformerBrain:
             
             # Load calibration temperature if available
             if os.path.exists(self.calibration_path):
-                with open(self.calibration_path, "r") as f:
+                with open(self.calibration_path) as f:
                     cal = json.load(f)
                     self.calibration_temp = cal.get("temperature", 1.0)
                     logger.info(f"Loaded calibration temperature: {self.calibration_temp:.4f}")
@@ -139,7 +140,7 @@ class BayesianTransformerBrain:
             self.models = []
             return False
     
-    def _create_model(self, arch: Dict) -> nn.Module:
+    def _create_model(self, arch: dict) -> nn.Module:
         """Create transformer model from architecture config."""
         # Import the model class from transformer_brain
         from .transformer_brain import GrokGQA_Transformer
@@ -192,7 +193,7 @@ class BayesianTransformerBrain:
                     model.eval()
                     
                     if mc_probs:
-                        aleatoric_var = np.var(mc_probs)
+                        _aleatoric_var = np.var(mc_probs)
                         all_probs.extend(mc_probs)
             
             # Compute statistics
@@ -252,9 +253,9 @@ class BayesianTransformerBrain:
     def get_causal_reasoning(
         self,
         x: torch.Tensor,
-        cols: List[str],
+        cols: list[str],
         threshold: float = 0.58,
-    ) -> Optional[Dict[str, float]]:
+    ) -> dict[str, float] | None:
         """Compute gradient-based feature importance (SHAP-like).
         
         Only runs if probability is above/below decision threshold.
@@ -286,13 +287,13 @@ class BayesianTransformerBrain:
 
 
 # Global instance
-_bayesian_brain: Optional[BayesianTransformerBrain] = None
+_bayesian_brain: BayesianTransformerBrain | None = None
 
 
 def get_bayesian_transformer(
     ensemble_size: int = DEFAULT_ENSEMBLE_SIZE,
     mc_passes: int = MC_DROPOUT_PASSES,
-) -> Optional[BayesianTransformerBrain]:
+) -> BayesianTransformerBrain | None:
     """Get or create the global Bayesian transformer instance."""
     global _bayesian_brain
     if _bayesian_brain is not None:
@@ -326,13 +327,12 @@ async def bayesian_transformer_brain(
     signal: dict,
     ensemble_size: int = DEFAULT_ENSEMBLE_SIZE,
     mc_passes: int = MC_DROPOUT_PASSES,
-) -> "BrainVote":
+) -> BrainVote:
     """Bayesian transformer brain with calibrated uncertainty.
     
     Replaces the standard transformer_brain with uncertainty-aware predictions.
     """
-    from .models import BrainVote
-    
+
     if not getattr(settings, 'ADAPTIVE_ML_ENABLED', True):
         return BrainVote(
             name="transformer",
@@ -364,9 +364,9 @@ async def bayesian_transformer_brain(
         try:
             import asyncio
             import os
-            from src.feature_engineering import add_features
+
             from src.data_fetcher import fetch_bars
-            from alpaca.data.historical import CryptoHistoricalDataClient
+            from src.feature_engineering import add_features
             
             def _do_inference():
                 backtest_df = signal.get("backtest_df")
@@ -449,7 +449,7 @@ async def bayesian_transformer_brain(
                 pred = brain.predict_with_uncertainty(x, use_mc_dropout=is_live)
                 
                 # Compute weight from uncertainty
-                transformer_weight = brain.compute_weight_from_uncertainty(pred)
+                _transformer_weight = brain.compute_weight_from_uncertainty(pred)
                 
                 # Causal reasoning if decisive
                 causal_reasoning = None

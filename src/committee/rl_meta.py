@@ -4,16 +4,15 @@ Loads the trained stable-baselines3 PPO agent to dynamically determine
 committee weights, position sizing, and confidence thresholds.
 """
 
-import json
-import asyncio
 import os
+from typing import Any
+
 import numpy as np
-from typing import Dict, Any, List, Optional, Tuple
-from dataclasses import dataclass
 
 from src.logging_config import get_logger
-from .models import BrainVote
+
 from .adaptive_meta import AdaptiveDecision
+from .models import BrainVote
 
 logger = get_logger("rl_meta")
 
@@ -50,7 +49,7 @@ class RLMetaLearner:
     def __init__(self):
         self.model = get_ppo_model()
         
-    def _build_obs(self, brain_outputs: List[BrainVote], regime: str, features: Dict[str, Any]) -> np.ndarray:
+    def _build_obs(self, brain_outputs: list[BrainVote], regime: str, features: dict[str, Any]) -> np.ndarray:
         # 1. Regime One-Hot
         regime_vec = np.zeros(len(REGIMES), dtype=np.float32)
         if regime in REGIMES:
@@ -92,7 +91,7 @@ class RLMetaLearner:
         obs = np.concatenate([regime_vec, feature_vec, event_vec, vote_vec])
         return np.nan_to_num(obs, 0.0).astype(np.float32)
 
-    def combine(self, brain_outputs: List[BrainVote], regime: str, features: Dict[str, Any]) -> AdaptiveDecision:
+    def combine(self, brain_outputs: list[BrainVote], regime: str, features: dict[str, Any]) -> AdaptiveDecision:
         if not self.model:
             # Fallback to simple equal weights if PPO isn't trained yet
             from .adaptive_meta import BrainScore
@@ -115,7 +114,7 @@ class RLMetaLearner:
                 action=action,
                 confidence=confidence,
                 regime=regime,
-                weights={b: 0.2 for b in BRAINS},
+                weights=dict.fromkeys(BRAINS, 0.2),
                 explanation="PPO model not loaded. Fallback equal weights."
             )
             

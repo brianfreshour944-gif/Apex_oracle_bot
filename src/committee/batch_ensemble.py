@@ -10,13 +10,11 @@ Memory: ~1.2x single model vs 5x for Deep Ensemble
 
 from __future__ import annotations
 
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
-from typing import List, Optional, Dict, Any
 import copy
 
-from src.config import settings
+import torch
+import torch.nn as nn
+
 from src.logging_config import get_logger
 
 logger = get_logger("batch_ensemble")
@@ -141,7 +139,7 @@ class BatchEnsembleDropout(nn.Module):
 def replace_linear_with_batchensemble(
     module: nn.Module,
     ensemble_size: int = 5,
-    skip_modules: Optional[List[str]] = None,
+    skip_modules: list[str] | None = None,
 ) -> nn.Module:
     """Recursively replace all nn.Linear with BatchEnsembleLinear.
     
@@ -263,7 +261,7 @@ class BatchEnsembleTransformer(nn.Module):
         
         return out
     
-    def get_ensemble_stats(self, x: torch.Tensor) -> Dict[str, torch.Tensor]:
+    def get_ensemble_stats(self, x: torch.Tensor) -> dict[str, torch.Tensor]:
         """Get mean and variance across ensemble."""
         out = self.forward(x)  # [B, E, L, D] or [B, E, D]
         

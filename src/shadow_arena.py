@@ -1,83 +1,21 @@
-import logging
-import uuid
 import datetime
-import os
 import json
-from typing import Dict, Any, List, Optional
+import logging
+import os
+import uuid
+from typing import Any
 
 try:
     import torch
-    import torch.nn as nn
     _TORCH_AVAILABLE = True
 except ImportError:
     _TORCH_AVAILABLE = False
 from sqlalchemy import select
-from src.db import get_engine, get_db_session, ShadowTrade, Base, _ensure_tables
-from src.config import settings
+
+from src.committee.transformer_brain import GrokGQA_Transformer
+from src.db import ShadowTrade, _ensure_tables, get_db_session
 
 logger = logging.getLogger("shadow_arena")
-
-class GQA_TransformerBlock(nn.Module):
-    def __init__(self, embed_dim=128, num_q_heads=8, num_kv_heads=2, dropout=0.1):
-        super().__init__()
-        self.num_q_heads = num_q_heads
-        self.num_kv_heads = num_kv_heads
-        self.head_dim = embed_dim // num_q_heads
-        self.q_proj = nn.Linear(embed_dim, num_q_heads * self.head_dim)
-        self.k_proj = nn.Linear(embed_dim, num_kv_heads * self.head_dim)
-        self.v_proj = nn.Linear(embed_dim, num_kv_heads * self.head_dim)
-        self.out_proj = nn.Linear(num_q_heads * self.head_dim, embed_dim)
-        self.norm1 = nn.LayerNorm(embed_dim)
-        self.norm2 = nn.LayerNorm(embed_dim)
-        self.ffn = nn.Sequential(
-            nn.Linear(embed_dim, embed_dim * 4),
-            nn.GELU(),
-            nn.Dropout(dropout),
-            nn.Linear(embed_dim * 4, embed_dim),
-        )
-        self.dropout = nn.Dropout(dropout)
-        import torch.nn.functional as F
-        self.F = F
-
-    def forward(self, x):
-        residual = x
-        norm_x = self.norm1(x)
-        batch, seq, _ = norm_x.shape
-        q = self.q_proj(norm_x).view(batch, seq, self.num_q_heads, self.head_dim).transpose(1, 2)
-        k = self.k_proj(norm_x).view(batch, seq, self.num_kv_heads, self.head_dim).transpose(1, 2)
-        v = self.v_proj(norm_x).view(batch, seq, self.num_kv_heads, self.head_dim).transpose(1, 2)
-        k = k.repeat_interleave(self.num_q_heads // self.num_kv_heads, dim=1)
-        v = v.repeat_interleave(self.num_q_heads // self.num_kv_heads, dim=1)
-        attn = self.F.scaled_dot_product_attention(q, k, v)
-        attn = attn.transpose(1, 2).contiguous().view(batch, seq, self.num_q_heads * self.head_dim)
-        x = residual + self.dropout(self.out_proj(attn))
-        residual = x
-        norm_x = self.norm2(x)
-        x = residual + self.ffn(norm_x)
-        return x
-
-class GrokGQA_Transformer(nn.Module):
-    def __init__(self, input_dim=11, seq_len=32, embed_dim=128, num_layers=4, num_q_heads=8, num_kv_heads=2, dropout=0.1):
-        super().__init__()
-        self.input_projection = nn.Linear(input_dim, embed_dim)
-        self.pos_encoder = nn.Parameter(torch.zeros(1, seq_len, embed_dim))
-        self.dropout = nn.Dropout(dropout)
-        self.layers = nn.ModuleList([
-            GQA_TransformerBlock(embed_dim, num_q_heads, num_kv_heads, dropout)
-            for _ in range(num_layers)
-        ])
-        self.norm = nn.LayerNorm(embed_dim)
-        self.output_head = nn.Linear(embed_dim, 1)
-
-    def forward(self, x):
-        x = self.input_projection(x)
-        x = x + self.pos_encoder 
-        x = self.dropout(x)
-        for layer in self.layers:
-            x = layer(x)
-        x = self.norm(x)
-        x = self.output_head(x[:, -1, :])
-        return x
 
 _candidates_cache = {}
 _candidates_cache_mtime = 0.0
@@ -113,7 +51,6 @@ def get_candidates():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     
     import joblib
-    import numpy as np
     scaler_path = os.path.join(candidates_dir, "feature_scaler.pkl")
     if not os.path.exists(scaler_path):
         return {}
@@ -130,7 +67,7 @@ def get_candidates():
             name = f.replace("_config.json", "")
             pth_file = os.path.join(candidates_dir, f"{name}.pth")
             if os.path.exists(pth_file):
-                with open(os.path.join(candidates_dir, f), "r") as json_f:
+                with open(os.path.join(candidates_dir, f)) as json_f:
                     config = json.load(json_f)
                 
                 model = GrokGQA_Transformer(
@@ -214,7 +151,7 @@ def _evaluate_shadow_position(
     current_price: float,
     stop_loss_pct: float,
     profit_target_pct: float,
-    new_action: Optional[str],
+    new_action: str | None,
 ) -> None:
     """Combines what used to be two separate DB sessions
     (check_shadow_stops() + process_shadow_signal()) into one: fetch the
@@ -243,7 +180,7 @@ def _evaluate_shadow_position(
                 if pnl_pct <= -stop_loss_pct or pnl_pct >= profit_target_pct:
                     open_trade.status = "closed"
                     open_trade.exit_price = current_price
-                    open_trade.closed_at = datetime.datetime.now(datetime.timezone.utc)
+                    open_trade.closed_at = datetime.datetime.now(datetime.UTC)
                     open_trade.realized_pnl = (pnl_pct * open_trade.entry_price) * open_trade.qty
                     session.commit()
 
@@ -271,7 +208,7 @@ def _evaluate_shadow_position(
                 elif new_action == "close" and open_trade:
                     open_trade.status = "closed"
                     open_trade.exit_price = current_price
-                    open_trade.closed_at = datetime.datetime.now(datetime.timezone.utc)
+                    open_trade.closed_at = datetime.datetime.now(datetime.UTC)
 
                     if open_trade.side == "buy":
                         open_trade.realized_pnl = (current_price - open_trade.entry_price) * open_trade.qty
@@ -329,7 +266,7 @@ def process_shadow_signal(candidate_name: str, symbol: str, current_price: float
                 # Close the shadow position
                 open_trade.status = "closed"
                 open_trade.exit_price = current_price
-                open_trade.closed_at = datetime.datetime.now(datetime.timezone.utc)
+                open_trade.closed_at = datetime.datetime.now(datetime.UTC)
                 
                 if open_trade.side == "buy":
                     open_trade.realized_pnl = (current_price - open_trade.entry_price) * open_trade.qty
@@ -365,12 +302,12 @@ def check_shadow_stops(candidate_name: str, symbol: str, current_price: float, s
                 # Close the position
                 open_trade.status = "closed"
                 open_trade.exit_price = current_price
-                open_trade.closed_at = datetime.datetime.now(datetime.timezone.utc)
+                open_trade.closed_at = datetime.datetime.now(datetime.UTC)
                 open_trade.realized_pnl = (pnl_pct * open_trade.entry_price) * open_trade.qty
                 session.commit()
                 
                 reason = "Stop Loss" if pnl_pct <= -stop_loss_pct else "Profit Target"
                 logger.info(f"👻 SHADOW ({candidate_name}): {reason} hit for {symbol} @ ${current_price:.2f} (PnL: ${open_trade.realized_pnl:.2f})")
 
-    except Exception as e:
+    except Exception:
         pass # Silently fail shadow stops to avoid log spam

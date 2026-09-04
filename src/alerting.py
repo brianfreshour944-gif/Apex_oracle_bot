@@ -15,17 +15,15 @@ Run: python -m src.alerting
 
 import asyncio
 import time
-import json
 from collections import defaultdict, deque
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from enum import Enum
-from typing import Dict, Any, Optional
-from pathlib import Path
+from typing import Any
 
+from src.alerts import send_alert
 from src.config import settings
 from src.logging_config import get_logger
-from src.alerts import send_alert
 
 logger = get_logger("alerting")
 
@@ -54,8 +52,8 @@ class Alert:
     severity: AlertSeverity
     title: str
     message: str
-    details: Dict[str, Any] = field(default_factory=dict)
-    timestamp: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    details: dict[str, Any] = field(default_factory=dict)
+    timestamp: str = field(default_factory=lambda: datetime.now(UTC).isoformat())
     key: str = ""  # For deduplication
 
 
@@ -68,16 +66,16 @@ class AlertingEngine:
     - Prometheus metrics integration
     """
     
-    def __init__(self, risk_manager: Optional[Any] = None, exchange: Optional[Any] = None):
+    def __init__(self, risk_manager: Any | None = None, exchange: Any | None = None):
         # Optional refs used by run_monitoring_cycle() for periodic exposure/
         # drawdown checks. Alerts can still be fired manually via the
         # alert_*() convenience methods without these being set.
         self.risk_manager = risk_manager
         self.exchange = exchange
         self._alert_history: deque = deque(maxlen=1000)
-        self._category_cooldowns: Dict[AlertCategory, float] = {}
-        self._alert_counts: Dict[str, int] = defaultdict(int)
-        self._last_alert_time: Dict[str, float] = {}
+        self._category_cooldowns: dict[AlertCategory, float] = {}
+        self._alert_counts: dict[str, int] = defaultdict(int)
+        self._last_alert_time: dict[str, float] = {}
         
         # Default cooldowns per category (seconds)
         self._default_cooldowns = {
@@ -112,7 +110,7 @@ class AlertingEngine:
         self._last_alert_time[alert_key] = now
         return False
     
-    def _should_escalate(self, category: AlertCategory, details: Dict[str, Any]) -> bool:
+    def _should_escalate(self, category: AlertCategory, details: dict[str, Any]) -> bool:
         """Check if alert should trigger escalation."""
         if category == AlertCategory.VETO:
             threshold = self._escalation_thresholds.get(category, {})
@@ -138,8 +136,8 @@ class AlertingEngine:
         severity: AlertSeverity,
         title: str,
         message: str,
-        details: Optional[Dict[str, Any]] = None,
-        key: Optional[str] = None,
+        details: dict[str, Any] | None = None,
+        key: str | None = None,
     ) -> bool:
         """
         Fire an alert. Returns True if sent, False if suppressed.
@@ -299,7 +297,7 @@ class AlertingEngine:
             key=f"circuit_breaker:{circuit_name}",
         )
     
-    async def alert_data_integrity_failure(self, check_name: str, mismatches: int, details: Dict[str, Any]):
+    async def alert_data_integrity_failure(self, check_name: str, mismatches: int, details: dict[str, Any]):
         """Alert on data integrity verification failure."""
         await self.fire(
             category=AlertCategory.DATA_INTEGRITY,
@@ -310,7 +308,7 @@ class AlertingEngine:
             key=f"data_integrity:{check_name}",
         )
     
-    async def alert_killswitch_activated(self, reason: str, action: str, details: Dict[str, Any]):
+    async def alert_killswitch_activated(self, reason: str, action: str, details: dict[str, Any]):
         """Alert when killswitch activates (NO cooldown)."""
         await self.fire(
             category=AlertCategory.KILLSWITCH,
@@ -321,7 +319,7 @@ class AlertingEngine:
             key="killswitch_activated",
         )
     
-    async def alert_system_health(self, component: str, status: str, details: Dict[str, Any]):
+    async def alert_system_health(self, component: str, status: str, details: dict[str, Any]):
         """General system health alert."""
         severity = AlertSeverity.CRITICAL if status in ("down", "failed") else AlertSeverity.WARNING
         await self.fire(
@@ -388,7 +386,7 @@ class AlertingEngine:
             for a in list(self._alert_history)[-limit:]
         ]
     
-    def get_alert_stats(self) -> Dict[str, Any]:
+    def get_alert_stats(self) -> dict[str, Any]:
         """Get alert statistics."""
         by_category = defaultdict(int)
         by_severity = defaultdict(int)
@@ -404,7 +402,7 @@ class AlertingEngine:
 
 
 # Global singleton
-_alerting_engine: Optional[AlertingEngine] = None
+_alerting_engine: AlertingEngine | None = None
 
 
 def get_alerting_engine() -> AlertingEngine:

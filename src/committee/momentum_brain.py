@@ -5,6 +5,7 @@ Detects structural market regime transitions and trend states.
 
 from .models import BrainVote
 
+
 async def momentum_brain(symbol: str, price: float, signal: dict) -> BrainVote:
     """Evaluates market regime transitions and trend momentum."""
     regime = signal.get("regime", "neutral")

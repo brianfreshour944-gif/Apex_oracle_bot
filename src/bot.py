@@ -5,26 +5,30 @@ import math
 import os as _os
 import sys
 import time
-import traceback
+from datetime import UTC, datetime
+from typing import Any
+
 import numpy as np
-from datetime import datetime, timezone
-from typing import Dict, Any, Optional
 from tenacity import RetryError
 
-from src.config import settings, COOLDOWN_SECONDS_BUY, MAX_POSITION_ADDS, POSITION_ADD_MIN_SECONDS, POSITION_ADD_MIN_SCORE_INCREASE, POSITION_ADD_SIZE_DECAY
-from src.logging_config import get_logger
+from scripts.deployment_registry import cleanup_stale, heartbeat_process, register_process
+from src.alerting import AlertingEngine
+from src.api import start_fastapi_server_async
+from src.committee.transformer_brain import _model_inference_lock
+from src.config import (
+    MAX_POSITION_ADDS,
+    POSITION_ADD_MIN_SCORE_INCREASE,
+    POSITION_ADD_MIN_SECONDS,
+    POSITION_ADD_SIZE_DECAY,
+    settings,
+)
 from src.db import init_db
 from src.exchange import AlpacaExchange
-from src.api import start_fastapi_server_async
-from src.strategies import TradingStrategy
+from src.logging_config import get_logger
+from src.population_trainer import get_pbt_trainer
 from src.risk import RiskManager
+from src.strategies import TradingStrategy
 from src.telegram_alerts import send_telegram_alert
-from src.alerting import AlertingEngine
-from src.committee.transformer_brain import _model_inference_lock
-from src.population_trainer import get_pbt_trainer, run_pbt_cycle
-from src.ood_discriminator import get_ood_discriminator
-from scripts.deployment_registry import register_process, heartbeat_process, cleanup_stale
-import argparse
 
 
 def _describe_exception(e: Exception) -> str:
@@ -77,17 +81,18 @@ logger = get_logger("bot")
 structured_logger = StructuredLogger("bot")
 
 
-async def _record_committee_outcome(symbol: str, exit_price: float, exit_reason: Optional[str] = None) -> None:
+async def _record_committee_outcome(symbol: str, exit_price: float, exit_reason: str | None = None) -> None:
     """On position exit, close the open decision snapshot and update the learner.
 
     Fully fail-safe: realized-PnL bookkeeping for the adaptive layer must never
     interfere with trading. risk.py stays authoritative for the exit itself.
     """
     try:
-        from datetime import datetime, timezone
-        from src.db import get_open_snapshot, close_decision_snapshot
+        from datetime import datetime
+
         from src.committee.committee import get_meta_learner
-        from src.metrics import update_adaptive_metrics, alert_weight_change
+        from src.db import close_decision_snapshot, get_open_snapshot
+        from src.metrics import alert_weight_change, update_adaptive_metrics
 
         snap = await asyncio.to_thread(get_open_snapshot, symbol)
         if not snap:
@@ -111,7 +116,7 @@ async def _record_committee_outcome(symbol: str, exit_price: float, exit_reason:
         if created:
             try:
                 started = datetime.fromisoformat(str(created).replace("Z", "+00:00"))
-                holding_sec = max(0.0, (datetime.now(timezone.utc) - started).total_seconds())
+                holding_sec = max(0.0, (datetime.now(UTC) - started).total_seconds())
             except Exception:
                 pass
 
@@ -178,9 +183,10 @@ async def _record_committee_outcome(symbol: str, exit_price: float, exit_reason:
             if tensor_state is not None:
                  def _online_transformer_step():
                      try:
-                         from src.committee.transformer_brain import get_ml_predictor
-                         import torch
                          import numpy as np
+                         import torch
+
+                         from src.committee.transformer_brain import get_ml_predictor
                          
                          predictor = get_ml_predictor()
                          if predictor is None:
@@ -321,17 +327,17 @@ async def _record_committee_outcome(symbol: str, exit_price: float, exit_reason:
 # This class replaces module-level globals to improve testability and encapsulation.
 class BotState:
     def __init__(self):
-        self.ex: Optional[AlpacaExchange] = None
-        self.strategy: Optional[TradingStrategy] = None
-        self.risk_manager: Optional[RiskManager] = None
-        self.latest_scan_results: Dict[str, dict] = {}
+        self.ex: AlpacaExchange | None = None
+        self.strategy: TradingStrategy | None = None
+        self.risk_manager: RiskManager | None = None
+        self.latest_scan_results: dict[str, dict] = {}
         self.scan_cycle_count: int = 0
-        self.cooldowns: Dict[str, float] = {}
-        self.position_adds: Dict[str, Dict[str, Any]] = {}
-        self._symbol_locks: Dict[str, asyncio.Lock] = {}
+        self.cooldowns: dict[str, float] = {}
+        self.position_adds: dict[str, dict[str, Any]] = {}
+        self._symbol_locks: dict[str, asyncio.Lock] = {}
         self._background_tasks: set[asyncio.Task] = set()
         self._shutdown_requested: bool = False
-        self._regime_flag_cache: Dict[str, Any] = {}
+        self._regime_flag_cache: dict[str, Any] = {}
         self._regime_flag_cache_mtime: float = -1.0
         self._banned_symbols_cache: set = set()
         self._banned_symbols_cache_mtime: float = -1.0
@@ -348,7 +354,7 @@ class BotState:
         self.trade_timestamps: list[float] = []
         self.exchange_failure_count: int = 0
 
-    def get_regime_flag(self) -> Dict[str, Any]:
+    def get_regime_flag(self) -> dict[str, Any]:
         """Read the regime flag file, cached and only re-read when the file's mtime changes."""
         default = {
             "pause_grok": False,
@@ -364,7 +370,7 @@ class BotState:
         if mtime == self._regime_flag_cache_mtime and self._regime_flag_cache:
             return self._regime_flag_cache
         try:
-            with open(_REGIME_FLAG_PATH, "r") as f:
+            with open(_REGIME_FLAG_PATH) as f:
                 data = json.load(f)
             self._regime_flag_cache = data
             self._regime_flag_cache_mtime = mtime
@@ -381,7 +387,7 @@ class BotState:
         if mtime == self._banned_symbols_cache_mtime:
             return self._banned_symbols_cache
         try:
-            with open(_BANNED_SYMBOLS_PATH, 'r') as f:
+            with open(_BANNED_SYMBOLS_PATH) as f:
                 bans = json.load(f)
             self._banned_symbols_cache = {b["symbol"] for b in bans}
             self._banned_symbols_cache_mtime = mtime
@@ -462,7 +468,7 @@ def get_banned_symbols():
     return _state.get_banned_symbols()
 
 
-def _count_same_regime_open_positions(symbol: str, positions: list, strategy: Optional[TradingStrategy]) -> int:
+def _count_same_regime_open_positions(symbol: str, positions: list, strategy: TradingStrategy | None) -> int:
     """Count currently-open positions (excluding `symbol` itself) classified
     in the same regime as `symbol`, using TradingStrategy._regime_cache as a
     cheap proxy for correlated exposure (real return-series correlation
@@ -1014,7 +1020,7 @@ async def monitor_killswitch(risk_manager: RiskManager) -> None:
         try:
             if await risk_manager.check_killswitch_conditions():
                 logger.critical("KILLSWITCH ACTIVATED - Liquidating all positions")
-                await send_telegram_alert(f"🛑 <b>KILLSWITCH ACTIVATED</b>\nLiquidating all positions immediately.")
+                await send_telegram_alert("🛑 <b>KILLSWITCH ACTIVATED</b>\nLiquidating all positions immediately.")
                 await risk_manager.liquidate_all_positions()
                 _state._shutdown_requested = True
                 return  # Exit the task, let main loop handle shutdown
@@ -1031,7 +1037,6 @@ async def monitor_killswitch(risk_manager: RiskManager) -> None:
 
 async def run_periodic_analyzer() -> None:
     """Background task to run the analyzer script periodically."""
-    import sys
     import os
     script_path = os.path.join(os.path.dirname(__file__), '..', 'scripts', 'weekly_analyzer.py')
     
@@ -1058,7 +1063,6 @@ async def run_periodic_analyzer() -> None:
 
 async def run_periodic_automl() -> None:
     """Background task to run the AutoML pipeline every Saturday night."""
-    import sys
     import os
     from datetime import datetime, timedelta
     
@@ -1100,7 +1104,6 @@ async def run_periodic_automl() -> None:
 
 async def run_periodic_cull() -> None:
     """Background task to run the Evolution Cull on the 1st of every month."""
-    import sys
     import os
     from datetime import datetime
     
@@ -1143,7 +1146,6 @@ async def run_periodic_cull() -> None:
 
 async def run_periodic_research() -> None:
     """Background task to run the Automatic Researcher every Sunday morning."""
-    import sys
     import os
     from datetime import datetime, timedelta
     
@@ -1195,7 +1197,6 @@ async def run_periodic_transformer_replay() -> None:
     the Transformer learn from forward-testing results, not just backtests.
     Scheduled at 1 AM daily, ahead of the heavier Saturday/Sunday jobs.
     """
-    import sys
     import os
     from datetime import datetime, timedelta
 
@@ -1241,7 +1242,6 @@ async def run_periodic_ppo_retrain() -> None:
     Scheduled at 6 AM (2 hours after run_periodic_research's 4 AM slot) to
     avoid both heavy jobs contending for CPU/data-fetch at the same time.
     """
-    import sys
     import os
     from datetime import datetime, timedelta
 
@@ -1288,7 +1288,6 @@ async def run_periodic_decision_transformer_retrain() -> None:
     snapshots (backtest + live trades). Scheduled on Sunday 8 AM
     (2 hours after PPO retraining) to avoid resource contention.
     """
-    import sys
     import os
     from datetime import datetime, timedelta
 
@@ -1380,9 +1379,9 @@ async def run_periodic_ood_retrain() -> None:
         try:
             logger.info("Running OOD Discriminator retraining cycle...")
             
+            from src.committee.decision_transformer import BRAINS, REGIMES, build_state_vector
             from src.db import get_closed_decision_snapshots
             from src.ood_discriminator import get_ood_discriminator
-            from src.committee.decision_transformer import build_state_vector, BRAINS, REGIMES
             
             ood_disc = get_ood_discriminator()
             if not ood_disc._is_trained:
@@ -1433,7 +1432,6 @@ async def run_periodic_ood_retrain() -> None:
 
 async def run_periodic_post_mortem() -> None:
     """Background task to run the Post-Mortem AI every Saturday morning."""
-    import sys
     import os
     from datetime import datetime, timedelta
     
@@ -1483,17 +1481,17 @@ async def run_periodic_db_maintenance() -> None:
     from datetime import timedelta
 
     retention_days = getattr(settings, 'DB_RETENTION_DAYS', 90)
-    cutoff_date = datetime.now(timezone.utc) - timedelta(days=retention_days)
+    cutoff_date = datetime.now(UTC) - timedelta(days=retention_days)
     cutoff_iso = cutoff_date.isoformat()
 
     while True:
-        cutoff_iso = (datetime.now(timezone.utc) - timedelta(days=retention_days)).isoformat()
+        cutoff_iso = (datetime.now(UTC) - timedelta(days=retention_days)).isoformat()
         try:
             logger.info(f"Starting database maintenance - removing records older than {retention_days} days ({cutoff_iso})")
 
-            from src.db import get_engine
-            from sqlalchemy import text, delete
-            from src.db import DecisionSnapshot, ShadowTrade
+            from sqlalchemy import delete, text
+
+            from src.db import DecisionSnapshot, ShadowTrade, get_engine
 
             with get_engine().begin() as conn:
                 result = conn.execute(
@@ -1625,7 +1623,7 @@ async def run_trading_bot() -> None:
         try:
             await asyncio.wait_for(model_warmup_task, timeout=60.0)
             logger.info("Transformer model warmup complete")
-        except asyncio.TimeoutError:
+        except TimeoutError:
             logger.warning("Transformer model warmup timed out after 60s (will fall back to signal-only voting)")
             model_warmup_task.cancel()
         except Exception as e:

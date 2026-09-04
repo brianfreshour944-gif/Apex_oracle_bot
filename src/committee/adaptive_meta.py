@@ -22,16 +22,16 @@ import math
 import os
 import tempfile
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from datetime import UTC, datetime
+from typing import Any
 
-from src.logging_config import get_logger
 from src.config import settings as _settings
+from src.logging_config import get_logger
 
 logger = get_logger("adaptive_meta")
 
 # Canonical brain roster. Kept in sync with the committee's five brains.
-BRAINS: List[str] = ["transformer", "quant", "momentum", "sentinel", "llm"]
+BRAINS: list[str] = ["transformer", "quant", "momentum", "sentinel", "llm"]
 
 STATE_VERSION = 1
 _DIRECTIONAL = {"buy", "sell"}
@@ -81,8 +81,8 @@ class AdaptiveDecision:
     action: str
     confidence: float
     regime: str
-    weights: Dict[str, float]
-    scores: List[BrainScore] = field(default_factory=list)
+    weights: dict[str, float]
+    scores: list[BrainScore] = field(default_factory=list)
     explanation: str = ""
 
 
@@ -94,19 +94,19 @@ class UpdateReport:
     label: int
     material_change: bool = False
     max_delta: float = 0.0
-    old_weights: Dict[str, float] = field(default_factory=dict)
-    new_weights: Dict[str, float] = field(default_factory=dict)
+    old_weights: dict[str, float] = field(default_factory=dict)
+    new_weights: dict[str, float] = field(default_factory=dict)
     # Weight drift vs equal-weight baseline
-    drift_vs_equal: Dict[str, float] = field(default_factory=dict)
+    drift_vs_equal: dict[str, float] = field(default_factory=dict)
     drift_l2_norm: float = 0.0
 
 
-def _equal_weights() -> Dict[str, float]:
+def _equal_weights() -> dict[str, float]:
     w = 1.0 / len(BRAINS)
-    return {b: w for b in BRAINS}
+    return dict.fromkeys(BRAINS, w)
 
 
-def _vote_direction(action: str) -> Optional[str]:
+def _vote_direction(action: str) -> str | None:
     """Map a brain action to a directional stance, or None for hold/stand-aside."""
     return action if action in _DIRECTIONAL else None
 
@@ -116,7 +116,7 @@ class AdaptiveMetaLearner:
 
     def __init__(
         self,
-        state_path: Optional[str] = None,
+        state_path: str | None = None,
         learning_rate: float = 0.10,
         min_weight: float = 0.02,
         max_weight: float = 0.60,
@@ -127,28 +127,28 @@ class AdaptiveMetaLearner:
         self.max_weight = float(max_weight)
 
         self.version = STATE_VERSION
-        self.timestamp = datetime.now(timezone.utc).isoformat()
-        self.last_update: Optional[str] = None
+        self.timestamp = datetime.now(UTC).isoformat()
+        self.last_update: str | None = None
         self.sample_count = 0
         # Per-regime sample counts. `sample_count` above is the aggregate across
         # all regimes/symbols and must NOT be used to gate whether a specific
         # regime's weights are "live-ready" -- a regime with almost no samples
         # of its own could otherwise ride on volume accumulated by other,
         # unrelated regimes. Use `sample_count_for_regime()` for that gate.
-        self.regime_sample_count: Dict[str, int] = {}
-        self.weights: Dict[str, Dict[str, float]] = {}
-        self.performance: Dict[str, Dict[str, BrainPerformance]] = {}
+        self.regime_sample_count: dict[str, int] = {}
+        self.weights: dict[str, dict[str, float]] = {}
+        self.performance: dict[str, dict[str, BrainPerformance]] = {}
         # Per-regime returns history for validation (Sharpe, win-rate)
-        self.regime_returns: Dict[str, List[float]] = {}
+        self.regime_returns: dict[str, list[float]] = {}
         # Validation status per regime
-        self.regime_validated: Dict[str, bool] = {}
+        self.regime_validated: dict[str, bool] = {}
 
         if self.state_path:
             self.load()
 
     # ---- weight helpers -------------------------------------------------
 
-    def _regime_weights(self, regime: str) -> Dict[str, float]:
+    def _regime_weights(self, regime: str) -> dict[str, float]:
         """Return (lazily initialising) the weight vector for a regime."""
         if regime not in self.weights:
             self.weights[regime] = _equal_weights()
@@ -157,7 +157,7 @@ class AdaptiveMetaLearner:
             self.weights[regime].setdefault(b, self.min_weight)
         return self.weights[regime]
 
-    def _clamp_normalize(self, weights: Dict[str, float]) -> Dict[str, float]:
+    def _clamp_normalize(self, weights: dict[str, float]) -> dict[str, float]:
         """Clamp each weight to [min, max] and normalize to sum 1 (per regime).
 
         Iterates clamp+normalize to a fixed point so both constraints hold
@@ -174,7 +174,7 @@ class AdaptiveMetaLearner:
                 break
         return w
 
-    def _compute_drift_vs_equal(self, weights: Dict[str, float]) -> tuple[Dict[str, float], float]:
+    def _compute_drift_vs_equal(self, weights: dict[str, float]) -> tuple[dict[str, float], float]:
         """Compute weight drift vs equal-weight baseline.
         
         Returns:
@@ -188,7 +188,7 @@ class AdaptiveMetaLearner:
 
     # ---- combine --------------------------------------------------------
 
-    def combine(self, brain_outputs: List[Any], regime: str) -> AdaptiveDecision:
+    def combine(self, brain_outputs: list[Any], regime: str) -> AdaptiveDecision:
         """Combine brain votes into a final weighted action + confidence.
 
         ``brain_outputs`` is a list of BrainVote-like objects exposing
@@ -199,8 +199,8 @@ class AdaptiveMetaLearner:
         """
         weights = self._clamp_normalize(self._regime_weights(regime))
 
-        scores: List[BrainScore] = []
-        action_scores: Dict[str, float] = {}
+        scores: list[BrainScore] = []
+        action_scores: dict[str, float] = {}
         for v in brain_outputs:
             w = weights.get(v.name, self.min_weight)
             scores.append(BrainScore(name=v.name, action=v.action, confidence=float(v.confidence), weight=w))
@@ -230,11 +230,11 @@ class AdaptiveMetaLearner:
     # ---- update ---------------------------------------------------------
 
     @staticmethod
-    def _extract_votes(decision_snapshot: Dict[str, Any]) -> Dict[str, str]:
+    def _extract_votes(decision_snapshot: dict[str, Any]) -> dict[str, str]:
         """Normalize a decision snapshot into {brain_name: action}."""
         if "brain_votes" in decision_snapshot and isinstance(decision_snapshot["brain_votes"], dict):
             return {str(k): str(v) for k, v in decision_snapshot["brain_votes"].items()}
-        votes: Dict[str, str] = {}
+        votes: dict[str, str] = {}
         for v in decision_snapshot.get("votes", []) or []:
             if isinstance(v, dict):
                 name, action = v.get("name"), v.get("action")
@@ -255,14 +255,14 @@ class AdaptiveMetaLearner:
                     return float(realized_outcome[key])
         return 0.0
 
-    def _profitable_direction(self, final_action: str, pnl: float) -> Optional[str]:
+    def _profitable_direction(self, final_action: str, pnl: float) -> str | None:
         """Given the taken action and net PnL sign, which direction *was* right."""
         if final_action not in _DIRECTIONAL or pnl == 0.0:
             return None
         opposite = "sell" if final_action == "buy" else "buy"
         return final_action if pnl > 0 else opposite
 
-    def update(self, decision_snapshot: Dict[str, Any], realized_outcome: Any) -> UpdateReport:
+    def update(self, decision_snapshot: dict[str, Any], realized_outcome: Any) -> UpdateReport:
         """Evolve per-regime weights from one realized trade outcome.
 
         Increases a brain's weight when its directional vote matched the
@@ -291,7 +291,7 @@ class AdaptiveMetaLearner:
         if profitable_dir is None:
             self.sample_count += 1
             self.regime_sample_count[regime] = self.regime_sample_count.get(regime, 0) + 1
-            self.last_update = datetime.now(timezone.utc).isoformat()
+            self.last_update = datetime.now(UTC).isoformat()
             report.new_weights = old
             self._save_safely()
             return report
@@ -334,7 +334,7 @@ class AdaptiveMetaLearner:
 
         self.sample_count += 1
         self.regime_sample_count[regime] = self.regime_sample_count.get(regime, 0) + 1
-        self.last_update = datetime.now(timezone.utc).isoformat()
+        self.last_update = datetime.now(UTC).isoformat()
         self._save_safely()
         return report
 
@@ -355,7 +355,7 @@ class AdaptiveMetaLearner:
         if len(self.regime_returns[regime]) > 500:
             self.regime_returns[regime] = self.regime_returns[regime][-500:]
 
-    def _compute_sharpe(self, returns: List[float]) -> float:
+    def _compute_sharpe(self, returns: list[float]) -> float:
         """Compute Sharpe ratio from returns (simple, not annualized)."""
         if len(returns) < 2:
             return 0.0
@@ -366,7 +366,7 @@ class AdaptiveMetaLearner:
             return 0.0
         return mean_r / std_r
 
-    def _compute_win_rate(self, returns: List[float]) -> float:
+    def _compute_win_rate(self, returns: list[float]) -> float:
         """Compute win rate from returns."""
         if not returns:
             return 0.0
@@ -405,7 +405,7 @@ class AdaptiveMetaLearner:
         
         return validated
 
-    def get_regime_validation_metrics(self, regime: str) -> Dict[str, Any]:
+    def get_regime_validation_metrics(self, regime: str) -> dict[str, Any]:
         """Get validation metrics for a regime (for observability)."""
         returns = self.regime_returns.get(regime, [])
         if not returns:
@@ -426,7 +426,7 @@ class AdaptiveMetaLearner:
 
     # ---- persistence ----------------------------------------------------
 
-    def to_state(self) -> Dict[str, Any]:
+    def to_state(self) -> dict[str, Any]:
         return {
             "version": self.version,
             "timestamp": self.timestamp,
@@ -453,11 +453,11 @@ class AdaptiveMetaLearner:
             },
         }
 
-    def save(self, path: Optional[str] = None) -> None:
+    def save(self, path: str | None = None) -> None:
         target = path or self.state_path
         if not target:
             return
-        self.timestamp = datetime.now(timezone.utc).isoformat()
+        self.timestamp = datetime.now(UTC).isoformat()
         directory = os.path.dirname(os.path.abspath(target))
         os.makedirs(directory, exist_ok=True)
         # Atomic write: temp file in the same dir, then os.replace.
@@ -484,7 +484,7 @@ class AdaptiveMetaLearner:
         except Exception as e:  # never let persistence break the learner
             logger.warning(f"Adaptive state save failed (continuing in-memory): {e}")
 
-    def load(self, path: Optional[str] = None) -> None:
+    def load(self, path: str | None = None) -> None:
         """Load state from JSON; fall back to equal weights on missing/corrupt."""
         target = path or self.state_path
         if not target or not os.path.exists(target):
@@ -555,7 +555,7 @@ class AdaptiveMetaLearner:
 
     def _reset_to_cold_start(self) -> None:
         self.version = STATE_VERSION
-        self.timestamp = datetime.now(timezone.utc).isoformat()
+        self.timestamp = datetime.now(UTC).isoformat()
         self.last_update = None
         self.sample_count = 0
         self.regime_sample_count = {}
@@ -566,7 +566,7 @@ class AdaptiveMetaLearner:
 
     # ---- observability --------------------------------------------------
 
-    def snapshot(self) -> Dict[str, Any]:
+    def snapshot(self) -> dict[str, Any]:
         """Lightweight view for metrics/telemetry."""
         drift_info = {}
         for regime, weights in self.weights.items():

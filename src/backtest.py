@@ -7,17 +7,17 @@ This is empirical validation of the deployed strategy - not a placeholder.
 
 from __future__ import annotations
 
-from decimal import Decimal, ROUND_HALF_UP
-import polars as pl
-import numpy as np
 from dataclasses import dataclass, field
-from typing import Dict, Any, List, Optional
+from decimal import Decimal
+from typing import Any
 
-from src.config import settings
-from src.strategies import TradingStrategy
-from src.risk import RiskManager
+import numpy as np
+import polars as pl
+
 from src.committee.committee import run_committee
 from src.logging_config import get_logger
+from src.risk import RiskManager
+from src.strategies import TradingStrategy
 
 logger = get_logger("backtest")
 
@@ -39,8 +39,8 @@ class BacktestTrade:
 @dataclass
 class BacktestResult:
     symbol: str
-    trades: List[BacktestTrade] = field(default_factory=list)
-    equity_curve: List[float] = field(default_factory=list)
+    trades: list[BacktestTrade] = field(default_factory=list)
+    equity_curve: list[float] = field(default_factory=list)
     start_equity: float = 0.0
     end_equity: float = 0.0
     total_return_pct: float = 0.0
@@ -50,15 +50,15 @@ class BacktestResult:
     win_rate: float = 0.0
     max_drawdown_pct: float = 0.0
     sharpe: float = 0.0
-    regimes_seen: Dict[str, int] = field(default_factory=dict)
+    regimes_seen: dict[str, int] = field(default_factory=dict)
 
 
 class BacktestExchange:
     """Minimal in-memory exchange that replays historical bars for the strategy."""
 
-    def __init__(self, bars: Dict[str, pl.DataFrame]):
+    def __init__(self, bars: dict[str, pl.DataFrame]):
         self._bars = bars  # symbol -> DataFrame with columns [t, open, high, low, close, volume]
-        self.current_time: Optional[str] = None
+        self.current_time: str | None = None
 
     async def get_bars(self, symbol: str, timeframe: str = "1D", limit: int = 100) -> pl.DataFrame:
         df = self._bars.get(symbol, pl.DataFrame())
@@ -66,10 +66,10 @@ class BacktestExchange:
             df = df.filter(pl.col("t") <= self.current_time)
         return df.tail(limit) if len(df) else df
 
-    async def get_account(self) -> Dict[str, Any]:
+    async def get_account(self) -> dict[str, Any]:
         return {"equity": 0.0, "cash": 0.0, "portfolio_value": 0.0}
 
-    async def get_positions(self) -> List[Dict[str, Any]]:
+    async def get_positions(self) -> list[dict[str, Any]]:
         return []
 
 
@@ -129,7 +129,7 @@ async def fetch_real_bars(
     symbol: str,
     days: int = 365,
     timeframe: str = "1h",
-) -> Optional[pl.DataFrame]:
+) -> pl.DataFrame | None:
     """Fetch real historical OHLCV bars from Alpaca's crypto data API.
 
     Falls back to yfinance if Alpaca credentials are unavailable.
@@ -199,7 +199,7 @@ async def run_backtest(
     regime: str = "trending",
     fee_pct: float = 0.001,       # 0.1% Taker Fee
     slippage_pct: float = 0.0005, # 0.05% Slippage Buffer
-    bars: Optional[pl.DataFrame] = None,  # Real historical bars; if None, uses synthetic data
+    bars: pl.DataFrame | None = None,  # Real historical bars; if None, uses synthetic data
     use_committee: bool = True,   # If True, run the full 5-brain committee (AI-driven decisions).
                                    # If False, use the raw rule-based strategy signal only.
 ) -> BacktestResult:
@@ -229,7 +229,7 @@ async def run_backtest(
     result.equity_curve.append(float(equity))
 
     # Track open position per symbol
-    open_pos: Optional[Dict[str, Any]] = None
+    open_pos: dict[str, Any] | None = None
     entry_price = 0.0
     entry_time = ""
 
@@ -340,7 +340,7 @@ async def run_backtest(
 
     return result
 
-def run_monte_carlo_analysis(result: BacktestResult, n_simulations: int = 1000) -> Dict[str, Any]:
+def run_monte_carlo_analysis(result: BacktestResult, n_simulations: int = 1000) -> dict[str, Any]:
     """
     Run Monte Carlo permutation on the sequence of trades to determine true risk of ruin.
     """
@@ -437,7 +437,7 @@ def print_backtest_summary(result: BacktestResult) -> None:
         result.sharpe = 0.0
         sortino = 0.0
         
-    calmar = (result.total_return_pct / abs(result.max_drawdown_pct)) if result.max_drawdown_pct < 0 else 0.0
+    calmar = (float(result.total_return_pct) / abs(result.max_drawdown_pct)) if result.max_drawdown_pct < 0 else 0.0
 
     print("=" * 60)
     print(f"BACKTEST RESULTS: {result.symbol}")
@@ -465,7 +465,7 @@ async def run_walk_forward_optimization(
     total_bars: int = 500,
     train_pct: float = 0.6,
     seed: int = 42,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Run Walk-Forward Optimization across In-Sample (IS) and Out-Of-Sample (OOS) windows.
     Prevents parameter overfitting.
@@ -525,8 +525,8 @@ def run_vectorized_polars_backtest(
 
 
 if __name__ == "__main__":
-    import asyncio
     import argparse
+    import asyncio
 
     parser = argparse.ArgumentParser(description="Run Apex Oracle Bot Backtest Engine")
     parser.add_argument("--symbol", type=str, default="BTC/USD", help="Symbol to backtest (default: BTC/USD)")

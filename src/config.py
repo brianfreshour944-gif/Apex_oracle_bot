@@ -1,10 +1,9 @@
 """Modern configuration system using Pydantic Settings V2 with environment variable validation."""
 
-from pathlib import Path
-from typing import List, Literal
 from urllib.parse import urlsplit, urlunsplit
-from pydantic_settings import BaseSettings, SettingsConfigDict
+
 from pydantic import Field, computed_field, field_validator, model_validator
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 def redact_database_url(url: str) -> str:
@@ -71,9 +70,9 @@ class TradingBotSettings(BaseSettings):
         description="Comma-separated list of trading symbols"
     )
 
-    @computed_field
+    @computed_field  # type: ignore[prop-decorator]
     @property
-    def SYMBOLS(self) -> List[str]:
+    def SYMBOLS(self) -> list[str]:
         """Parsed list of trading symbols."""
         return [s.strip() for s in self.TRADING_SYMBOLS.split(",") if s.strip()]
 
@@ -255,9 +254,9 @@ class TradingBotSettings(BaseSettings):
         le=2000,
     )
 
-    @computed_field
+    @computed_field  # type: ignore[prop-decorator]
     @property
-    def TIMEFRAMES(self) -> List[str]:
+    def TIMEFRAMES(self) -> list[str]:
         """Parsed list of feature timeframes."""
         return [s.strip() for s in self.FEATURE_TIMEFRAMES.split(",") if s.strip()]
 
@@ -332,9 +331,9 @@ class TradingBotSettings(BaseSettings):
         description="Correlation method: 'pearson', 'spearman', or 'kendall'",
     )
 
-    @computed_field
+    @computed_field  # type: ignore[prop-decorator]
     @property
-    def CROSS_ASSET_LIST(self) -> List[str]:
+    def CROSS_ASSET_LIST(self) -> list[str]:
         """Parsed list of cross-asset symbols."""
         return [s.strip() for s in self.CROSS_ASSET_PAIRS.split(",") if s.strip()]
 

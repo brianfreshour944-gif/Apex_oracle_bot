@@ -4,19 +4,17 @@ Analyzes closed trades and uses an LLM to explain why the trade succeeded or fai
 based on the committee's votes and the PyTorch Transformer's causal reasoning gradients.
 """
 
-import os
-import json
 import asyncio
-from typing import Dict, Any, Optional
-from sqlalchemy import select
+import json
+from typing import Any
 
-from src.db import get_db_session, DecisionSnapshot
 from src.config import settings
+from src.db import DecisionSnapshot, get_db_session
 from src.logging_config import get_logger
 
 logger = get_logger("attribution")
 
-async def analyze_closed_trade(decision_id: str) -> Optional[Dict[str, Any]]:
+async def analyze_closed_trade(decision_id: str) -> dict[str, Any] | None:
     """Analyzes a single closed trade to provide causal attribution."""
 
     def _load_snapshot():
@@ -100,7 +98,7 @@ async def analyze_closed_trade(decision_id: str) -> Optional[Dict[str, Any]]:
         
     return res
 
-async def _call_groq_attribution(prompt: str, api_key: str) -> Optional[Dict[str, Any]]:
+async def _call_groq_attribution(prompt: str, api_key: str) -> dict[str, Any] | None:
     try:
         from groq import AsyncGroq
         client = AsyncGroq(api_key=api_key)
@@ -121,7 +119,7 @@ async def _call_groq_attribution(prompt: str, api_key: str) -> Optional[Dict[str
         logger.error(f"Groq LLM attribution failed: {e}")
         return None
 
-async def _call_gemini_attribution(prompt: str, api_key: str) -> Optional[Dict[str, Any]]:
+async def _call_gemini_attribution(prompt: str, api_key: str) -> dict[str, Any] | None:
     try:
         import google.generativeai as genai
         genai.configure(api_key=api_key)

@@ -9,13 +9,18 @@ Supports three modes:
 - Fast BatchEnsemble: Single forward pass with rank-1 perturbations (if USE_FAST_ENSEMBLE=True)
 """
 
-import os
-import numpy as np
 import asyncio
+import os
 import threading
-from typing import Optional, List
-from .models import BrainVote
+
+import numpy as np
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
 from src.config import settings
+
+from .models import BrainVote
 
 # Path to PyTorch model & feature scaler
 MODEL_PATH = settings.TRANSFORMER_MODEL_PATH
@@ -31,9 +36,6 @@ MC_DROPOUT_PASSES = getattr(settings, 'TRANSFORMER_MC_DROPOUT_PASSES', 20)
 # across symbols evaluated concurrently via asyncio.create_task()
 _model_inference_lock = threading.Lock()
 
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
 
 class GQA_TransformerBlock(nn.Module):
         def __init__(self, embed_dim=128, num_q_heads=8, num_kv_heads=2, dropout=0.1):
@@ -136,7 +138,7 @@ def get_ml_predictor():
             config_path = os.path.join(os.path.dirname(MODEL_PATH), "transformer_config.json")
             if os.path.exists(config_path):
                 import json
-                with open(config_path, "r") as f:
+                with open(config_path) as f:
                     arch = json.load(f)
                 model = GrokGQA_Transformer(
                     input_dim=input_dim, 
@@ -158,7 +160,7 @@ def get_ml_predictor():
                 "torch": torch,
                 "input_dim": input_dim
             }
-        except Exception as e:
+        except Exception:
             _predictor_instance = None
     return _predictor_instance
 
@@ -211,7 +213,7 @@ def get_fast_ensemble_predictor():
             config_path = os.path.join(os.path.dirname(MODEL_PATH), "transformer_config.json")
             if os.path.exists(config_path):
                 import json
-                with open(config_path, "r") as f:
+                with open(config_path) as f:
                     arch = json.load(f)
                 base_model = GrokGQA_Transformer(
                     input_dim=input_dim, 
@@ -264,11 +266,10 @@ async def _run_fast_ensemble_inference(
     predictor: dict
 ) -> tuple:
     """Run fast BatchEnsemble inference with uncertainty quantification."""
-    import asyncio
     import os
-    from src.feature_engineering import add_features
+
     from src.data_fetcher import fetch_bars
-    from alpaca.data.historical import CryptoHistoricalDataClient
+    from src.feature_engineering import add_features
 
     torch = predictor["torch"]
     model = predictor["model"]
@@ -479,11 +480,10 @@ async def transformer_brain(symbol: str, price: float, signal: dict) -> BrainVot
         try:
             import asyncio
             import os
-            from src.feature_engineering import add_features
+
             # fetch_bars is actually located in data_fetcher or similar, wait I will just copy the import logic
             from src.data_fetcher import fetch_bars
-                
-            from alpaca.data.historical import CryptoHistoricalDataClient
+            from src.feature_engineering import add_features
 
             torch = predictor["torch"]
             model = predictor["model"]
@@ -589,7 +589,7 @@ async def transformer_brain(symbol: str, price: float, signal: dict) -> BrainVot
                     # to avoid slowing down backtest unnecessarily; but we keep it lightweight.
                     if not is_live:
                         # In backtest, we skip MC-dropout to save time; use fixed weight.
-                        transformer_weight = 0.35  # base weight
+                        _transformer_weight = 0.35  # base weight
                     else:
                         model.train()  # enable dropout
                         mc_probs = []
@@ -601,7 +601,7 @@ async def transformer_brain(symbol: str, price: float, signal: dict) -> BrainVot
                         model.eval()  # back to eval mode
                         prob_var = np.var(mc_probs) if len(mc_probs) > 1 else 0.0
                         # Modulate weight: higher variance -> lower weight
-                        transformer_weight = 0.35 * (1.0 / (1.0 + prob_var))  # simple inverse scaling
+                        _transformer_weight = 0.35 * (1.0 / (1.0 + prob_var))  # simple inverse scaling
     
                     causal_reasoning = {}
                     logit_value = raw_logit_fwd.item()

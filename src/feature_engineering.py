@@ -34,19 +34,18 @@
 # main trading loop, and your orchestration was catching/retrying at INFO
 # level without surfacing the traceback where you were looking.
 
-import pandas as pd
-import numpy as np
-
 import json
 import os
-from typing import Dict, Optional
-from scipy.stats import spearmanr, kendalltau
+
+import numpy as np
+import pandas as pd
+
 
 def get_active_features():
     path = os.path.join(os.path.dirname(__file__), '..', 'data', 'active_features.json')
     if os.path.exists(path):
         try:
-            with open(path, 'r') as f:
+            with open(path) as f:
                 return json.load(f)
         except Exception:
             pass
@@ -140,7 +139,7 @@ def _z_score(series: pd.Series, window: int = 20, fill: float = 0.0) -> pd.Serie
 # ── Main feature function ─────────────────────────────────────────────────────
 
 # Per-symbol feature cache: maps symbol -> (last_bar_timestamp, feature_df)
-_FEATURE_CACHE: Dict[str, tuple] = {}
+_FEATURE_CACHE: dict[str, tuple] = {}
 
 
 def add_features(df: pd.DataFrame, symbol: str = "") -> pd.DataFrame:
@@ -442,7 +441,7 @@ async def _fetch_multi_timeframe_features(
     base_timeframe: str,
     timeframes: list,
     limit: int
-) -> Optional[pd.DataFrame]:
+) -> pd.DataFrame | None:
     """
     Fetch bars for additional timeframes and compute derived features.
     

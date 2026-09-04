@@ -4,16 +4,16 @@ Pulls macro crypto data (Funding Rates, Open Interest, Long/Short Ratios)
 from public Binance Futures endpoints to augment technical indicators.
 """
 
-import httpx
 import asyncio
-from typing import Dict, Any
+
+import httpx
 
 from src.logging_config import get_logger
 
 logger = get_logger("onchain")
 
 
-def fetch_derivatives_data_sync(symbol: str) -> Dict[str, float]:
+def fetch_derivatives_data_sync(symbol: str) -> dict[str, float]:
     """
     Synchronous version: Fetches Open Interest, Funding Rate, and Long/Short ratio from Binance Futures.
     Alpaca symbols are usually 'BTC/USD', so we convert to 'BTCUSDT' for Binance.
@@ -83,7 +83,7 @@ def fetch_derivatives_data_sync(symbol: str) -> Dict[str, float]:
     return data
 
 
-async def fetch_derivatives_data(symbol: str) -> Dict[str, float]:
+async def fetch_derivatives_data(symbol: str) -> dict[str, float]:
     """
     Async wrapper for backward compatibility.
     """
