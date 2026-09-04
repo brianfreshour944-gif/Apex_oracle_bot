@@ -21,6 +21,7 @@ import torch.nn.functional as F
 
 from src.config import settings
 from src.logging_config import get_logger
+from .models import BrainVote
 
 from .models import BrainVote
 

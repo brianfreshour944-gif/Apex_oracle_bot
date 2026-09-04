@@ -34,8 +34,12 @@ from .transformer_brain import transformer_brain
 
 logger = get_logger("committee")
 
-# Alerting engine for brain failure notifications
-_alerting_engine = AlertingEngine()
+# Alerting engine for brain failure notifications. Uses the process-wide
+# singleton (src.alerting.get_alerting_engine) instead of a private instance so
+# cooldowns/dedup/escalation counters are shared with bot.py's alerting loop --
+# two independent engines would let the same alert fire twice within one
+# cooldown window and split escalation counts across separate books.
+_alerting_engine = get_alerting_engine()
 
 # Default fallback if symbol lacks optimized data
 DEFAULT_SCORE_THRESHOLD = settings.DEFAULT_SCORE_THRESHOLD
@@ -182,7 +186,10 @@ def calculate_confidence_size_multiplier(score: float, entropy: float, threshold
     - Multiplier ranges from 0.50x (marginal confidence) to 1.75x (unanimous conviction).
     - High vote entropy (>0.8) penalizes multiplier by up to 25%.
     """
-    if score < threshold:
+        # Guard NaN/inf: a non-finite score would pass `score < threshold` (NaN
+    # comparisons are always False) and yield the maximum size multiplier.
+    # Mirrors the gate in run_committee (see isfinite check there).
+    if not math.isfinite(score) or score < threshold:
         return 0.0
     
     # Linear scale from threshold score -> 0.50x to 1.00 score -> 1.75x
@@ -432,7 +439,10 @@ async def run_committee(symbol: str, price: float, signal: dict[str, Any]) -> Co
             explanation=explanation,
         )
 
-    if score < effective_threshold or winner in ["stand_aside", "skip"]:
+    # math.isfinite guard: score=NaN would make `score < threshold` evaluate
+    # False (NaN comparisons always are) and slip through the trade gate with
+    # the maximum size multiplier. Treat a non-finite score as no-trade.
+    if not math.isfinite(score) or score < effective_threshold or winner in ["stand_aside", "skip"]:
         final_action = "stand_aside"
         size_mult = 0.0
     else:
@@ -460,7 +470,11 @@ async def run_committee(symbol: str, price: float, signal: dict[str, Any]) -> Co
             ood_signal = {
                 "regime": signal.get("regime", "default"),
                 "features": signal.get("features", {}),
-                "votes": signal.get("votes", []),
+                # Pass the committee's actual BrainVote objects -- the strategy
+                # signal dict never carries a "votes" key, so signal.get("votes")
+                # always yielded [] and the OOD state vector's vote dimensions
+                # were permanently zero-encoded.
+                "votes": votes,
             }
             result = check_ood_and_override(symbol, price, ood_signal, result, ood_disc)
     except Exception as e:

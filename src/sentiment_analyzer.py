@@ -117,7 +117,7 @@ async def call_groq_llm(headlines: str, api_key: str) -> dict[str, Any]:
                 {"role": "system", "content": "You are a quantitative finance sentiment extraction system. Output only raw JSON."},
                 {"role": "user", "content": prompt}
             ],
-            model="openai/gpt-oss-120b",  # llama-3.3-70b-versatile was deprecated/shut down 08/16/26
+            model=settings.GROQ_SENTIMENT_MODEL,  # llama-3.3-70b-versatile was deprecated/shut down 08/16/26
             temperature=0.1,
             response_format={"type": "json_object"}
         )
@@ -173,7 +173,7 @@ async def extract_sentiment(symbol: str) -> dict[str, Any]:
     groq_key = settings.GROQ_API_KEY
     gemini_key = settings.GEMINI_API_KEY
     
-    if groq_key:
+    if groq_key and settings.GROQ_SENTIMENT_MODEL:
         logger.info(f"Using Groq for Sentiment Analysis on {symbol}")
         res = await call_groq_llm(headlines, groq_key)
     elif gemini_key:

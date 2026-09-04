@@ -382,7 +382,10 @@ class AlpacaExchange:
                 "side": str(order.side.value) if hasattr(order.side, "value") else str(order.side),
                 "type": str(order.type.value) if hasattr(order.type, "value") else str(order.type),
                 "filled_avg_price": float(order.filled_avg_price) if order.filled_avg_price else 0.0,
-                "commission": float(order.commission) if order.commission else 0.0,
+                                # Alpaca orders are commission-free. alpaca-py>=0.43 Order model
+                # no longer exposes .commission (validate_assignment=True,
+                # extra='ignore' drops API payloads too) -> read as 0.0.
+                "commission": 0.0,
                 "submitted_at": order.submitted_at.isoformat() if order.submitted_at else None,
                 "filled_at": order.filled_at.isoformat() if order.filled_at else None,
                 "client_order_id": str(order.client_order_id) if order.client_order_id else None,
@@ -441,6 +444,15 @@ class AlpacaExchange:
         # --- Idempotency check ---
         if client_order_id is not None:
             now = time.time()
+            # Opportunistic prune: entries expire by TTL on read but were
+            # never evicted, so the dict grew one entry per order forever
+            # (slow leak). Drop expired entries here, same pattern as
+            # alerts._in_cooldown.
+            if len(self._order_cache) > 128:
+                self._order_cache = {
+                    k: v for k, v in self._order_cache.items()
+                    if now - v[0] < self._order_cache_ttl
+                }
             cached = self._order_cache.get(client_order_id)
             if cached is not None:
                 ts, order_info = cached
@@ -525,7 +537,9 @@ class AlpacaExchange:
                             filled_order = await self.circuit_breaker.call(asyncio.to_thread, self.trading_client.get_order_by_id, order_id)
                             order_info["filled_avg_price"] = float(filled_order.filled_avg_price) if filled_order.filled_avg_price else 0.0
                             order_info["filled_qty"] = float(filled_order.filled_qty) if filled_order.filled_qty else 0.0
-                            order_info["commission"] = float(filled_order.commission) if filled_order.commission else 0.0
+                                                        # Alpaca is commission-free; Order model no longer
+                            # exposes .commission (alpaca-py>=0.43, extra='ignore').
+                            order_info["commission"] = 0.0
                             order_info["slippage"] = 0.0
                         except Exception as fetch_err:
                             # The order reached FILLED status (confirmed above), but
@@ -545,7 +559,9 @@ class AlpacaExchange:
                                 filled_order = await self.circuit_breaker.call(asyncio.to_thread, self.trading_client.get_order_by_id, order_id)
                                 order_info["filled_avg_price"] = float(filled_order.filled_avg_price) if filled_order.filled_avg_price else 0.0
                                 order_info["filled_qty"] = float(filled_order.filled_qty) if filled_order.filled_qty else 0.0
-                                order_info["commission"] = float(filled_order.commission) if filled_order.commission else 0.0
+                                                                # Alpaca is commission-free; Order model no longer
+                                # exposes .commission (alpaca-py>=0.43, extra='ignore').
+                                order_info["commission"] = 0.0
                                 order_info["slippage"] = 0.0
                             except Exception as retry_err:
                                 logger.error(

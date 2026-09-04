@@ -59,7 +59,8 @@ class MetaDecisionEnv(gym.Env):
         volatility = feats.get("volatility", 0.0)
         
         # 2. Regime One-Hot
-        regime = snap.get("regime", "default")
+        # M1: normalize DT-8 regimes into the RL-6 one-hot space (see regime_utils).
+        regime = normalize_regime(snap.get("regime", "default"))
         regime_vec = np.zeros(len(REGIMES), dtype=np.float32)
         if regime in REGIMES:
             regime_vec[REGIMES.index(regime)] = 1.0

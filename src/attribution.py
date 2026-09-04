@@ -88,7 +88,7 @@ async def analyze_closed_trade(decision_id: str) -> dict[str, Any] | None:
     gemini_key = settings.GEMINI_API_KEY
     
     res = None
-    if groq_key:
+    if groq_key and settings.GROQ_ATTRIBUTION_MODEL:
         res = await _call_groq_attribution(prompt, groq_key)
     elif gemini_key:
         res = await _call_gemini_attribution(prompt, gemini_key)
@@ -107,7 +107,7 @@ async def _call_groq_attribution(prompt: str, api_key: str) -> dict[str, Any] | 
                 {"role": "system", "content": "You are a quantitative finance attribution system. Output only raw JSON."},
                 {"role": "user", "content": prompt}
             ],
-            model="openai/gpt-oss-20b",  # llama-3.1-8b-instant was deprecated/shut down 08/16/26
+            model=settings.GROQ_ATTRIBUTION_MODEL,  # llama-3.1-8b-instant was deprecated/shut down 08/16/26
             temperature=0.2,
             response_format={"type": "json_object"}
         )

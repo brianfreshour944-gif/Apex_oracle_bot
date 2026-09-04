@@ -218,8 +218,14 @@ class RiskManager:
                     "action": "reduce_positions"
                 }
 
-            # Calculate current exposure
-            current_exposure = sum(float(p.get("market_value", 0)) for p in positions)
+            # Calculate current exposure. abs() is deliberate: Alpaca reports
+            # short positions with NEGATIVE market_value, and a signed sum
+            # nets shorts against longs -- a $3k long + $3k short would report
+            # $0 exposure and silently bypass this cap (audit finding F-C,
+            # reproduced in audit_financials.py). The cap protects gross
+            # exposure, so gross is what must be summed. Same fix applied to
+            # reduce_exposure_to_cap's exposure sum below.
+            current_exposure = sum(abs(float(p.get("market_value", 0))) for p in positions)
 
             # Check portfolio value cap (dynamic: percentage of account base if configured)
             max_portfolio_abs = self._get_max_portfolio_cap()
@@ -491,6 +497,7 @@ class RiskManager:
                 with self._peak_prices_lock:
                     if symbol not in self.peak_prices or current_price > self.peak_prices[symbol]:
                         self.peak_prices[symbol] = current_price
+                        self.mark_peaks_dirty()
 
             with self._peak_prices_lock:
                 if symbol in self.peak_prices:
@@ -500,6 +507,7 @@ class RiskManager:
                     if drawdown_from_peak >= distance_pct:
                         logger.info(f"Trailing stop triggered for {symbol}: Peak {peak:.2f}, Current {current_price:.2f}")
                         del self.peak_prices[symbol]
+                        self.mark_peaks_dirty()
                         return "close"
 
         else:
@@ -509,6 +517,7 @@ class RiskManager:
                 with self._peak_prices_lock:
                     if symbol not in self.peak_prices or current_price < self.peak_prices[symbol]:
                         self.peak_prices[symbol] = current_price
+                        self.mark_peaks_dirty()
 
             with self._peak_prices_lock:
                 if symbol in self.peak_prices:
@@ -518,6 +527,7 @@ class RiskManager:
                     if drawdown_from_trough >= distance_pct:
                         logger.info(f"Trailing stop triggered for {symbol} (short): Trough {trough:.2f}, Current {current_price:.2f}")
                         del self.peak_prices[symbol]
+                        self.mark_peaks_dirty()
                         return "close"
 
         return "hold"
@@ -689,7 +699,10 @@ class RiskManager:
         try:
             positions = await self.exchange.get_positions()
             max_portfolio_abs = self._get_max_portfolio_cap()
-            current_exposure = sum(float(p.get("market_value", 0)) for p in positions)
+            # abs() for the same reason as update_account_status above: signed
+            # market_value on shorts would net against longs and hide gross
+            # exposure from this reduction pass.
+            current_exposure = sum(abs(float(p.get("market_value", 0))) for p in positions)
             if current_exposure <= max_portfolio_abs:
                 return {"status": "no_action_needed"}
             positions_sorted = sorted(positions, key=lambda p: float(p.get("unrealized_pl", 0)))
@@ -716,6 +729,12 @@ class RiskManager:
                 # cleanup for normal closes -- this path bypasses that).
                 self.peak_prices.pop(symbol, None)
                 self._reserved_new_position_symbols.pop(symbol, None)
+                # Audit: close the open decision snapshot too -- this path
+                # bypasses _record_committee_outcome, so the snapshot would
+                # stay status='open' forever and the cache would serve a
+                # stale 'open' record for the symbol.
+                await self._close_open_snapshot(symbol, filled_price if filled_price > 0 else 0.0,
+                                                qty_abs, exit_reason="exposure_reduction")
             logger.warning(f"Exposure reduction complete. New exposure: ${current_exposure:.2f} (cap: ${max_portfolio_abs:.2f})")
             return {"status": "exposure_reduced", "results": results, "final_exposure": current_exposure}
         except Exception as e:
@@ -756,6 +775,9 @@ class RiskManager:
                 # cleanup for normal closes -- this path bypasses that).
                 self.peak_prices.pop(symbol, None)
                 self._reserved_new_position_symbols.pop(symbol, None)
+                liq_fill = order_result.get("filled_avg_price", 0.0)
+                await self._close_open_snapshot(symbol, liq_fill if liq_fill > 0 else 0.0,
+                                                qty_abs, exit_reason="killswitch_liquidation")
 
             logger.critical("ALL POSITIONS LIQUIDATED - KILLSWITCH ACTIVATED")
             return {
@@ -770,3 +792,55 @@ class RiskManager:
                 "status": "liquidation_failed",
                 "error": str(e)
             }
+
+    def cleanup_stale_state(self, max_age_seconds: float = 3600, active_symbols: Optional[list] = None) -> Dict[str, int]:
+        """Clean up stale state entries to prevent memory leaks.
+        
+        Args:
+            max_age_seconds: Maximum age of peak_prices entries before cleanup
+            active_symbols: List of currently active trading symbols (from settings)
+            
+        Returns:
+            Dict with counts of cleaned entries per category
+        """
+        now = datetime.now(timezone.utc)
+        active_symbols = set(active_symbols) if active_symbols else set()
+        cleaned = {
+            "peak_prices": 0,
+            "realized_tx_costs": 0,
+            "reserved_exposure": 0,
+            "reserved_position_slots": 0,
+        }
+        
+        # Clean peak_prices for symbols not in active trading or very old
+        # We can't easily track age, so we clean symbols not in active_symbols
+        stale_peaks = [k for k in self.peak_prices.keys() if k not in active_symbols]
+        for k in stale_peaks:
+            del self.peak_prices[k]
+        cleaned["peak_prices"] = len(stale_peaks)
+        
+        # Clean realized_tx_costs for symbols not in active trading
+        stale_costs = [k for k in self._realized_tx_costs.keys() if k not in active_symbols]
+        for k in stale_costs:
+            del self._realized_tx_costs[k]
+        cleaned["realized_tx_costs"] = len(stale_costs)
+        
+        # Clean reserved_exposure (already has 30s TTL in check_and_reserve_exposure)
+        # This is an additional safety net
+        old_reserved = len(self._reserved_exposure)
+        self._reserved_exposure = [
+            (a, t) for a, t in self._reserved_exposure 
+            if (now - t).total_seconds() < max(30, max_age_seconds)
+        ]
+        cleaned["reserved_exposure"] = old_reserved - len(self._reserved_exposure)
+        
+        # Clean reserved_new_position_symbols for inactive symbols
+        stale_slots = [k for k in self._reserved_new_position_symbols.keys() if k not in active_symbols]
+        for k in stale_slots:
+            del self._reserved_new_position_symbols[k]
+        cleaned["reserved_position_slots"] = len(stale_slots)
+        
+        if any(v > 0 for v in cleaned.values()):
+            logger.debug(f"RiskManager cleaned stale state: {cleaned}")
+        
+        return cleaned

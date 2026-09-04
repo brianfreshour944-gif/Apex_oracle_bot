@@ -84,6 +84,17 @@ structured_logger = StructuredLogger("bot")
 async def _record_committee_outcome(symbol: str, exit_price: float, exit_reason: str | None = None) -> None:
     """On position exit, close the open decision snapshot and update the learner.
 
+    ``entry_price``/``qty``: when supplied (callers have the exchange position
+    in hand at close time), they override the snapshot values. The snapshot
+    records the FIRST entry only, so for scale-in positions its qty/entry
+    understate the true position -- the exchange's avg_entry_price and total
+    qty are authoritative (audit finding F-A).
+
+    ``commission``: round-trip commission actually charged, subtracted from
+    realized PnL (audit finding F-B). Callers should also pass the real fill
+    price as ``exit_price`` (not the pre-order signal price) so recorded PnL
+    includes slippage.
+
     Fully fail-safe: realized-PnL bookkeeping for the adaptive layer must never
     interfere with trading. risk.py stays authoritative for the exit itself.
     """
@@ -98,8 +109,9 @@ async def _record_committee_outcome(symbol: str, exit_price: float, exit_reason:
         if not snap:
             return
 
-        entry_price = float(snap.get("entry_price", 0.0))
-        qty = float(snap.get("qty", 0.0))
+        entry_price = float(entry_price) if entry_price is not None and entry_price > 0 \
+            else float(snap.get("entry_price", 0.0))
+        qty = abs(float(qty)) if qty is not None and qty != 0 else float(snap.get("qty", 0.0))
         action = snap.get("final_action", "buy")
         if entry_price <= 0 or qty == 0:
             return
@@ -110,6 +122,11 @@ async def _record_committee_outcome(symbol: str, exit_price: float, exit_reason:
         else:  # sell / short
             realized_pnl = (entry_price - exit_price) * qty
             return_pct = (entry_price - exit_price) / entry_price * 100.0
+
+        # Fees are real money: subtract the round-trip commission from the
+        # recorded PnL so near-zero trades don't get inflated win labels
+        # (audit finding F-B).
+        realized_pnl -= abs(float(commission))
 
         holding_sec = 0.0
         created = snap.get("created_at")
@@ -434,6 +451,58 @@ class BotState:
         self.cooldowns.clear()
         self.position_adds.clear()
         self._symbol_locks.clear()
+
+    def cleanup_stale_state(self, max_age_seconds: float = 3600) -> Dict[str, int]:
+        """Clean up stale state entries to prevent memory leaks.
+        
+        Args:
+            max_age_seconds: Maximum age of entries before cleanup (default 1 hour)
+            
+        Returns:
+            Dict with counts of cleaned entries per category
+        """
+        now = time.time()
+        cleaned = {
+            "cooldowns": 0,
+            "position_adds": 0,
+            "symbol_locks": 0,
+            "scan_results": 0,
+            "trade_timestamps": 0,
+        }
+        
+        # Clean cooldowns (expired entries)
+        expired_cooldowns = [k for k, v in self.cooldowns.items() if v < now]
+        for k in expired_cooldowns:
+            del self.cooldowns[k]
+        cleaned["cooldowns"] = len(expired_cooldowns)
+        
+        # Clean position_adds for symbols that no longer have positions
+        # Note: This is conservative - we only clean if explicitly told
+        # The actual cleanup happens in clear_position_adds() on position close
+        
+        # Clean symbol locks for symbols not in active trading
+        # We keep locks for symbols in SYMBOLS config to avoid recreating
+        active_symbols = set(settings.SYMBOLS)
+        stale_locks = [k for k in self._symbol_locks.keys() if k not in active_symbols]
+        for k in stale_locks:
+            del self._symbol_locks[k]
+        cleaned["symbol_locks"] = len(stale_locks)
+        
+        # Clean scan results for symbols not in active trading
+        stale_results = [k for k in self.latest_scan_results.keys() if k not in active_symbols]
+        for k in stale_results:
+            del self.latest_scan_results[k]
+        cleaned["scan_results"] = len(stale_results)
+        
+        # Clean trade timestamps older than max_age_seconds
+        old_count = len(self.trade_timestamps)
+        self.trade_timestamps = [ts for ts in self.trade_timestamps if now - ts < max_age_seconds]
+        cleaned["trade_timestamps"] = old_count - len(self.trade_timestamps)
+        
+        if any(v > 0 for v in cleaned.values()):
+            logger.debug(f"Cleaned stale state: {cleaned}")
+        
+        return cleaned
         self._background_tasks.clear()
         self._shutdown_requested = False
         self._regime_flag_cache.clear()
@@ -461,6 +530,101 @@ _BANNED_SYMBOLS_PATH = _os.path.join(_os.path.dirname(__file__), '..', 'data', '
 def read_regime_flag():
     """Read the regime flag file, cached and only re-read when the file's mtime changes."""
     return _state.get_regime_flag()
+
+
+# ── Crash-recovery state persistence (audit F1-F3) ───────────────────────────
+# One debounced writer for the whole process. The main loop calls
+# flush_crash_recovery_state() once per cycle; mutations elsewhere just set
+# the dirty flag. Never throws -- persistence problems must not block trading.
+from src.persistent_state import PersistentBotState, save_persistent_state
+
+_crash_state_writer = PersistentBotState(flush_interval=5.0)
+
+
+def flush_crash_recovery_state(force: bool = False) -> None:
+    """Persist peak_prices / cooldowns / position_adds if (or when) dirty."""
+    try:
+        snapshot = {
+            "peak_prices": _state.risk_manager.persist_peak_prices() if _state.risk_manager else {},
+            "trailing_peaks": dict(getattr(_state.strategy, "_trailing_peaks", {}) or {}) if _state.strategy else {},
+            "cooldowns": dict(_state.cooldowns),
+            "position_adds": dict(_state.position_adds),
+        }
+        if _state.risk_manager is not None:
+            _state.risk_manager.consume_peaks_dirty()
+        if force:
+            _crash_state_writer.flush(snapshot)
+        else:
+            _crash_state_writer.flush_if_due(snapshot)
+    except Exception as e:
+        logger.debug(f"Crash-recovery state flush skipped (non-fatal): {e}")
+
+
+async def reconcile_open_snapshots(exchange: AlpacaExchange) -> None:
+    """Startup reconciliation pass (audit F4).
+
+    After a crash or an out-of-bot close (manual close on the exchange while
+    the process was down), decision snapshots can be left status='open'
+    forever. Compare every open snapshot against the exchange's actual
+    positions:
+      - snapshot for a symbol with NO exchange position -> the position was
+        closed outside the bot; close the snapshot with the last known price
+        so the DB doesn't accumulate ghosts and the adaptive meta-learner
+        still sees the outcome.
+      - exchange position with NO open snapshot (restart gap) -> warn.
+    Fully fail-safe: any error is logged and skipped.
+    """
+    from src.db import get_all_open_snapshots, close_decision_snapshot
+    open_snaps = await asyncio.to_thread(get_all_open_snapshots)
+    if not open_snaps:
+        return
+    try:
+        positions = await exchange.get_positions()
+    except Exception as e:
+        logger.warning(f"Snapshot reconciliation skipped: could not fetch positions: {e}")
+        return
+    held_symbols = {p["symbol"].replace("/", "") for p in positions}
+
+    for snap in open_snaps:
+        sym = snap["symbol"]
+        sym_clean = sym.replace("/", "")
+        if sym_clean in held_symbols:
+            continue  # genuinely open position -> snapshot is correct
+        exit_price = 0.0
+        try:
+            bars = await exchange.get_latest_bar(sym)
+            if not bars.is_empty():
+                exit_price = float(bars["close"][0])
+        except Exception as e:
+            logger.debug(f"[RECONCILE] No price available for {sym}: {e}")
+        entry_price = float(snap.get("entry_price", 0.0))
+        qty = float(snap.get("qty", 0.0))
+        action = snap.get("final_action", "buy")
+        if exit_price > 0 and entry_price > 0 and qty != 0:
+            pnl = (exit_price - entry_price) * qty if action == "buy" else (entry_price - exit_price) * qty
+        else:
+            pnl = 0.0
+        closed = await asyncio.to_thread(
+            close_decision_snapshot,
+            snap["decision_id"],
+            realized_pnl=pnl,
+            return_pct=(pnl / (entry_price * qty) * 100.0) if (entry_price > 0 and qty != 0 and pnl is not None) else 0.0,
+            exit_reason="reconciled_after_restart",
+        )
+        logger.warning(
+            f"[RECONCILE] Closed ghost snapshot {snap['decision_id']} for {sym} "
+            f"(no exchange position; exit_price={exit_price}, pnl={pnl:.2f}, closed={closed})"
+        )
+
+    # Inverse check: exchange positions the bot has no snapshot for.
+    snap_symbols = {s["symbol"].replace("/", "") for s in open_snaps}
+    for held in held_symbols:
+        if held not in snap_symbols:
+            logger.warning(
+                f"[RECONCILE] Exchange reports an open position in {held} with no open "
+                f"decision snapshot (opened before/outside this process). It will be "
+                f"managed normally, but its committee votes were not recorded."
+            )
 
 
 def get_banned_symbols():
@@ -511,7 +675,22 @@ async def process_signal_for_symbol(symbol: str, current_price: float, risk_mana
                 positions = await ex.get_positions()
             position_dict = {p["symbol"].replace("/", ""): p for p in positions}
             current_position = position_dict.get(symbol.replace("/", ""))
-    
+
+            # Alpaca position dicts carry no entry timestamp, which silently
+            # disabled strategies._check_price_based_exits' MAX_HOLD_HOURS
+            # check ("created_at" was never in the dict). Attach the entry
+            # time persisted on the symbol's open decision snapshot instead.
+            # Fail-safe: any error just leaves the max-hold check inert, as
+            # before -- it never blocks evaluation of the position.
+            if current_position is not None and "created_at" not in current_position:
+                try:
+                    from src.db import get_open_snapshot
+                    snap = await asyncio.to_thread(get_open_snapshot, symbol)
+                    if snap and snap.get("created_at"):
+                        current_position["created_at"] = snap["created_at"]
+                except Exception as snap_err:
+                    logger.debug(f"[{symbol}] Could not attach entry time for max-hold check: {snap_err}")
+
             # Cooldown check: block a fresh entry right after this symbol closed a
             # position, but never block evaluation of an EXISTING position's exit
             # logic (a position we're already holding must always be free to close).
@@ -552,7 +731,20 @@ async def process_signal_for_symbol(symbol: str, current_price: float, risk_mana
                     _state.cooldowns[symbol] = time.time() + settings.COOLDOWN_SECONDS_BUY
                     # Reset position pyramid/scale-in tracking on close
                     _state.position_adds.pop(symbol, None)
-                    await _record_committee_outcome(symbol, current_price, exit_reason="trailing_stop")
+                    _crash_state_writer.mark_dirty()
+                    # Audit F-A/F-B: record against the exchange's actual
+                    # avg entry / total qty (scale-ins make the snapshot's
+                    # first-entry values wrong), use the real fill price (not
+                    # the signal-time price), and subtract the commission.
+                    trail_fill = order_result.get("filled_avg_price", 0.0)
+                    await _record_committee_outcome(
+                        symbol,
+                        trail_fill if trail_fill > 0 else current_price,
+                        exit_reason="trailing_stop",
+                        entry_price=avg_entry_price,
+                        qty=qty_abs,
+                        commission=order_result.get("commission", 0.0),
+                    )
                     return  # Skip standard signals
     
             # Generate trading signal
@@ -562,7 +754,9 @@ async def process_signal_for_symbol(symbol: str, current_price: float, risk_mana
                 current_position
             )
     
-            logger.debug("[SCAN] Signal for {symbol} @ ${current_price:.2f}: {action} (regime: {regime}, RSI: {rsi:.2f})",
+            logger.debug(
+                "[SCAN] Signal for %s @ $%.2f: %s (regime: %s, RSI: %.2f)",
+                symbol, current_price, signal["action"], signal["regime"], signal.get("rsi", 0.0),
                          symbol=symbol, current_price=current_price, action=signal["action"],
                          regime=signal["regime"], rsi=signal.get("rsi", 0.0))
     
@@ -816,9 +1010,11 @@ async def process_signal_for_symbol(symbol: str, current_price: float, risk_mana
                             "last_add_time": now,
                             "last_add_score": committee_score
                         }
+                        _crash_state_writer.mark_dirty()
                     else:
                         # No existing position - reset tracking
                         _state.position_adds[symbol] = {"count": 0, "last_add_time": 0.0, "last_add_score": 0.0}
+                        _crash_state_writer.mark_dirty()
 
                 # Reserve a new-position slot to prevent multiple concurrently-evaluated
                 # symbols in the same cycle from all passing a stale, cycle-start
@@ -905,34 +1101,60 @@ async def process_signal_for_symbol(symbol: str, current_price: float, risk_mana
     
                 # Persist committee decision snapshot for the adaptive meta-learner
                 # (fail-safe; closed out with realized PnL when the position exits).
+                # For a scale-in ADD, do NOT create a second open snapshot -- that
+                # would record only the add's price/qty and leave the original
+                # snapshot as a ghost. Instead update the existing snapshot's
+                # entry price (weighted average) and total qty so the exit math
+                # in _record_committee_outcome is correct (audit finding F-A).
                 try:
-                    from src.db import save_decision_snapshot
-                    await asyncio.to_thread(
-                        save_decision_snapshot,
-                        decision_id=committee_result.decision_id,
-                        symbol=symbol,
-                        regime=signal.get("regime", "default"),
-                        final_action=signal["action"],
-                        confidence=committee_result.score,
-                        size_multiplier=getattr(committee_result, "size_multiplier", 1.0),
-                        entry_price=current_price,
-                        qty=position_size,
-                        brain_votes={v.name: v.action for v in committee_result.votes},
-                        feature_snapshot_json=json.dumps({
-                            "atr": signal.get("atr"),
-                            "rsi": signal.get("rsi"),
-                            "macd": signal.get("macd"),
-                            "selected_strategy": signal.get("selected_strategy"),
-                        }),
-                        causal_reasoning_json=json.dumps({
-                            v.name: getattr(v, "causal_reasoning", None) 
-                            for v in committee_result.votes if getattr(v, "causal_reasoning", None)
-                        }),
-                        tensor_state_json=json.dumps({
-                            v.name: getattr(v, "tensor_state", None) 
-                            for v in committee_result.votes if getattr(v, "tensor_state", None)
-                        })
-                    )
+                    if is_new_entry:
+                        from src.db import save_decision_snapshot
+                        await asyncio.to_thread(
+                            save_decision_snapshot,
+                            decision_id=committee_result.decision_id,
+                            symbol=symbol,
+                            regime=signal.get("regime", "default"),
+                            final_action=signal["action"],
+                            confidence=committee_result.score,
+                            size_multiplier=getattr(committee_result, "size_multiplier", 1.0),
+                            entry_price=current_price,
+                            qty=position_size,
+                            brain_votes={v.name: v.action for v in committee_result.votes},
+                            feature_snapshot_json=json.dumps({
+                                "atr": signal.get("atr"),
+                                "rsi": signal.get("rsi"),
+                                "macd": signal.get("macd"),
+                                "selected_strategy": signal.get("selected_strategy"),
+                            }),
+                            causal_reasoning_json=json.dumps({
+                                v.name: getattr(v, "causal_reasoning", None)
+                                for v in committee_result.votes if getattr(v, "causal_reasoning", None)
+                            }),
+                            tensor_state_json=json.dumps({
+                                v.name: getattr(v, "tensor_state", None)
+                                for v in committee_result.votes if getattr(v, "tensor_state", None)
+                            })
+                        )
+                    else:
+                        # Scale-in: fold this add into the existing open snapshot
+                        # (audit finding F-A). Weighted-average the entry price
+                        # over the REAL fill prices, not the signal-time price.
+                        from src.db import get_open_snapshot, update_decision_snapshot_position
+                        snap = await asyncio.to_thread(get_open_snapshot, symbol)
+                        if snap:
+                            add_fill = filled_price if filled_price > 0 else current_price
+                            prev_entry = float(snap.get("entry_price", 0.0))
+                            prev_qty = float(snap.get("qty", 0.0))
+                            if prev_entry > 0 and prev_qty > 0:
+                                new_qty = prev_qty + position_size
+                                new_avg = (prev_entry * prev_qty + add_fill * position_size) / new_qty
+                                await asyncio.to_thread(
+                                    update_decision_snapshot_position,
+                                    snap["decision_id"],
+                                    entry_price=new_avg,
+                                    qty=new_qty,
+                                )
+                                logger.info(f"[SCALE-IN] Snapshot {snap['decision_id']} updated: entry ${prev_entry:.2f} -> ${new_avg:.2f} (weighted by real fill), qty {prev_qty} -> {new_qty}")
                 except Exception as db_e:
                     logger.warning(f"Decision snapshot persist failed for {symbol} (non-fatal): {db_e}")
     
@@ -970,10 +1192,20 @@ async def process_signal_for_symbol(symbol: str, current_price: float, risk_mana
                     _state.cooldowns[symbol] = time.time() + settings.COOLDOWN_SECONDS_BUY
                     # Reset position pyramid/scale-in tracking on close
                     _state.position_adds.pop(symbol, None)
+                    _crash_state_writer.mark_dirty()
                     # Clear trailing peaks for this symbol
                     if _state.strategy is not None and hasattr(_state.strategy, '_trailing_peaks'):
                         _state.strategy._trailing_peaks.pop(symbol, None)
-                    await _record_committee_outcome(symbol, current_price, exit_reason=signal.get('reason', 'unknown'))
+                    # Audit F-A/F-B: record against the exchange's actual avg
+                    # entry / total qty, the real fill price, minus commission.
+                    await _record_committee_outcome(
+                        symbol,
+                        filled_price if filled_price > 0 else current_price,
+                        exit_reason=signal.get('reason', 'unknown'),
+                        entry_price=float(current_position.get("avg_entry_price", 0.0)),
+                        qty=qty_abs,
+                        commission=commission,
+                    )
     
         except Exception as e:
             logger.error(f"Error processing {symbol}: {_describe_exception(e)}")
@@ -1570,6 +1802,16 @@ async def run_trading_bot() -> None:
         except Exception as e:
             logger.warning(f"Database connection failed (will retry later): {e}")
             logger.info("Running in offline mode - some features may be limited")
+            # Audit F6: a broken/corrupt DB previously degraded to offline mode
+            # with ONLY this log line -- no snapshots, no meta-learner updates,
+            # no max-hold exit, indefinitely. Escalate it as a critical alert.
+            try:
+                await get_alerting_engine().alert_system_health(
+                    "database", "down",
+                    {"error": str(e), "impact": "no decision snapshots, no adaptive learning, no max-hold exit"},
+                )
+            except Exception as alert_e:
+                logger.error(f"Failed to send database-down alert: {alert_e}")
 
         logger.info(settings.log_config())
 
@@ -1611,8 +1853,22 @@ async def run_trading_bot() -> None:
         _state.risk_manager = RiskManager(_state.ex)
         logger.info("Trading strategy and risk manager initialized")
 
-        # Initialize AlertingEngine
-        alerting_engine = AlertingEngine(risk_manager=_state.risk_manager, exchange=_state.ex)
+        # Startup reconciliation (audit F4): close ghost 'open' decision
+        # snapshots whose positions no longer exist on the exchange, and warn
+        # about exchange positions with no snapshot. Fully fail-safe.
+        try:
+            await reconcile_open_snapshots(_state.ex)
+        except Exception as rec_e:
+            logger.warning(f"Startup snapshot reconciliation failed (non-fatal): {rec_e}")
+
+        # Initialize AlertingEngine -- reuse the process-wide singleton that
+        # src/committee/committee.py already uses for brain-failure alerts, so
+        # cooldowns, dedup keys, and escalation counters live in ONE state
+        # store instead of two independent engines that could each send the
+        # same alert within the other's cooldown window.
+        alerting_engine = get_alerting_engine()
+        alerting_engine.risk_manager = _state.risk_manager
+        alerting_engine.exchange = _state.ex
         logger.info("Alerting engine initialized")
 
         # Make sure the model warmup (fired above) has actually finished
@@ -1725,6 +1981,32 @@ async def run_trading_bot() -> None:
         db_maintenance_task.add_done_callback(_on_task_done)
         logger.info("Periodic Database Maintenance task started")
 
+        # Start periodic state cleanup (runs every 5 minutes)
+        async def state_cleanup_loop() -> None:
+            while not _state._shutdown_requested:
+                try:
+                    await asyncio.sleep(300)  # 5 minutes
+                    cleaned = _state.cleanup_stale_state(max_age_seconds=3600)
+                    if any(v > 0 for v in cleaned.values()):
+                        logger.info(f"Periodic state cleanup: {cleaned}")
+                    
+                    # Also clean RiskManager state
+                    if _state.risk_manager is not None:
+                        rm_cleaned = _state.risk_manager.cleanup_stale_state(
+                            max_age_seconds=3600,
+                            active_symbols=settings.SYMBOLS
+                        )
+                        if any(v > 0 for v in rm_cleaned.values()):
+                            logger.info(f"RiskManager cleanup: {rm_cleaned}")
+                except Exception as e:
+                    logger.error(f"State cleanup error: {e}")
+                    await asyncio.sleep(60)
+
+        cleanup_task = asyncio.create_task(state_cleanup_loop(), name="state_cleanup")
+        active_tasks.add(cleanup_task)
+        cleanup_task.add_done_callback(_on_task_done)
+        logger.info("Periodic state cleanup task started")
+
 # Start deployment registry heartbeat
         async def deployment_heartbeat_loop():
             while not _state._shutdown_requested:
@@ -1799,6 +2081,11 @@ async def run_trading_bot() -> None:
                 for k in expired:
                     del _state.cooldowns[k]
 
+                # Persist crash-recovery state (peak_prices/cooldowns/position_adds)
+                # once per cycle, debounced to 5s so this is at most one tiny
+                # atomic JSON write per interval.
+                flush_crash_recovery_state()
+
                 # Fetch positions once per cycle (was fetched redundantly per symbol)
                 try:
                     positions = await _state.ex.get_positions()
@@ -1854,6 +2141,12 @@ async def run_trading_bot() -> None:
             task.cancel()
         if _state._background_tasks:
             await asyncio.gather(*_state._background_tasks, return_exceptions=True)
+        # Force-persist crash-recovery state on graceful shutdown too, so even
+        # a controlled restart keeps trailing peaks/cooldowns/scale-in counts.
+        try:
+            flush_crash_recovery_state(force=True)
+        except Exception:
+            pass
         if _state.ex:
             await _state.ex.close()
         logger.info("Shutdown complete.")
