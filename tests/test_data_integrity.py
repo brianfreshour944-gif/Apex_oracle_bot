@@ -27,7 +27,13 @@ class TestExchangeFillDataIntegrity:
 
     @pytest.mark.asyncio
     async def test_create_order_returns_filled_avg_price_not_zero(self, exchange):
-        """REGRESSION: filled_avg_price was silently zero due to SDK field mapping bug."""
+        """REGRESSION: filled_avg_price was silently zeroed on every live fill.
+
+        Root cause: exchange.py read `filled_order.commission`, an attribute alpaca-py>=0.43
+        Order no longer exposes (validate_assignment=True, extra='ignore' drops it from API
+        payloads too). The AttributeError diverted the confirm loop into the lossy poll_info
+        fallback, recording filled_avg_price=0.0. Fix: stop reading the non-existent attribute.
+        """
         fake_filled_order = MagicMock()
         fake_filled_order.id = "ord_123"
         fake_filled_order.symbol = "BTC/USD"
@@ -38,7 +44,7 @@ class TestExchangeFillDataIntegrity:
         fake_filled_order.type = "market"
         # CRITICAL: These are the actual Alpaca SDK field names
         fake_filled_order.filled_avg_price = "50000.00"
-        fake_filled_order.commission = "0.50"
+        # NOTE: real alpaca-py>=0.43 Order has NO .commission attribute; bot must not read it.
         fake_filled_order.filled_at = datetime.now(timezone.utc).isoformat()
 
         exchange.trading_client = MagicMock()
@@ -49,12 +55,16 @@ class TestExchangeFillDataIntegrity:
 
         # THE ASSERTION THAT MATTERS: filled_avg_price must be non-zero
         assert result["filled_avg_price"] == 50000.00, f"Expected 50000.00, got {result['filled_avg_price']}"
-        assert result["commission"] == 0.50, f"Expected 0.50, got {result['commission']}"
+        # Alpaca is commission-free; Order no longer exposes .commission -> 0.0
+        assert result["commission"] == 0.0, f"Expected 0.0 (commission-free), got {result['commission']}"
         assert result["filled_qty"] == 1.0
 
     @pytest.mark.asyncio
-    async def test_create_order_commission_not_zero(self, exchange):
-        """REGRESSION: commission was silently zero."""
+    async def test_create_order_commission_is_zero_alpaca_commission_free(self, exchange):
+        """REGRESSION: code read Order.commission (absent on alpaca-py>=0.43) and
+        recorded a fabricated value. Alpaca orders are commission-free and the Order model
+        no longer exposes .commission, so the bot must record 0.0 (not raise/fabricate).
+        """
         fake_filled_order = MagicMock()
         fake_filled_order.id = "ord_123"
         fake_filled_order.symbol = "BTC/USD"
@@ -64,7 +74,7 @@ class TestExchangeFillDataIntegrity:
         fake_filled_order.side = "buy"
         fake_filled_order.type = "market"
         fake_filled_order.filled_avg_price = "50000.00"
-        fake_filled_order.commission = "1.25"
+        # NOTE: real alpaca-py>=0.43 Order has NO .commission attribute.
         fake_filled_order.filled_at = datetime.now(timezone.utc).isoformat()
 
         exchange.trading_client = MagicMock()
@@ -73,8 +83,7 @@ class TestExchangeFillDataIntegrity:
 
         result = await exchange.create_order("BTC/USD", 1.0, "buy", confirm=True, confirm_timeout=2.0)
 
-        assert result["commission"] == 1.25, f"Commission should be 1.25, got {result['commission']}"
-        assert result["commission"] > 0, "Commission must be positive"
+        assert result["commission"] == 0.0, f"Expected 0.0 (commission-free), got {result['commission']}"
 
     @pytest.mark.asyncio
     async def test_create_order_partial_fill_handles_filled_qty(self, exchange):
