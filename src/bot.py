@@ -12,7 +12,7 @@ import numpy as np
 from tenacity import RetryError
 
 from scripts.deployment_registry import cleanup_stale, heartbeat_process, register_process
-from src.alerting import AlertingEngine
+from src.alerting import get_alerting_engine
 from src.api import start_fastapi_server_async
 from src.committee.transformer_brain import _model_inference_lock
 from src.config import (
