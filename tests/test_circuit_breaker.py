@@ -215,6 +215,98 @@ class TestCircuitBreakerIntegration:
 
             assert exchange.circuit_breaker.state == CircuitState.OPEN
 
+    @pytest.mark.asyncio
+    async def test_create_order_bypass_circuit_breaker_when_open(self):
+        """EXIT orders must bypass circuit breaker when it's OPEN.
 
-if __name__ == "__main__":
-    pytest.main([__file__, "-v"])
+        When the circuit is OPEN (exchange outage), new entries are blocked,
+        but exit/close orders should still attempt to execute.
+        """
+        from src.exchange import AlpacaExchange
+
+        with patch.object(AlpacaExchange, '__init__', lambda self: None):
+            exchange = AlpacaExchange()
+            exchange.circuit_breaker = CircuitBreaker("test_bypass", failure_threshold=1, open_seconds=60)
+            exchange.circuit_breaker._state = CircuitState.OPEN
+            exchange.circuit_breaker._opened_at = time.monotonic() + 1000
+
+            mock_order = MagicMock()
+            mock_order.filled_avg_price = 50000.0
+            mock_order.filled_qty = 1.0
+            mock_order.filled_at = None
+            mock_order.status = MagicMock()
+            mock_order.status.value = "filled"
+            exchange.trading_client = MagicMock()
+            exchange.trading_client.submit_order = MagicMock(return_value=mock_order)
+
+            # Without bypass — should fail fast
+            with pytest.raises(RuntimeError, match="is OPEN"):
+                await exchange.create_order("BTCUSD", 1.0, "sell", confirm=False)
+
+            # With bypass — should succeed even though circuit is OPEN
+            result = await exchange.create_order("BTCUSD", 1.0, "sell", confirm=False, bypass_circuit_breaker=True)
+            assert result["status"] == "filled"
+            assert exchange.trading_client.submit_order.call_count == 1
+
+    @pytest.mark.asyncio
+    async def test_get_positions_bypass_circuit_breaker_when_open(self):
+        """Emergency liquidation must be able to fetch positions even when circuit is OPEN."""
+        from src.exchange import AlpacaExchange
+
+        with patch.object(AlpacaExchange, '__init__', lambda self: None):
+            exchange = AlpacaExchange()
+            exchange.circuit_breaker = CircuitBreaker("test_bypass_get", failure_threshold=1, open_seconds=60)
+            exchange.circuit_breaker._state = CircuitState.OPEN
+            exchange.circuit_breaker._opened_at = time.monotonic() + 1000
+
+            mock_position = MagicMock(
+                symbol="BTC/USD", qty=1.0, avg_entry_price=49000.0,
+                market_value=50000.0, unrealized_pl=1000.0, unrealized_plpc=0.02,
+            )
+            exchange.trading_client = MagicMock()
+            exchange.trading_client.get_all_positions = MagicMock(return_value=[mock_position])
+
+            # Without bypass — should fail fast
+            with pytest.raises(RuntimeError, match="is OPEN"):
+                await exchange.get_positions()
+
+            # With bypass — should succeed
+            positions = await exchange.get_positions(bypass_circuit_breaker=True)
+            assert len(positions) == 1
+            assert positions[0]["symbol"] == "BTC/USD"
+
+    @pytest.mark.asyncio
+    async def test_create_order_bypass_still_retries_transient_errors(self):
+        """Bypassed orders should still benefit from tenacity retry on transient errors."""
+        from src.exchange import AlpacaExchange
+
+        with patch.object(AlpacaExchange, '__init__', lambda self: None):
+            exchange = AlpacaExchange()
+            exchange.circuit_breaker = CircuitBreaker("test_bypass_retry", failure_threshold=1, open_seconds=60)
+            exchange.circuit_breaker._state = CircuitState.OPEN
+
+            mock_order = MagicMock()
+            mock_order.filled_avg_price = 50000.0
+            mock_order.filled_qty = 1.0
+            mock_order.filled_at = None
+            mock_order.status = MagicMock()
+            mock_order.status.value = "filled"
+
+            call_count = 0
+            def flaky_submit(*args, **kwargs):
+                nonlocal call_count
+                call_count += 1
+                if call_count < 3:
+                    raise ConnectionError("transient error")
+                return mock_order
+
+            exchange.trading_client = MagicMock()
+            exchange.trading_client.submit_order = MagicMock(side_effect=flaky_submit)
+
+            result = await exchange.create_order("BTCUSD", 1.0, "sell", confirm=False, bypass_circuit_breaker=True)
+            assert result["status"] == "filled"
+            assert call_count == 3
+
+
+    if __name__ == "__main__":
+        pytest.main([__file__, "-v"])

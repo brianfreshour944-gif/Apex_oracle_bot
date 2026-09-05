@@ -70,6 +70,7 @@ class TestFullTradingLoop:
             "open_positions": 0,
             "current_exposure": 0.0
         })
+        rm.is_killswitch_active = MagicMock(return_value=False)
         rm.check_killswitch_conditions = AsyncMock(return_value=False)
         rm.check_trailing_stop = MagicMock(return_value="hold")
         rm.calculate_position_size = MagicMock(return_value=(0.1, "ok"))

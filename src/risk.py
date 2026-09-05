@@ -54,6 +54,12 @@ class RiskManager:
         self.open_positions = []
         self.peak_prices: dict[str, float] = {}  # Tracks highest price seen while in position
         self.last_check_time = datetime.now(UTC)
+        # Hard killswitch flag: set True when drawdown or daily loss limit is
+        # breached. Cleared only on a new calendar day (daily loss resets) or
+        # when equity recovers above the drawdown threshold. While active the
+        # trading loop MUST block all new entries and flatten open positions.
+        self.killswitch_active = False
+        self._killswitch_reason: str = ""
         # Protects against a race condition where multiple symbols are evaluated
         # concurrently (asyncio tasks) and could each independently pass an
         # exposure-cap check before any of their sibling orders have actually
@@ -78,6 +84,66 @@ class RiskManager:
     def mark_peaks_dirty(self) -> None:
         """Mark peak prices as needing persistence."""
         self._peak_prices_dirty = True
+
+    def persist_peak_prices(self) -> dict[str, float]:
+        """Return a shallow copy of the current peak_prices dict for persistence.
+
+        Called by flush_crash_recovery_state() (bot.py) during the per-cycle
+        state flush. Returning a copy avoids the caller mutating the live dict
+        during serialization, and the dirty flag (consumed separately via
+        consume_peaks_dirty) controls whether a flush is actually warranted.
+        """
+        with self._peak_prices_lock:
+            return dict(self.peak_prices)
+
+    def consume_peaks_dirty(self) -> bool:
+        """Return whether peak prices were dirty since the last flush, then clear.
+
+        Called after flush_crash_recovery_state() snapshots the peak_prices so
+        the next cycle only re-persists when something actually changed, not on
+        every 5-second heartbeat write.
+        """
+        was_dirty = self._peak_prices_dirty
+        self._peak_prices_dirty = False
+        return was_dirty
+
+    async def _close_open_snapshot(self, symbol: str, exit_price: float, qty: float, exit_reason: str) -> None:
+        """Close the open decision snapshot for *symbol* (if any).
+
+        Called from liquidate_all_positions / reduce_exposure_to_cap when those
+        paths bypass _record_committee_outcome (which handles snapshot closure
+        for normal trailing-stop / SL / TP exits). Without this, a killswitch
+        liquidation would leave the snapshot status='open' forever, so the
+        adaptive meta-learner never sees the outcome and the cache would serve
+        a stale 'open' record.
+        """
+        try:
+            from src.db import close_decision_snapshot, get_open_snapshot
+            snap = await asyncio.to_thread(get_open_snapshot, symbol)
+            if snap:
+                # Recompute realized PnL from the snapshot's recorded values
+                action = snap.get("final_action", "buy")
+                entry_price = float(snap.get("entry_price", 0.0))
+                snap_qty = abs(float(snap.get("qty", 0.0)))
+                if entry_price > 0 and snap_qty > 0 and exit_price > 0:
+                    if action == "buy":
+                        pnl = (exit_price - entry_price) * snap_qty
+                        return_pct = (exit_price - entry_price) / entry_price * 100.0
+                    else:
+                        pnl = (entry_price - exit_price) * snap_qty
+                        return_pct = (entry_price - exit_price) / entry_price * 100.0
+                else:
+                    pnl = 0.0
+                    return_pct = 0.0
+                await asyncio.to_thread(
+                    close_decision_snapshot,
+                    snap["decision_id"],
+                    realized_pnl=pnl,
+                    return_pct=return_pct,
+                    exit_reason=exit_reason,
+                )
+        except Exception as e:
+            logger.warning(f"_close_open_snapshot failed for {symbol} (non-fatal): {e}")
 
     def get_transaction_costs(self, symbol: str) -> dict[str, float]:
         """Get transaction cost estimates for a symbol.
@@ -179,6 +245,8 @@ class RiskManager:
             # Check if we've hit max drawdown limit
             if drawdown_pct < settings.MAX_DRAWDOWN_STOP:
                 logger.critical(f"MAX DRAWDOWN LIMIT HIT: {drawdown_pct:.2f}%")
+                self.killswitch_active = True
+                self._killswitch_reason = f"max_drawdown_exceeded ({drawdown_pct:.2f}%)"
                 return {
                     "status": "killswitch_activated",
                     "reason": "max_drawdown_exceeded",
@@ -186,13 +254,20 @@ class RiskManager:
                     "action": "liquidate_all"
                 }
 
-            # Reset daily PnL if new day
+            # Reset daily PnL if new day -- also clear the daily-loss
+            # killswitch since the loss counter resets at the calendar day
+            # boundary. The drawdown killswitch is cleared below only when
+            # equity has actually recovered.
             now = datetime.now(UTC)
             if now.day != self.last_check_time.day:
                 async with self._equity_lock:
                     self.daily_pnl = 0.0
                     self.start_of_day_equity = equity
                 self.last_check_time = now
+                if self.killswitch_active and "daily_loss_limit" in self._killswitch_reason:
+                    logger.critical("Killswitch cleared: new calendar day, daily loss limit reset.")
+                    self.killswitch_active = False
+                    self._killswitch_reason = ""
 
             # Update daily PnL (actual change since start of day)
             if not hasattr(self, 'start_of_day_equity'):
@@ -206,6 +281,8 @@ class RiskManager:
             daily_loss_limit_abs = settings.DAILY_LOSS_LIMIT / 100.0 * equity
             if daily_pnl < daily_loss_limit_abs:
                 logger.critical(f"DAILY LOSS LIMIT HIT: ${daily_pnl:.2f} (limit: ${daily_loss_limit_abs:.2f})")
+                self.killswitch_active = True
+                self._killswitch_reason = f"daily_loss_limit_exceeded (daily_pnl=${daily_pnl:.2f})"
                 return {
                     "status": "killswitch_activated",
                     "reason": "daily_loss_limit_exceeded",
@@ -543,6 +620,24 @@ class RiskManager:
         # Only activate on actual risk breaches, NOT on transient errors
         return status.get("status") == "killswitch_activated"
 
+    def is_killswitch_active(self) -> bool:
+        """Return True if the hard killswitch is currently activated.
+
+        When True, the trading loop MUST refuse new entries and force-exit
+        any open positions. This is a synchronous read of a flag that
+        ``update_account_status`` sets asynchronously -- safe because the
+        flag transitions (breach -> set, new day -> clear) are monotonic
+        within a single boolean read's resolution, and a stale "still active"
+        read for one cycle just means one extra conservative cycle, never a
+        missed breach.
+        """
+        return self.killswitch_active
+
+    @property
+    def killswitch_reason(self) -> str:
+        """Human-readable reason the killswitch is active (empty when clear)."""
+        return self._killswitch_reason
+
     async def check_and_reserve_exposure(
         self,
         requested_notional: float,
@@ -721,7 +816,7 @@ class RiskManager:
                 qty_abs = abs(float(qty))
                 market_value = float(position.get("market_value", 0))
                 client_order_id = f"emergency_{symbol}_{side}_{qty_abs}_{int(time.time())}"
-                order_result = await self.exchange.create_order(symbol=symbol, qty=qty_abs, side=side, type="market", client_order_id=client_order_id)
+                order_result = await self.exchange.create_order(symbol=symbol, qty=qty_abs, side=side, type="market", client_order_id=client_order_id, bypass_circuit_breaker=True)
                 filled_price = order_result.get("filled_avg_price", 0.0)
                 filled_qty = order_result.get("filled_qty", qty_abs)
                 actual_value = filled_price * filled_qty if filled_price > 0 else market_value
@@ -767,6 +862,7 @@ class RiskManager:
                     side=side,
                     type="market",
                     client_order_id=client_order_id,
+                    bypass_circuit_breaker=True,
                 )
 
                 results.append({
@@ -808,7 +904,7 @@ class RiskManager:
         Returns:
             Dict with counts of cleaned entries per category
         """
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         active_symbols = set(active_symbols) if active_symbols else set()
         cleaned = {
             "peak_prices": 0,

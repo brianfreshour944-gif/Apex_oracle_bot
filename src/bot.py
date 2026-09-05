@@ -12,7 +12,7 @@ import numpy as np
 from tenacity import RetryError
 
 from scripts.deployment_registry import cleanup_stale, heartbeat_process, register_process
-from src.alerting import AlertingEngine
+from src.alerting import AlertingEngine, get_alerting_engine
 from src.api import start_fastapi_server_async
 from src.committee.transformer_brain import _model_inference_lock
 from src.config import (
@@ -81,7 +81,15 @@ logger = get_logger("bot")
 structured_logger = StructuredLogger("bot")
 
 
-async def _record_committee_outcome(symbol: str, exit_price: float, exit_reason: str | None = None) -> None:
+async def _record_committee_outcome(
+    symbol: str,
+    exit_price: float,
+    exit_reason: str | None = None,
+    *,
+    entry_price: float | None = None,
+    qty: float | None = None,
+    commission: float = 0.0,
+) -> None:
     """On position exit, close the open decision snapshot and update the learner.
 
     ``entry_price``/``qty``: when supplied (callers have the exchange position
@@ -669,6 +677,26 @@ async def process_signal_for_symbol(symbol: str, current_price: float, risk_mana
     lock = _state._symbol_locks.setdefault(symbol, asyncio.Lock())
     async with lock:
         try:
+            # --- HARD KILLSWITCH CHECK ---
+            # Block ALL new entries when the killswitch is active. Exits (close
+            # orders) are still allowed -- the main loop already issued flatten
+            # orders, but a trailing-stop / SL / TP exit that arrives after the
+            # main-loop flush must also be honoured rather than silently blocked.
+            if risk_manager.is_killswitch_active():
+                if positions is None:
+                    try:
+                        positions = await ex.get_positions()
+                    except Exception:
+                        positions = []
+                position_dict = {p["symbol"].replace("/", ""): p for p in positions}
+                current_position = position_dict.get(symbol.replace("/", ""))
+                if current_position is None:
+                    logger.warning(
+                        f"[{symbol}] KILLSWITCH active — refusing new entry. "
+                        f"Reason: {risk_manager.killswitch_reason}"
+                    )
+                    return
+                # Fall through: an existing position may still need to exit.
             # Use pre-fetched positions from the main cycle if available,
             # otherwise fetch fresh (fallback for direct calls).
             if positions is None:
@@ -725,6 +753,7 @@ async def process_signal_for_symbol(symbol: str, current_price: float, risk_mana
                         side=side,
                         type="market",
                         client_order_id=client_order_id,
+                        bypass_circuit_breaker=True,
                     )
                     logger.info(f"Trailing Stop Executed: {symbol}")
                     await send_telegram_alert(f"🔔 <b>Trailing Stop Triggered</b>\nSymbol: {symbol}\nClosed {qty} @ ${current_price:.2f}")
@@ -852,12 +881,39 @@ async def process_signal_for_symbol(symbol: str, current_price: float, risk_mana
                     print("\n".join(dashboard), flush=True)
                     return
     
+                # AUTHORITATIVE POSITION REFRESH before sizing/sizing checks.
+                # The `positions` snapshot passed from the main loop was taken
+                # at cycle start; if another symbol's background task filled
+                # an order earlier this same cycle, the exchange's positions
+                # have advanced but our snapshot is stale. That staleness is the
+                # root cause of "order not found" -> duplicate position ->
+                # "insufficient balance" cascades: the bot sizes against a
+                # phantom-free position set, then gets rejected mid-fill.
+                # Re-fetch here so exposure/reservation math is accurate.
+                try:
+                    positions = await ex.get_positions()
+                except Exception as pos_refresh_err:
+                    logger.warning(
+                        f"[{symbol}] Authoritative position refresh failed: "
+                        f"{_describe_exception(pos_refresh_err)} — using cycle-start snapshot"
+                    )
+
                 # Check position limit before entering
                 # Reuse the `positions` list already fetched at the top of this
                 # function (bot.py:213) instead of letting update_account_status()
                 # fetch it again -- measured: this redundancy previously cost 2-3x
                 # get_positions()/get_account() calls per symbol per cycle.
                 risk_status = await risk_manager.update_account_status(positions=positions)
+                # HARD KILLSWITCH: block new entries if daily loss or drawdown
+                # limit was breached (detected by update_account_status just now
+                # or by the background monitor). Exits for existing positions
+                # still flow through (trailing stop / SL / TP below).
+                if risk_status["status"] == "killswitch_activated":
+                    logger.critical(
+                        f"[{symbol}] KILLSWITCH active ({risk_status.get('reason', 'unknown')}) — "
+                        "blocking new entry"
+                    )
+                    return
                 if risk_status["status"] == "position_limit_exceeded":
                     dashboard.append("Risk........... VETO")
                     dashboard.append("FINAL.......... NO TRADE")
@@ -1172,6 +1228,7 @@ async def process_signal_for_symbol(symbol: str, current_price: float, risk_mana
                     side=side,
                     type="market",
                     client_order_id=client_order_id,
+                    bypass_circuit_breaker=True,
                 )
     
                 filled_price = order_result.get("filled_avg_price", 0.0)
@@ -1725,7 +1782,8 @@ async def run_periodic_db_maintenance() -> None:
 
             from src.db import DecisionSnapshot, ShadowTrade, get_engine
 
-            with get_engine().begin() as conn:
+            engine = get_engine()
+            with engine.begin() as conn:
                 result = conn.execute(
                     delete(DecisionSnapshot).where(
                         DecisionSnapshot.status == "closed",
@@ -1742,8 +1800,14 @@ async def run_periodic_db_maintenance() -> None:
                 )
                 deleted_shadow_trades = result.rowcount
 
-                if str(get_engine().url).startswith("sqlite"):
+            # VACUUM must run OUTSIDE any transaction (SQLite forbids it inside
+            # one: "cannot VACUUM from within a transaction"). Run it on a fresh
+            # connection after the deletes commit. No-op on PostgreSQL where
+            # the bot uses a real background autovacuum.
+            if str(engine.url).startswith("sqlite"):
+                with engine.connect() as conn:
                     conn.execute(text("VACUUM"))
+                    conn.commit()
 
             logger.info(f"Database maintenance completed: {deleted_snapshots} snapshots, {deleted_shadow_trades} shadow trades deleted")
 
@@ -2085,6 +2149,44 @@ async def run_trading_bot() -> None:
                 # once per cycle, debounced to 5s so this is at most one tiny
                 # atomic JSON write per interval.
                 flush_crash_recovery_state()
+
+                # --- HARD KILLSWITCH CHECK (every cycle) ---
+                # Block all new entries and flatten positions when the daily-loss
+                # or drawdown limit is breached. This runs every cycle (not just
+                # via the background monitor_killswitch task) so there is no
+                # window where the main loop can open a new position after the
+                # limit has tripped.
+                if _state.risk_manager is not None and _state.risk_manager.is_killswitch_active():
+                    logger.critical(
+                        f"KILLSWITCH ACTIVE ({_state.risk_manager.killswitch_reason}) — "
+                        "blocking all new entries and flattening open positions"
+                    )
+                    # Flatten all open positions immediately
+                    try:
+                        positions = await _state.ex.get_positions(bypass_circuit_breaker=True)
+                        for pos in positions:
+                            sym = pos["symbol"]
+                            qty = float(pos.get("qty", 0))
+                            if qty == 0:
+                                continue
+                            side = "sell" if qty > 0 else "buy"
+                            qty_abs = abs(qty)
+                            client_order_id = f"killswitch_{sym}_{side}_{qty_abs}_{int(time.time())}"
+                            await _state.ex.create_order(
+                                symbol=sym, qty=qty_abs, side=side, type="market",
+                                client_order_id=client_order_id,
+                                bypass_circuit_breaker=True,
+                            )
+                            logger.critical(f"KILLSWITCH FLATTENED: closed {qty} {sym} ({side})")
+                        await send_telegram_alert(
+                            f"🛑 <b>KILLSWITCH ACTIVE</b>\n"
+                            f"Reason: {_state.risk_manager.killswitch_reason}\n"
+                            "All new entries blocked. Flattening open positions."
+                        )
+                    except Exception as flush_e:
+                        logger.error(f"KILLSWITCH flatten failed: {_describe_exception(flush_e)}")
+                    await asyncio.sleep(settings.LOOP_INTERVAL_SEC)
+                    continue
 
                 # Fetch positions once per cycle (was fetched redundantly per symbol)
                 try:

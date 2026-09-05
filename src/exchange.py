@@ -104,8 +104,8 @@ class BaseExchange(Protocol):
     async def close(self) -> None: ...
     async def get_account(self) -> dict[str, Any]: ...
     async def get_bars(self, symbol: str, timeframe: str = "1D", limit: int = 100) -> pl.DataFrame: ...
-    async def get_positions(self) -> list[dict[str, Any]]: ...
-    async def create_order(self, symbol: str, qty: float, side: str, type: str = "market", time_in_force: str = "ioc", client_order_id: str | None = None) -> dict[str, Any]: ...
+    async def get_positions(self, bypass_circuit_breaker: bool = False) -> list[dict[str, Any]]: ...
+    async def create_order(self, symbol: str, qty: float, side: str, type: str = "market", time_in_force: str = "ioc", client_order_id: str | None = None, bypass_circuit_breaker: bool = False) -> dict[str, Any]: ...
 
 
 class AlpacaExchange:
@@ -296,12 +296,21 @@ class AlpacaExchange:
         return pl.DataFrame()
 
     @retry(retry=retry_if_exception(_retry_unless_circuit_open), stop=stop_after_attempt(5), wait=wait_exponential(multiplier=1, min=2, max=30))
-    async def get_positions(self) -> list[dict[str, Any]]:
-        """Get open positions."""
+    async def get_positions(self, bypass_circuit_breaker: bool = False) -> list[dict[str, Any]]:
+        """Get open positions.
+
+        ``bypass_circuit_breaker``: when True, fetches positions directly
+        via the trading client instead of through the circuit breaker.
+        Used by emergency/killswitch liquidation paths that must read
+        current exposure even during an exchange outage.
+        """
         if not self.trading_client:
             await self.load()
 
-        positions = await self.circuit_breaker.call(asyncio.to_thread, self.trading_client.get_all_positions)
+        if bypass_circuit_breaker:
+            positions = await asyncio.to_thread(self.trading_client.get_all_positions)
+        else:
+            positions = await self.circuit_breaker.call(asyncio.to_thread, self.trading_client.get_all_positions)
         result = []
         for p in positions:
             result.append({
@@ -430,6 +439,7 @@ class AlpacaExchange:
         confirm: bool = True,
         confirm_timeout: float = 10.0,
         client_order_id: str | None = None,
+        bypass_circuit_breaker: bool = False,
     ) -> dict[str, Any]:
         """Create a new order using alpaca-py.
 
@@ -437,6 +447,13 @@ class AlpacaExchange:
         placed recently (within the idempotency window), the cached result
         is returned instead of re-submitting — preventing double-submits
         from confirmation timeouts.
+
+        ``bypass_circuit_breaker``: when True (used for EXIT / close orders),
+        the order is submitted directly via the trading client (still covered
+        by tenacity retries) instead of going through the circuit breaker.
+        This ensures positions can be closed even when the circuit is OPEN
+        from a prior exchange outage — a new entry during an outage should be
+        blocked, but an exit must still attempt to execute.
         """
         if not self.trading_client:
             await self.load()
@@ -479,7 +496,14 @@ class AlpacaExchange:
         request = MarketOrderRequest(**order_kwargs)
 
         try:
-            order = await self.circuit_breaker.call(asyncio.to_thread, self.trading_client.submit_order, request)
+            if bypass_circuit_breaker:
+                # Exit / close orders must go through even when the circuit
+                # is OPEN — holding a position during an exchange outage is
+                # riskier than attempting the close. Still benefit from the
+                # outer @retry decorator for transient failures.
+                order = await asyncio.to_thread(self.trading_client.submit_order, request)
+            else:
+                order = await self.circuit_breaker.call(asyncio.to_thread, self.trading_client.submit_order, request)
             order_id = str(order.id)
             order_info = {
                 "id": order_id,
@@ -581,4 +605,31 @@ class AlpacaExchange:
                 logger.warning(f"Error polling order {order_id}: {e}")
 
         logger.warning(f"Order {order_id} confirmation timed out after {confirm_timeout}s")
+
+        # Fallback: if we have a client_order_id but no confirmed fill yet,
+        # try looking the order up by client_order_id via get_orders() (which
+        # Alpaca supports as a filter). A transient "order not found" on the
+        # by-ID poll can lag the by-client-id lookup, and market orders on
+        # crypto are near-instant -- the fill is almost certainly there.
+        if client_order_id is not None and order_id and "filled_avg_price" not in order_info:
+            try:
+                recent_orders = await self.get_orders(limit=50, status="filled")
+                for o in recent_orders:
+                    if o.get("client_order_id") == client_order_id:
+                        order_info["status"] = "filled"
+                        order_info["filled_avg_price"] = float(o.get("filled_avg_price", 0.0) or 0.0)
+                        order_info["filled_qty"] = float(o.get("filled_qty", 0.0) or 0.0)
+                        order_info["commission"] = 0.0
+                        logger.warning(
+                            f"Order {order_id} ({client_order_id}): recovered fill via "
+                            f"client_order_id lookup -> price={order_info['filled_avg_price']}, "
+                            f"qty={order_info['filled_qty']}"
+                        )
+                        break
+            except Exception as fallback_err:
+                logger.warning(
+                    f"Order {order_id} fallback lookup by client_order_id "
+                    f"{client_order_id!r} failed: {fallback_err}"
+                )
+
         return order_info
