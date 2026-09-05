@@ -1,14 +1,13 @@
 """Prometheus metrics for the trading bot."""  
  
-from __future__ import annotations 
- 
-from src.config import settings 
-from src.logging_config import get_logger 
- 
+from __future__ import annotations
+
+from src.logging_config import get_logger
+
 logger = get_logger("metrics") 
  
 try: 
-    from prometheus_client import Counter, Gauge, Histogram 
+    from prometheus_client import Counter, Gauge, Histogram
     _PROM_AVAILABLE = True 
 except Exception: 
     _PROM_AVAILABLE = False 

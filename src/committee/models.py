@@ -1,7 +1,7 @@
 """Data models for Committee voting system with confidence sizing and dynamic weighting."""
 
 from dataclasses import dataclass, field
-from typing import List, Optional, Dict
+
 
 @dataclass
 class BrainVote:
@@ -12,8 +12,8 @@ class BrainVote:
     regime: str
     reason: str
     is_veto: bool = False
-    causal_reasoning: Optional[Dict[str, float]] = None
-    tensor_state: Optional[List[List[float]]] = None
+    causal_reasoning: dict[str, float] | None = None
+    tensor_state: list[list[float]] | None = None
 
 @dataclass
 class CommitteeResult:
@@ -21,12 +21,12 @@ class CommitteeResult:
     score: float                       # Aggregated score of winning action (0.0 to 1.0)
     size_multiplier: float = 1.0       # Dynamic position sizing scale factor (e.g. 0.5x to 1.75x)
     entropy: float = 0.0               # Vote disagreement entropy
-    votes: List[BrainVote] = field(default_factory=list)
-    active_weights: Dict[str, float] = field(default_factory=dict)
+    votes: list[BrainVote] = field(default_factory=list)
+    active_weights: dict[str, float] = field(default_factory=dict)
     vetoed: bool = False
-    veto_reason: Optional[str] = None
+    veto_reason: str | None = None
     # --- Adaptive meta-learner audit fields (populated when the learner runs) ---
-    decision_id: Optional[str] = None          # Correlates entry snapshot -> exit outcome
+    decision_id: str | None = None          # Correlates entry snapshot -> exit outcome
     adaptive_used: bool = False                # True if learned weights drove this decision
-    adaptive_weights: Dict[str, float] = field(default_factory=dict)  # per-brain weights used
-    explanation: Optional[str] = None          # Human-readable weighting rationale
+    adaptive_weights: dict[str, float] = field(default_factory=dict)  # per-brain weights used
+    explanation: str | None = None          # Human-readable weighting rationale

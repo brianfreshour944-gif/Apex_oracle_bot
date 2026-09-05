@@ -3,9 +3,9 @@
 import json
 import logging
 import sys
-import structlog
-from typing import Any, Dict
 from datetime import datetime
+
+import structlog
 
 
 class JSONFormatter(logging.Formatter):

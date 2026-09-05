@@ -4,13 +4,14 @@ import asyncio
 import math
 import threading
 import time
+from datetime import UTC, datetime
+from typing import Any, Dict, Optional
+
 import numpy as np
-from typing import Dict, Any, Optional, Tuple
-from datetime import datetime, timezone
 
 from src.config import settings
-from src.logging_config import get_logger
 from src.exchange import AlpacaExchange
+from src.logging_config import get_logger
 
 logger = get_logger(__name__)
 
@@ -51,8 +52,8 @@ class RiskManager:
         self.peak_equity = 0.0
         self.daily_pnl = 0.0
         self.open_positions = []
-        self.peak_prices: Dict[str, float] = {}  # Tracks highest price seen while in position
-        self.last_check_time = datetime.now(timezone.utc)
+        self.peak_prices: dict[str, float] = {}  # Tracks highest price seen while in position
+        self.last_check_time = datetime.now(UTC)
         # Protects against a race condition where multiple symbols are evaluated
         # concurrently (asyncio tasks) and could each independently pass an
         # exposure-cap check before any of their sibling orders have actually
@@ -64,50 +65,21 @@ class RiskManager:
         self._peak_prices_lock = threading.Lock()
         self._reserved_exposure = []  # list of (notional_amount, reserved_at) tuples
         # Transaction cost tracking for dynamic model
-        self._realized_tx_costs: Dict[str, Dict[str, float]] = {}  # symbol -> {fee_bps, slippage_bps, spread_bps}
+        self._realized_tx_costs: dict[str, dict[str, float]] = {}  # symbol -> {fee_bps, slippage_bps, spread_bps}
         # Reserved new-position slots: symbol -> reserved_at. Mirrors
         # _reserved_exposure's pattern (same lock, same TTL) but for
         # MAX_OPEN_POSITIONS instead of dollar exposure -- without this,
         # multiple concurrently-evaluated symbols in the same cycle all see
         # the same stale, cycle-start position count and can all pass the
         # naive position-count check simultaneously.
-        self._reserved_new_position_symbols: Dict[str, datetime] = {}
-
-        # Crash-recovery: restore trailing-stop peaks persisted by a previous
-        # process. Without this, a trailing stop that should have fired before
-        # a restart never fires after it, and the peak silently re-anchors at
-        # the current (already-fallen) price. Fail-safe: missing/corrupt file
-        # just means cold-start behavior, exactly as before this existed.
-        self._persisted_peaks_dirty = False
-        try:
-            from src.persistent_state import load_persistent_state
-            saved = load_persistent_state()
-            saved_peaks = saved.get("peak_prices", {})
-            if isinstance(saved_peaks, dict):
-                self.peak_prices = {
-                    str(sym): float(px) for sym, px in saved_peaks.items()
-                    if isinstance(px, (int, float)) and math.isfinite(px) and px > 0
-                }
-                if self.peak_prices:
-                    logger.info(f"Restored {len(self.peak_prices)} trailing-stop peak(s) from persisted state")
-        except Exception as e:
-            logger.warning(f"Failed to restore trailing-stop peaks (starting cold): {e}")
-
-    def persist_peak_prices(self) -> Dict[str, float]:
-        """Snapshot of peak_prices for persistence callers (thread-safe read)."""
-        with self._peak_prices_lock:
-            return dict(self.peak_prices)
+        self._reserved_new_position_symbols: dict[str, datetime] = {}
+        self._peak_prices_dirty = False
 
     def mark_peaks_dirty(self) -> None:
-        """Flag that peak_prices changed and should be persisted soon."""
-        self._persisted_peaks_dirty = True
+        """Mark peak prices as needing persistence."""
+        self._peak_prices_dirty = True
 
-    def consume_peaks_dirty(self) -> bool:
-        dirty = getattr(self, "_persisted_peaks_dirty", False)
-        self._persisted_peaks_dirty = False
-        return dirty
-
-    def get_transaction_costs(self, symbol: str) -> Dict[str, float]:
+    def get_transaction_costs(self, symbol: str) -> dict[str, float]:
         """Get transaction cost estimates for a symbol.
         
         Uses dynamic model (recent realized costs) if enabled and available,
@@ -164,9 +136,9 @@ class RiskManager:
 
     async def update_account_status(
         self,
-        account: Optional[Dict[str, Any]] = None,
-        positions: Optional[list] = None,
-    ) -> Dict[str, Any]:
+        account: dict[str, Any] | None = None,
+        positions: list | None = None,
+    ) -> dict[str, Any]:
         """Update account status and check risk limits.
 
         Accepts optionally pre-fetched `account`/`positions` so callers that
@@ -215,7 +187,7 @@ class RiskManager:
                 }
 
             # Reset daily PnL if new day
-            now = datetime.now(timezone.utc)
+            now = datetime.now(UTC)
             if now.day != self.last_check_time.day:
                 async with self._equity_lock:
                     self.daily_pnl = 0.0
@@ -290,7 +262,7 @@ class RiskManager:
                 "action": "stand_aside"
             }
 
-    def _get_drawdown_taper_multiplier(self, drawdown_pct: Optional[float]) -> float:
+    def _get_drawdown_taper_multiplier(self, drawdown_pct: float | None) -> float:
         """Additional risk-amount taper as equity drawdown approaches the killswitch.
 
         current_equity (see calculate_position_size) already shrinks
@@ -331,13 +303,13 @@ class RiskManager:
         symbol: str,
         current_price: float,
         regime: str,
-        atr: Optional[float] = None,
+        atr: float | None = None,
         confidence: float = 1.0,
-        returns_matrix: Optional[Dict[str, np.ndarray]] = None,
+        returns_matrix: dict[str, np.ndarray] | None = None,
         expected_return_pct: float = 0.0,
-        current_equity: Optional[float] = None,
-        drawdown_pct: Optional[float] = None,
-    ) -> Tuple[float, str]:
+        current_equity: float | None = None,
+        drawdown_pct: float | None = None,
+    ) -> tuple[float, str]:
         """Portfolio Optimization: Volatility Parity, Correlation VaR, and Cash Allocation.
 
         Now includes transaction cost model:
@@ -479,7 +451,7 @@ class RiskManager:
             return 0.0, f"error: {e}"
 
 
-    def _get_trailing_params(self, regime: Optional[str]) -> Tuple[float, float]:
+    def _get_trailing_params(self, regime: str | None) -> tuple[float, float]:
         """Scale TRAILING_ACTIVATION_PCT/TRAILING_DISTANCE_PCT by regime.
 
         Unrecognized or missing regime maps to (1.0, 1.0) -- exact match to
@@ -500,7 +472,7 @@ class RiskManager:
             distance = activation * 0.9
         return activation, distance
 
-    def check_trailing_stop(self, symbol: str, current_price: float, avg_entry_price: float, qty: float, regime: Optional[str] = None) -> str:
+    def check_trailing_stop(self, symbol: str, current_price: float, avg_entry_price: float, qty: float, regime: str | None = None) -> str:
         """
         Check if a trailing stop should be activated or triggered.
         Returns: 'close' if triggered, 'hold' otherwise.
@@ -575,8 +547,8 @@ class RiskManager:
         self,
         requested_notional: float,
         min_notional: float = 10.0,
-        current_exposure: Optional[float] = None,
-    ) -> Tuple[float, str]:
+        current_exposure: float | None = None,
+    ) -> tuple[float, str]:
         """Returns the APPROVED notional (may be smaller than requested,
         capped to remaining headroom) rather than a strict pass/fail, so
         available capacity gets used instead of sitting idle. Returns
@@ -612,7 +584,7 @@ class RiskManager:
                     return 0.0, status.get("reason", status.get("status", "risk_check_failed"))
                 current_exposure = status["current_exposure"]
 
-            now = datetime.now(timezone.utc)
+            now = datetime.now(UTC)
             # Prune stale reservations aggressively (30s TTL instead of 60s)
             # so failed/cancelled orders release their headroom faster.
             self._reserved_exposure = [(a, t) for a, t in self._reserved_exposure if (now - t).total_seconds() < 30]
@@ -665,7 +637,7 @@ class RiskManager:
         symbol: str,
         open_position_count: int,
         same_regime_open_count: int = 0,
-    ) -> Tuple[bool, str]:
+    ) -> tuple[bool, str]:
         """Atomically check and reserve a new-position slot against MAX_OPEN_POSITIONS.
 
         Call this once per symbol, only for a genuinely NEW entry (not a
@@ -695,7 +667,7 @@ class RiskManager:
         can get in one regime cluster, independent of the overall count cap.
         """
         async with self._exposure_lock:
-            now = datetime.now(timezone.utc)
+            now = datetime.now(UTC)
             # Prune stale reservations (30s TTL, matching _reserved_exposure)
             self._reserved_new_position_symbols = {
                 s: t for s, t in self._reserved_new_position_symbols.items()
@@ -726,41 +698,7 @@ class RiskManager:
         """Release a previously-reserved new-position slot."""
         self._reserved_new_position_symbols.pop(symbol, None)
 
-    async def _close_open_snapshot(self, symbol: str, exit_price: float, qty: float,
-                                   exit_reason: str) -> None:
-        """Close the symbol's open decision snapshot after a RISK-SIDE close.
-
-        reduce_exposure_to_cap / liquidate_all_positions bypass
-        bot._record_committee_outcome, so without this the snapshot stays
-        status='open' forever and the in-memory _open_snapshot_cache keeps
-        serving a stale 'open' record for the symbol (audit finding). Best
-        effort and fully fail-safe: any error is logged, never raised.
-        """
-        try:
-            import asyncio as _asyncio
-            from src import db as _db
-            snap = await _asyncio.to_thread(_db.get_open_snapshot, symbol)
-            if not snap:
-                return
-            entry_price = float(snap.get("entry_price", 0.0))
-            recorded_qty = abs(float(snap.get("qty", 0.0)) or 0.0)
-            is_buy = snap.get("final_action", "buy") == "buy"
-            # Same convention as _record_committee_outcome: buy = long.
-            pnl = ((exit_price - entry_price) if is_buy else (entry_price - exit_price)) * recorded_qty
-            await _asyncio.to_thread(
-                _db.close_decision_snapshot,
-                snap["decision_id"],
-                realized_pnl=pnl,
-                return_pct=(pnl / (entry_price * recorded_qty) * 100.0)
-                if (entry_price > 0 and recorded_qty > 0) else 0.0,
-                exit_reason=exit_reason,
-            )
-            logger.warning(f"[RISK-CLOSE] Snapshot {snap['decision_id']} for {symbol} "
-                           f"closed (exit_reason={exit_reason}, pnl={pnl:.2f})")
-        except Exception as e:
-            logger.warning(f"[RISK-CLOSE] Failed to close snapshot for {symbol} (non-fatal): {e}")
-
-    async def reduce_exposure_to_cap(self) -> Dict[str, Any]:
+    async def reduce_exposure_to_cap(self) -> dict[str, Any]:
         """Close positions, worst unrealized P&L first, until exposure is
         back under the cap. Targeted/incremental, unlike liquidate_all_positions."""
         try:
@@ -808,7 +746,7 @@ class RiskManager:
             logger.error(f"Exposure reduction failed: {e}")
             return {"status": "reduction_failed", "error": str(e)}
 
-    async def liquidate_all_positions(self) -> Dict[str, Any]:
+    async def liquidate_all_positions(self) -> dict[str, Any]:
         """Liquidate all open positions."""
         try:
             positions = await self.exchange.get_positions()
@@ -850,7 +788,7 @@ class RiskManager:
             return {
                 "status": "liquidation_complete",
                 "results": results,
-                "timestamp": datetime.now(timezone.utc).isoformat()
+                "timestamp": datetime.now(UTC).isoformat()
             }
 
         except Exception as e:

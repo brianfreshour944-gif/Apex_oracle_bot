@@ -1,7 +1,8 @@
 """Redis cross-process state manager for multi-bot synchronization."""
 
 import json
-from typing import Dict, Any, Optional
+from typing import Any
+
 from src.config import settings
 from src.logging_config import get_logger
 
@@ -17,7 +18,7 @@ except ImportError:
 class RedisStateManager:
     """Manages shared regime state and cross-bot synchronization over Redis."""
 
-    def __init__(self, redis_url: Optional[str] = None):
+    def __init__(self, redis_url: str | None = None):
         self.redis_url = redis_url or getattr(settings, "REDIS_URL", "redis://localhost:6379/0")
         self.client = None
         self._connected = False
@@ -39,7 +40,7 @@ class RedisStateManager:
             self._connected = False
             return False
 
-    async def set_regime_flag(self, flag_data: Dict[str, Any]) -> bool:
+    async def set_regime_flag(self, flag_data: dict[str, Any]) -> bool:
         """Set shared regime flag in Redis."""
         if not self._connected or not self.client:
             return False
@@ -50,7 +51,7 @@ class RedisStateManager:
             logger.error(f"Failed to set regime flag in Redis: {e}")
             return False
 
-    async def get_regime_flag(self) -> Dict[str, Any]:
+    async def get_regime_flag(self) -> dict[str, Any]:
         """Get shared regime flag from Redis with local default fallback."""
         default_flag = {
             "pause_grok": False,

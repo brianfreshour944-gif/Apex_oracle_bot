@@ -1,13 +1,14 @@
 """Modern FastAPI server implementation."""
 
 import asyncio
-import uvicorn
-from fastapi import FastAPI, APIRouter, Response
-from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
-from typing import Dict, Any, Optional
-from pydantic import BaseModel
 from datetime import datetime
+from typing import Any
+
+import uvicorn
+from fastapi import APIRouter, FastAPI, Response
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
 
 from src.config import settings
 from src.logging_config import get_logger
@@ -136,7 +137,7 @@ async def liveness_check(response: Response) -> HealthCheckResponse:
 
 
 @api_router.get("/config")
-async def get_config() -> Dict[str, Any]:
+async def get_config() -> dict[str, Any]:
     """Get bot configuration."""
     return {
         "symbols": settings.SYMBOLS,
@@ -199,7 +200,7 @@ async def root_liveness_check(response: Response) -> HealthCheckResponse:
     )
 
 
-_fastapi_server_task: Optional[asyncio.Task] = None
+_fastapi_server_task: asyncio.Task | None = None
 
 
 async def start_fastapi_server_async() -> None:

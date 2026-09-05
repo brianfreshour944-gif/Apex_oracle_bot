@@ -12,11 +12,10 @@ Inference: Single forward pass (< 1ms). Triggers safe mode if P(Live) > threshol
 
 from __future__ import annotations
 
-import json
 import os
 import threading
 import time
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 import numpy as np
 import torch
@@ -86,7 +85,7 @@ class OODDiscriminator(nn.Module):
             state = state.unsqueeze(0)
         return self.net(state)
     
-    def is_ood(self, state: torch.Tensor) -> Tuple[bool, float]:
+    def is_ood(self, state: torch.Tensor) -> tuple[bool, float]:
         """Check if state is out-of-distribution.
         
         Args:
@@ -144,7 +143,7 @@ class OODDiscriminator(nn.Module):
             # Training
             self.train()
             optimizer = optim.Adam(self.parameters(), lr=lr, weight_decay=1e-4)
-            criterion = nn.BCELoss()
+            _criterion = nn.BCELoss()
             
             best_acc = 0.0
             for epoch in range(epochs):
@@ -177,7 +176,7 @@ class OODDiscriminator(nn.Module):
         historical_states: np.ndarray,
         live_states: np.ndarray,
         force: bool = False,
-    ) -> Optional[float]:
+    ) -> float | None:
         """Retrain if enough time has passed or forced."""
         now = time.time()
         if force or (now - self._last_retrain) > OOD_RETRAIN_INTERVAL:
@@ -217,7 +216,7 @@ class OODDiscriminator(nn.Module):
 
 
 # Global instance
-_ood_discriminator: Optional[OODDiscriminator] = None
+_ood_discriminator: OODDiscriminator | None = None
 
 
 def get_ood_discriminator() -> OODDiscriminator:
@@ -241,7 +240,7 @@ class TemporalEMASmoother:
     
     def __init__(self, alpha: float = 0.3):
         self.alpha = alpha
-        self.prev_action: Optional[str] = None
+        self.prev_action: str | None = None
         self.prev_confidence: float = 0.0
         self.prev_size_mult: float = 1.0
     
@@ -250,7 +249,7 @@ class TemporalEMASmoother:
         action: str,
         confidence: float,
         size_mult: float,
-    ) -> Tuple[str, float, float]:
+    ) -> tuple[str, float, float]:
         """Apply EMA smoothing."""
         if self.prev_confidence == 0.0:
             # First call
@@ -285,10 +284,10 @@ class TemporalEMASmoother:
 
 def build_ood_state_vector(
     regime: str,
-    features: Dict[str, Any],
-    brain_votes: Dict[str, str],
-    regimes_list: List[str],
-    brains_list: List[str],
+    features: dict[str, Any],
+    brain_votes: dict[str, str],
+    regimes_list: list[str],
+    brains_list: list[str],
 ) -> np.ndarray:
     """Build state vector for OOD discriminator (matches DecisionTransformer input)."""
     from .decision_transformer import build_state_vector
@@ -299,7 +298,7 @@ def build_ood_state_vector(
 def check_ood_and_override(
     symbol: str,
     price: float,
-    signal: Dict[str, Any],
+    signal: dict[str, Any],
     committee_result: Any,
     ood_discriminator: OODDiscriminator,
 ) -> Any:

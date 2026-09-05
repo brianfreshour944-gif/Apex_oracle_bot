@@ -8,6 +8,7 @@ import math
 
 from .models import BrainVote
 
+
 async def sentinel_brain(symbol: str, price: float, signal: dict) -> BrainVote:
     """Evaluates safety conditions and enforces hard veto if market conditions are dangerous."""
     regime = signal.get("regime", "neutral")

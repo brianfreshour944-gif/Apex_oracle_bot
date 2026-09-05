@@ -2,30 +2,28 @@
 
 import datetime
 import json
-import logging
 import os
-from typing import Dict, Any, Optional, Sequence, List
+from typing import Any, Dict, List
+
 from sqlalchemy import (
+    DateTime,
+    Float,
+    Index,
+    String,
+    Text,
     create_engine,
     event,
-    text,
-    String,
-    Float,
-    DateTime,
-    Integer,
-    Text,
     select,
-    func,
-    Index,
-)
-from sqlalchemy.orm import (
-    sessionmaker,
-    Mapped,
-    mapped_column,
-    DeclarativeBase,
-    Session,
+    text,
 )
 from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.orm import (
+    DeclarativeBase,
+    Mapped,
+    Session,
+    mapped_column,
+    sessionmaker,
+)
 from tenacity import retry, stop_after_attempt, wait_exponential
 
 from src.config import settings
@@ -69,16 +67,16 @@ class DecisionSnapshot(Base):
     causal_reasoning_json: Mapped[str] = mapped_column(Text, default="{}") # {feature: contribution}
     tensor_state_json: Mapped[str] = mapped_column(Text, default="{}") # {brain: tensor_state}
     status: Mapped[str] = mapped_column(String(16), default="open")  # open|closed
-    exit_reason: Mapped[Optional[str]] = mapped_column(String(48), nullable=True, default=None)
+    exit_reason: Mapped[str | None] = mapped_column(String(48), nullable=True, default=None)
     max_favorable_pct: Mapped[float] = mapped_column(Float, default=0.0)
     max_adverse_pct: Mapped[float] = mapped_column(Float, default=0.0)
     realized_pnl: Mapped[float] = mapped_column(Float, default=0.0)
     return_pct: Mapped[float] = mapped_column(Float, default=0.0)
     holding_period_sec: Mapped[float] = mapped_column(Float, default=0.0)
     created_at: Mapped[datetime.datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.datetime.now(datetime.timezone.utc)
+        DateTime(timezone=True), default=lambda: datetime.datetime.now(datetime.UTC)
     )
-    closed_at: Mapped[Optional[datetime.datetime]] = mapped_column(
+    closed_at: Mapped[datetime.datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True, default=None
     )
 
@@ -97,13 +95,13 @@ class ShadowTrade(Base):
     side: Mapped[str] = mapped_column(String(16))  # buy or short
     qty: Mapped[float] = mapped_column(Float, default=0.0)
     entry_price: Mapped[float] = mapped_column(Float, default=0.0)
-    exit_price: Mapped[Optional[float]] = mapped_column(Float, nullable=True, default=None)
+    exit_price: Mapped[float | None] = mapped_column(Float, nullable=True, default=None)
     status: Mapped[str] = mapped_column(String(16), default="open")  # open|closed
     realized_pnl: Mapped[float] = mapped_column(Float, default=0.0)
     created_at: Mapped[datetime.datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.datetime.now(datetime.timezone.utc)
+        DateTime(timezone=True), default=lambda: datetime.datetime.now(datetime.UTC)
     )
-    closed_at: Mapped[Optional[datetime.datetime]] = mapped_column(
+    closed_at: Mapped[datetime.datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True, default=None
     )
 
@@ -120,7 +118,7 @@ class ExperimentRecord(Base):
     total_return: Mapped[float] = mapped_column(Float, default=0.0)
     status: Mapped[str] = mapped_column(String(32), default="Candidate")
     created_at: Mapped[datetime.datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.datetime.now(datetime.timezone.utc)
+        DateTime(timezone=True), default=lambda: datetime.datetime.now(datetime.UTC)
     )
 
 class OrderRecord(Base):
@@ -132,7 +130,7 @@ class OrderRecord(Base):
     )
 
     order_id: Mapped[str] = mapped_column(String(64), primary_key=True)
-    decision_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, default=None)
+    decision_id: Mapped[str | None] = mapped_column(String(64), nullable=True, default=None)
     symbol: Mapped[str] = mapped_column(String(32))
     side: Mapped[str] = mapped_column(String(16))  # buy/sell
     qty: Mapped[float] = mapped_column(Float, default=0.0)
@@ -142,18 +140,18 @@ class OrderRecord(Base):
     status: Mapped[str] = mapped_column(String(32), default="new")
     type: Mapped[str] = mapped_column(String(16), default="market")
     time_in_force: Mapped[str] = mapped_column(String(16), default="ioc")
-    client_order_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, default=None)
+    client_order_id: Mapped[str | None] = mapped_column(String(64), nullable=True, default=None)
     submitted_at: Mapped[datetime.datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.datetime.now(datetime.timezone.utc)
+        DateTime(timezone=True), default=lambda: datetime.datetime.now(datetime.UTC)
     )
-    filled_at: Mapped[Optional[datetime.datetime]] = mapped_column(
+    filled_at: Mapped[datetime.datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True, default=None
     )
 
 def save_experiment_record(
     experiment_id: str,
     generation_type: str,
-    architecture_details: Dict[str, Any],
+    architecture_details: dict[str, Any],
     sharpe: float,
     max_dd: float,
     total_return: float,
@@ -212,7 +210,7 @@ def get_latest_experiment_stats():
 def save_order_record(
     *,
     order_id: str,
-    decision_id: Optional[str] = None,
+    decision_id: str | None = None,
     symbol: str,
     side: str,
     qty: float,
@@ -222,9 +220,9 @@ def save_order_record(
     status: str = "new",
     type: str = "market",
     time_in_force: str = "ioc",
-    client_order_id: Optional[str] = None,
-    submitted_at: Optional[datetime.datetime] = None,
-    filled_at: Optional[datetime.datetime] = None,
+    client_order_id: str | None = None,
+    submitted_at: datetime.datetime | None = None,
+    filled_at: datetime.datetime | None = None,
 ) -> bool:
     """Persist an order record for data integrity verification. Returns True on success."""
     try:
@@ -243,7 +241,7 @@ def save_order_record(
                 type=type,
                 time_in_force=time_in_force,
                 client_order_id=client_order_id,
-                submitted_at=submitted_at or datetime.datetime.now(datetime.timezone.utc),
+                submitted_at=submitted_at or datetime.datetime.now(datetime.UTC),
                 filled_at=filled_at,
             )
             session.merge(order)
@@ -265,7 +263,7 @@ _engine = None
 _tables_ensured = False
 # In-memory cache for get_open_snapshot() results, keyed by symbol.
 # Invalidated when close_decision_snapshot() is called for that symbol.
-_open_snapshot_cache: Dict[str, Optional[Dict[str, Any]]] = {}
+_open_snapshot_cache: dict[str, dict[str, Any] | None] = {}
 
 
 def _ensure_indexes() -> None:
@@ -330,15 +328,15 @@ def get_engine():
             # Fix malformed DATABASE_URL (missing '/' before db name)
             db_url = settings.DATABASE_URL
             if db_url.startswith("postgres://") or db_url.startswith("postgresql://"):
-                from urllib.parse import urlparse, urlunparse
+                from urllib.parse import urlparse
                 parsed = urlparse(db_url)
                 # Check if path is empty but netloc ends with port+dbname (missing slash)
                 if not parsed.path and ':' in parsed.netloc:
                     host_port = parsed.netloc.rsplit(':', 1)
                     if len(host_port) == 2 and host_port[1].isdigit():
                         # Reconstruct with proper path
-                        new_netloc = host_port[0] + ':' + host_port[1]
-                        new_path = '/' + host_port[1]  # This is wrong - need actual db name
+                        _new_netloc = host_port[0] + ':' + host_port[1]
+                        _new_path = '/' + host_port[1]  # This is wrong - need actual db name
                         # Actually, the malformed URL has port and dbname concatenated
                         # e.g. "...:5432database_url" -> need to extract db name
                         # We can't auto-fix this reliably, so log a clear error
@@ -411,7 +409,7 @@ def save_decision_snapshot(
     size_multiplier: float,
     entry_price: float,
     qty: float,
-    brain_votes: Dict[str, str],
+    brain_votes: dict[str, str],
     feature_snapshot_json: str = "{}",
     causal_reasoning_json: str = "{}",
     tensor_state_json: str = "{}"
@@ -444,7 +442,7 @@ def save_decision_snapshot(
 
 
 def save_decision_snapshots_batch(
-    records: List[Dict[str, Any]]
+    records: list[dict[str, Any]]
 ) -> int:
     """Persist multiple decision snapshots in a single DB session.
 
@@ -479,7 +477,7 @@ def save_decision_snapshots_batch(
         return 0
 
 
-def get_closed_decision_snapshots(limit: int = 2000, symbol: Optional[str] = None) -> List[Dict[str, Any]]:
+def get_closed_decision_snapshots(limit: int = 2000, symbol: str | None = None) -> list[dict[str, Any]]:
     """Return closed decision snapshots (real live/paper trade outcomes), most
     recent first, in the exact shape MetaDecisionEnv expects (see
     scripts/evolutionary_ppo_trainer.py's synthetic snapshot construction).
@@ -521,7 +519,7 @@ def get_closed_decision_snapshots(limit: int = 2000, symbol: Optional[str] = Non
         return []
 
 
-def get_open_snapshot(symbol: str) -> Optional[Dict[str, Any]]:
+def get_open_snapshot(symbol: str) -> dict[str, Any] | None:
     """Return the most recent open decision snapshot for a symbol, as a dict.
 
     Results are cached in-memory per symbol for the duration of the
@@ -641,7 +639,7 @@ def close_decision_snapshot(
     realized_pnl: float,
     return_pct: float = 0.0,
     holding_period_sec: float = 0.0,
-    exit_reason: Optional[str] = None,
+    exit_reason: str | None = None,
     max_favorable_pct: float = 0.0,
     max_adverse_pct: float = 0.0,
 ) -> bool:
@@ -674,7 +672,7 @@ def close_decision_snapshot(
                 row.exit_reason = exit_reason
             row.max_favorable_pct = float(max_favorable_pct)
             row.max_adverse_pct = float(max_adverse_pct)
-            row.closed_at = datetime.datetime.now(datetime.timezone.utc)
+            row.closed_at = datetime.datetime.now(datetime.UTC)
             session.commit()
         return True
     except Exception as e:

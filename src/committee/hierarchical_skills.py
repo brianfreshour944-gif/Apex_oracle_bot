@@ -18,9 +18,8 @@ from __future__ import annotations
 import json
 import os
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
-import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -55,7 +54,7 @@ class SkillConfig:
     entropy_coef: float = ENTROPY_COEF
     termination_reg: float = TERMINATION_REG
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             'num_skills': self.num_skills,
             'skill_embed_dim': self.skill_embed_dim,
@@ -67,7 +66,7 @@ class SkillConfig:
         }
 
     @classmethod
-    def from_dict(cls, d: Dict[str, Any]) -> 'SkillConfig':
+    def from_dict(cls, d: dict[str, Any]) -> SkillConfig:
         return cls(**d)
 
     def save(self, path: str) -> None:
@@ -76,8 +75,8 @@ class SkillConfig:
             json.dump(self.to_dict(), f, indent=2)
 
     @classmethod
-    def load(cls, path: str) -> 'SkillConfig':
-        with open(path, 'r') as f:
+    def load(cls, path: str) -> SkillConfig:
+        with open(path) as f:
             return cls.from_dict(json.load(f))
 
 
@@ -121,7 +120,7 @@ class SkillEncoder(nn.Module):
         # Skill-specific bias for action logits
         self.skill_action_bias = nn.Parameter(torch.zeros(num_skills))
         
-    def forward(self, state: torch.Tensor) -> Dict[str, torch.Tensor]:
+    def forward(self, state: torch.Tensor) -> dict[str, torch.Tensor]:
         """
         Args:
             state: [batch, state_dim] or [batch, seq_len, state_dim]
@@ -219,8 +218,8 @@ class SkillLSTMExecutor(nn.Module):
         self,
         state: torch.Tensor,
         skill_embed: torch.Tensor,
-        hidden: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
-    ) -> Tuple[Dict[str, torch.Tensor], Tuple[torch.Tensor, torch.Tensor]]:
+        hidden: tuple[torch.Tensor, torch.Tensor] | None = None,
+    ) -> tuple[dict[str, torch.Tensor], tuple[torch.Tensor, torch.Tensor]]:
         """
         Args:
             state: [batch, seq_len, state_dim] or [batch, state_dim]
@@ -282,7 +281,7 @@ class SkillLSTMExecutor(nn.Module):
         self._hidden_h = torch.zeros(self.num_layers, batch_size, self.hidden_dim, device=device)
         self._hidden_c = torch.zeros(self.num_layers, batch_size, self.hidden_dim, device=device)
     
-    def get_hidden(self) -> Optional[Tuple[torch.Tensor, torch.Tensor]]:
+    def get_hidden(self) -> tuple[torch.Tensor, torch.Tensor] | None:
         if hasattr(self, '_hidden_h') and hasattr(self, '_hidden_c'):
             return (self._hidden_h, self._hidden_c)
         return None
@@ -364,7 +363,7 @@ class HierarchicalSkills(nn.Module):
     def __init__(
         self,
         state_dim: int,
-        config: Optional[SkillConfig] = None,
+        config: SkillConfig | None = None,
     ):
         super().__init__()
         self.config = config or SkillConfig()
@@ -395,15 +394,15 @@ class HierarchicalSkills(nn.Module):
         )
         
         # Track execution state
-        self._current_skill: Optional[torch.Tensor] = None
+        self._current_skill: torch.Tensor | None = None
         self._skill_steps = 0
-        self._executor_hidden: Optional[Tuple[torch.Tensor, torch.Tensor]] = None
+        self._executor_hidden: tuple[torch.Tensor, torch.Tensor] | None = None
     
     def forward(
         self,
         state: torch.Tensor,
-        skill_idx: Optional[torch.Tensor] = None,
-    ) -> Dict[str, Any]:
+        skill_idx: torch.Tensor | None = None,
+    ) -> dict[str, Any]:
         """
         Forward pass for skill selection + execution.
         
@@ -425,7 +424,7 @@ class HierarchicalSkills(nn.Module):
                 skill_idx = skill_idx.squeeze(-1)
         
         # Get skill embedding for selected skill
-        batch_size = state.shape[0]
+        _batch_size = state.shape[0]
         skill_embed = self.skill_encoder.skill_embeddings[skill_idx]  # [B, skill_embed]
         
         # Termination probability
@@ -467,7 +466,7 @@ class HierarchicalSkills(nn.Module):
         self,
         state: torch.Tensor,
         force_new_skill: bool = False,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Execute one step of hierarchical policy.
         
         Handles skill switching based on termination probability.
@@ -557,7 +556,7 @@ class OptionsCriticTrainer:
             target = rewards + gammas * (1 - dones) * next_q_max
         
         q_values = self.model.critic(states)
-        q_selected = q_values.gather(1, skills.unsqueeze(-1)).squeeze(-1)
+        _q_selected = q_values.gather(1, skills.unsqueeze(-1)).squeeze(-1)
         
         return F.mse_loss(q_values, target.unsqueeze(-1).expand_as(q_values))
     
@@ -600,8 +599,8 @@ class OptionsCriticTrainer:
     
     def update(
         self,
-        batch: Dict[str, torch.Tensor],
-    ) -> Dict[str, float]:
+        batch: dict[str, torch.Tensor],
+    ) -> dict[str, float]:
         """Single update step on a batch of transitions."""
         states = batch['states']
         skills = batch['skills']
@@ -661,8 +660,8 @@ class OptionsCriticTrainer:
 
 # ── Global Instance & Helpers ────────────────────────────────────────
 
-_hierarchical_skills: Optional[HierarchicalSkills] = None
-_skills_trainer: Optional[OptionsCriticTrainer] = None
+_hierarchical_skills: HierarchicalSkills | None = None
+_skills_trainer: OptionsCriticTrainer | None = None
 
 
 def get_hierarchical_skills(state_dim: int) -> HierarchicalSkills:
@@ -691,15 +690,14 @@ def reset_hierarchical_skills() -> None:
 async def run_hierarchical_skills(
     symbol: str,
     price: float,
-    signal: Dict[str, Any],
+    signal: dict[str, Any],
     target_return_pct: float = 2.0,
-) -> Optional[Any]:
+) -> Any | None:
     """Run hierarchical skills inference for a trading decision.
     
     Returns CommitteeResult compatible with committee system.
     """
-    from src.committee.decision_transformer import get_decision_transformer, _DT_CONFIG
-    from src.committee.adaptive_meta import BrainScore
+    from src.committee.decision_transformer import _DT_CONFIG
     from src.committee.models import CommitteeResult
     
     model = get_hierarchical_skills(_DT_CONFIG.state_dim if _DT_CONFIG else 64)
@@ -708,7 +706,7 @@ async def run_hierarchical_skills(
     
     try:
         # Build context (reuse DT context building)
-        from src.committee.decision_transformer import _get_recent_decisions, _build_context_sequence
+        from src.committee.decision_transformer import _build_context_sequence, _get_recent_decisions
         
         recent_decisions = _get_recent_decisions()
         states, actions, rtg, timesteps, mask = _build_context_sequence(
@@ -754,7 +752,6 @@ async def run_hierarchical_skills(
         conf_thresh = 0.15 + 0.20 * 0.5
         
         # Temporal EMA
-        from src.committee.decision_transformer import TEMPORAL_EMA_ALPHA
         prev_conf = signal.get("_prev_dt_confidence", 0.0)
         if prev_conf > 0:
             confidence = 0.3 * confidence + 0.7 * prev_conf

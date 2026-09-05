@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import time
-from enum import Enum
-from typing import Any, Awaitable, Callable, Optional, TypeVar
+from collections.abc import Awaitable, Callable
+from enum import StrEnum
+from typing import Any, TypeVar
 
 from src.config import settings
 from src.logging_config import get_logger
@@ -15,14 +16,14 @@ logger = get_logger("circuit_breaker")
 T = TypeVar("T")
 
 
-class CircuitState(str, Enum):
+class CircuitState(StrEnum):
     CLOSED = "closed"
     OPEN = "open"
     HALF_OPEN = "half_open"
 
 
 class CircuitBreaker:
-    def __init__(self, name: str, failure_threshold: Optional[int] = None, open_seconds: Optional[float] = None):
+    def __init__(self, name: str, failure_threshold: int | None = None, open_seconds: float | None = None):
         self.name = name
         self.failure_threshold = failure_threshold or getattr(settings, "CIRCUIT_FAILURE_THRESHOLD", 5)
         self.open_seconds = open_seconds or getattr(settings, "CIRCUIT_OPEN_SECONDS", 60.0)
@@ -34,11 +35,11 @@ class CircuitBreaker:
         self._half_open_successes = 0
 
     @property
-    def state(self):
+    def state(self) -> CircuitState:
         return self._state
 
-    def _maybe_transition(self):
-        if self._state == CircuitState.OPEN and (time.monotonic() - self._opened_at) >= self.open_seconds:
+    def _maybe_transition(self) -> None:
+        if self._state == CircuitState.OPEN and (time.monotonic() - self._opened_at) >= (self.open_seconds or 0.0):
             self._state = CircuitState.HALF_OPEN
             self._half_open_successes = 0
             logger.warning(f"Circuit {self.name!r} -> HALF_OPEN")
@@ -62,7 +63,7 @@ class CircuitBreaker:
                 else:
                     # Existing failure_threshold-based logic for CLOSED state
                     self._failures += 1
-                    if self._state != CircuitState.OPEN and self._failures >= self.failure_threshold:
+                    if self._state in (CircuitState.CLOSED, CircuitState.HALF_OPEN) and self._failures >= (self.failure_threshold or 0):
                         self._state = CircuitState.OPEN
                         self._opened_at = time.monotonic()
                         logger.critical(f"Circuit {self.name!r} TRIPPED OPEN")
@@ -82,7 +83,7 @@ class CircuitBreaker:
                 self._failures = 0
             return result
 
-    def reset(self):
+    def reset(self) -> None:
         self._failures = 0
         self._state = CircuitState.CLOSED
         self._opened_at = 0.0

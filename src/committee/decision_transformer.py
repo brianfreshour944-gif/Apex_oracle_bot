@@ -9,9 +9,8 @@ from __future__ import annotations
 
 import json
 import os
-import math
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 import numpy as np
 import torch
@@ -21,7 +20,8 @@ from torch.nn.utils import spectral_norm
 
 from src.config import settings
 from src.logging_config import get_logger
-from .models import BrainVote, CommitteeResult
+
+from .models import CommitteeResult
 
 logger = get_logger("decision_transformer")
 
@@ -152,14 +152,14 @@ class AdaptiveRTGScheduler:
         horizon_return = daily_return_target * np.sqrt(time_horizon_days)
         return horizon_return / (TARGET_RETURN_SCALE / 100.0)  # Convert to pct then scale
     
-    def get_state(self) -> Dict[str, float]:
+    def get_state(self) -> dict[str, float]:
         return {
             'vol_estimate': self.vol_estimate,
             'initialized': self._initialized,
             'target_annual_sharpe': self.target_annual_sharpe,
         }
     
-    def load_state(self, state: Dict[str, float]) -> None:
+    def load_state(self, state: dict[str, float]) -> None:
         self.vol_estimate = state.get('vol_estimate', 0.02)
         self._initialized = state.get('initialized', False)
 
@@ -291,7 +291,7 @@ def compute_cql_loss(
 
 
 # Global RTG scheduler instance
-_rtg_scheduler: Optional[AdaptiveRTGScheduler] = None
+_rtg_scheduler: AdaptiveRTGScheduler | None = None
 
 
 def get_rtg_scheduler() -> AdaptiveRTGScheduler:
@@ -439,8 +439,8 @@ class DecisionTransformer(nn.Module):
         actions: torch.Tensor,     # (batch, seq_len, act_dim)
         returns_to_go: torch.Tensor,  # (batch, seq_len, 1)
         timesteps: torch.Tensor,   # (batch, seq_len)
-        attention_mask: Optional[torch.Tensor] = None,
-    ) -> Dict[str, torch.Tensor]:
+        attention_mask: torch.Tensor | None = None,
+    ) -> dict[str, torch.Tensor]:
         """Forward pass. Returns dict of predictions for the last timestep."""
         batch_size, seq_len = states.shape[0], states.shape[1]
 
@@ -511,8 +511,8 @@ class DecisionTransformer(nn.Module):
         actions: torch.Tensor,
         returns_to_go: torch.Tensor,
         timesteps: torch.Tensor,
-        attention_mask: Optional[torch.Tensor] = None,
-    ) -> Dict[str, torch.Tensor]:
+        attention_mask: torch.Tensor | None = None,
+    ) -> dict[str, torch.Tensor]:
         """Inference helper: returns predictions for the last timestep only."""
         return self.forward(states, actions, returns_to_go, timesteps, attention_mask)
 
@@ -528,11 +528,11 @@ class DTConfig:
     num_layers: int
     num_heads: int
     dropout: float
-    brains: List[str]
-    regimes: List[str]
-    actions: List[str]
+    brains: list[str]
+    regimes: list[str]
+    actions: list[str]
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "state_dim": self.state_dim,
             "act_dim": self.act_dim,
@@ -547,7 +547,7 @@ class DTConfig:
         }
 
     @classmethod
-    def from_dict(cls, d: Dict[str, Any]) -> "DTConfig":
+    def from_dict(cls, d: dict[str, Any]) -> DTConfig:
         return cls(**d)
 
     def save(self, path: str) -> None:
@@ -556,12 +556,12 @@ class DTConfig:
             json.dump(self.to_dict(), f, indent=2)
 
     @classmethod
-    def load(cls, path: str) -> "DTConfig":
-        with open(path, 'r') as f:
+    def load(cls, path: str) -> DTConfig:
+        with open(path) as f:
             return cls.from_dict(json.load(f))
 
 
-def encode_regime(regime: str, regimes: List[str]) -> np.ndarray:
+def encode_regime(regime: str, regimes: list[str]) -> np.ndarray:
     """One-hot encode regime."""
     vec = np.zeros(len(regimes), dtype=np.float32)
     if regime in regimes:
@@ -569,7 +569,7 @@ def encode_regime(regime: str, regimes: List[str]) -> np.ndarray:
     return vec
 
 
-def encode_brain_votes(brain_votes: Dict[str, str], brains: List[str]) -> np.ndarray:
+def encode_brain_votes(brain_votes: dict[str, str], brains: list[str]) -> np.ndarray:
     """Encode brain votes as [buy=1, sell=-1, hold/other=0] per brain."""
     vec = np.zeros(len(brains), dtype=np.float32)
     for i, brain in enumerate(brains):
@@ -581,7 +581,7 @@ def encode_brain_votes(brain_votes: Dict[str, str], brains: List[str]) -> np.nda
     return vec
 
 
-def encode_features(features: Dict[str, Any]) -> np.ndarray:
+def encode_features(features: dict[str, Any]) -> np.ndarray:
     """Encode market features (RSI, ATR, MACD, on-chain, sentiment)."""
     # Fixed feature order for consistency
     feature_keys = [
@@ -607,10 +607,10 @@ def encode_features(features: Dict[str, Any]) -> np.ndarray:
 
 def build_state_vector(
     regime: str,
-    features: Dict[str, Any],
-    brain_votes: Dict[str, str],
-    regimes: List[str],
-    brains: List[str],
+    features: dict[str, Any],
+    brain_votes: dict[str, str],
+    regimes: list[str],
+    brains: list[str],
 ) -> np.ndarray:
     """Build full state vector: regime_onehot + features + brain_votes."""
     regime_vec = encode_regime(regime, regimes)
@@ -620,12 +620,12 @@ def build_state_vector(
 
 
 def build_action_vector(
-    brain_weights: Dict[str, float],
+    brain_weights: dict[str, float],
     size_mult: float,
     conf_threshold: float,
     action: str,
-    brains: List[str],
-    actions: List[str],
+    brains: list[str],
+    actions: list[str],
 ) -> np.ndarray:
     """Build action vector: brain_weights + size_mult + conf_threshold + action_onehot."""
     weight_vec = np.array([brain_weights.get(b, 0.0) for b in brains], dtype=np.float32)
@@ -642,9 +642,9 @@ def decode_action_vector(
     size_mult: np.ndarray,
     conf_threshold: np.ndarray,
     action_logits: np.ndarray,
-    brains: List[str],
-    actions: List[str],
-) -> Tuple[Dict[str, float], float, float, str]:
+    brains: list[str],
+    actions: list[str],
+) -> tuple[dict[str, float], float, float, str]:
     """Decode model outputs to action components."""
     # Softmax brain weights
     brain_weights = F.softmax(torch.tensor(brain_weights), dim=-1).numpy()
@@ -667,11 +667,11 @@ def decode_action_vector(
 
 # ── Model Management ─────────────────────────────────────────────────
 
-_DT_MODEL: Optional[DecisionTransformer] = None
-_DT_CONFIG: Optional[DTConfig] = None
+_DT_MODEL: DecisionTransformer | None = None
+_DT_CONFIG: DTConfig | None = None
 
 
-def get_decision_transformer() -> Optional[DecisionTransformer]:
+def get_decision_transformer() -> DecisionTransformer | None:
     """Load or return cached Decision Transformer model."""
     global _DT_MODEL, _DT_CONFIG
     if _DT_MODEL is not None:
@@ -716,19 +716,19 @@ def reset_decision_transformer() -> None:
 
 # ── Inference: Committee Integration ──────────────────────────────────
 
-def _get_recent_decisions(limit: int = CONTEXT_LENGTH) -> List[Dict[str, Any]]:
+def _get_recent_decisions(limit: int = CONTEXT_LENGTH) -> list[dict[str, Any]]:
     """Fetch recent closed decision snapshots for context."""
     from src.db import get_closed_decision_snapshots
     return get_closed_decision_snapshots(limit=limit)
 
 
 def _build_context_sequence(
-    decisions: List[Dict[str, Any]],
+    decisions: list[dict[str, Any]],
     target_return: float,
-    regimes: List[str],
-    brains: List[str],
-    actions: List[str],
-) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    regimes: list[str],
+    brains: list[str],
+    actions: list[str],
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     """Build transformer input tensors from historical decisions.
 
     Returns: (states, actions, returns_to_go, timesteps, attention_mask)
@@ -750,7 +750,7 @@ def _build_context_sequence(
 
     # Target return-to-go for the *next* decision (what we want to achieve)
     # For historical decisions, use their realized return as the "target" they achieved
-    for i, dec in enumerate(decisions):
+    for _i, dec in enumerate(decisions):
         regime = dec.get("regime", "default")
         features = dec.get("features", {})
         brain_votes = dec.get("brain_votes", {})
@@ -760,7 +760,7 @@ def _build_context_sequence(
 
         # Action vector from this decision
         brain_weights = {}
-        for brain, vote in brain_votes.items():
+        for brain, _vote in brain_votes.items():
             brain_weights[brain] = 1.0 / len(brain_votes) if brain_votes else 0.0
 
         action_vec = build_action_vector(
@@ -799,7 +799,7 @@ def _build_context_sequence(
     return states_t, actions_t, rtg_t, timesteps_t, attention_mask
 
 
-def _empty_tensors() -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+def _empty_tensors() -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     """Return empty padded tensors for cold start."""
     device = _get_device()
     state_dim = _DT_CONFIG.state_dim if _DT_CONFIG else 64 + 11 + 5  # regime + features + votes
@@ -815,9 +815,9 @@ def _empty_tensors() -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Te
 async def run_decision_transformer(
     symbol: str,
     price: float,
-    signal: Dict[str, Any],
+    signal: dict[str, Any],
     target_return_pct: float = 2.0,  # target return we want to achieve
-) -> Optional[CommitteeResult]:
+) -> CommitteeResult | None:
     """Run Decision Transformer inference for a trading decision.
 
     Returns CommitteeResult compatible with the committee system, or None if model unavailable.
@@ -982,7 +982,7 @@ async def run_decision_transformer(
 def prepare_training_data(
     limit: int = 10000,
     min_seq_len: int = 5,
-) -> Tuple[List[np.ndarray], List[np.ndarray], List[np.ndarray]]:
+) -> tuple[list[np.ndarray], list[np.ndarray], list[np.ndarray]]:
     """Prepare training sequences from closed decision snapshots.
 
     Returns: (states_list, actions_list, returns_to_go_list)
@@ -1059,7 +1059,7 @@ def train_decision_transformer(
     lr: float = 1e-4,
     weight_decay: float = 1e-4,
     target_return_scale: float = TARGET_RETURN_SCALE,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Train Decision Transformer on historical decision snapshots."""
     device = _get_device()
 
@@ -1170,7 +1170,7 @@ def train_decision_transformer(
             # ── Quantile Regression Loss (CVaR-aware) ──
             # Target return for quantile regression (use the realized return from the last timestep)
             # r_t[:, -1, 0] contains the target return for the last timestep
-            target_return = r_t[:, -1, :]  # [batch, 1] - realized return
+            _ = r_t[:, -1, :]  # [batch, 1] - realized return
             
             # Quantile action loss: pinball loss for each quantile
             q_action_logits = preds["q_action_logits"]  # [B, 5, 5]
@@ -1179,7 +1179,7 @@ def train_decision_transformer(
             # and compute pinball loss on the logits for the taken action
             target_action_onehot = F.one_hot(target_action[:, -1], num_classes=len(ACTIONS)).float()  # [B, 5]
             # Get logits for the taken action per quantile
-            q_action_taken = torch.einsum('bqa,bq->bqa', preds["q_action_logits"], target_action_onehot).sum(dim=-1)  # [B, 5]
+            _q_action_taken = torch.einsum('bqa,bq->bqa', preds["q_action_logits"], target_action_onehot).sum(dim=-1)  # [B, 5]
             # Target return per quantile (same target, different quantiles)
             target_return_expanded = r_t[:, -1, :].expand(-1, NUM_QUANTILES)  # [B, 5]
             loss_q_action = quantile_huber_loss(
@@ -1189,7 +1189,7 @@ def train_decision_transformer(
             )
             
             # Quantile size loss
-            q_size = preds["q_size_mult"]  # [B, 5]
+            _q_size = preds["q_size_mult"]  # [B, 5]
             target_size = target_size_mult[:, -1, :].expand(-1, NUM_QUANTILES)  # [B, 5]
             loss_q_size = quantile_huber_loss(
                 preds["q_size_mult"],
@@ -1198,7 +1198,7 @@ def train_decision_transformer(
             )
             
             # Quantile conf threshold loss
-            q_conf = preds["q_conf_threshold"]  # [B, 5]
+            _q_conf = preds["q_conf_threshold"]  # [B, 5]
             target_conf = target_conf_thresh[:, -1, :].expand(-1, NUM_QUANTILES)  # [B, 5]
             loss_q_conf = quantile_huber_loss(
                 preds["q_conf_threshold"],
@@ -1250,7 +1250,6 @@ def train_decision_transformer(
 
 
 if __name__ == "__main__":
-    import sys
     # Quick test
     result = train_decision_transformer(epochs=5, batch_size=8)
     print(json.dumps(result, indent=2))

@@ -4,20 +4,20 @@ Secondary intelligence review layer (Gemini/Groq/Claude).
 Acts as a confidence modifier or soft veto based on qualitative context.
 """
 
-import os
 import json
-import asyncio
-from typing import Dict, Any, Optional
+from typing import Any
+
 import httpx
 
-from .models import BrainVote
 from src.config import settings
 from src.logging_config import get_logger
+
+from .models import BrainVote
 
 logger = get_logger("llm_brain")
 
 
-async def _call_groq_llm(prompt: str, api_key: str, model: str = "llama-3.1-70b-versatile") -> Optional[Dict[str, Any]]:
+async def _call_groq_llm(prompt: str, api_key: str, model: str = "llama-3.1-70b-versatile") -> dict[str, Any] | None:
     """Call Groq LLM API."""
     if not api_key:
         return None
@@ -44,7 +44,7 @@ async def _call_groq_llm(prompt: str, api_key: str, model: str = "llama-3.1-70b-
     return None
 
 
-async def _call_gemini_llm(prompt: str, api_key: str, model: str = "gemini-1.5-flash") -> Optional[Dict[str, Any]]:
+async def _call_gemini_llm(prompt: str, api_key: str, model: str = "gemini-1.5-flash") -> dict[str, Any] | None:
     """Call Gemini LLM API."""
     if not api_key:
         return None
@@ -65,7 +65,7 @@ async def _call_gemini_llm(prompt: str, api_key: str, model: str = "gemini-1.5-f
     return None
 
 
-async def _call_llm(prompt: str) -> Optional[Dict[str, Any]]:
+async def _call_llm(prompt: str) -> dict[str, Any] | None:
     """Try LLM providers in order of preference."""
     # Try Groq first (fast, free tier)
     if settings.GROQ_API_KEY:

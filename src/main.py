@@ -3,8 +3,9 @@
 import asyncio
 import sys
 import traceback
+
 from src.bot import run_trading_bot
-from src.config import settings, redact_database_url
+from src.config import redact_database_url, settings
 from src.logging_config import get_logger
 
 logger = get_logger("main")
@@ -16,7 +17,7 @@ def main() -> None:
         logger.info("=================================")
         logger.info("Configuration:")
         logger.info(f"Database: {redact_database_url(settings.DATABASE_URL)}")
-        logger.info(f"Exchange: Alpaca Crypto")
+        logger.info("Exchange: Alpaca Crypto")
         logger.info("=================================")
 
         # Run the trading bot

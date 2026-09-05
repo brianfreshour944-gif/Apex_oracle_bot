@@ -16,11 +16,10 @@ from __future__ import annotations
 import copy
 import json
 import os
-import random
 import threading
 import time
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any
 
 import numpy as np
 
@@ -38,7 +37,7 @@ PBT_HISTORY_PATH = os.path.join(PBT_DIR, 'pbt_history.jsonl')
 @dataclass
 class WorkerConfig:
     """Configuration for a PBT worker."""
-    worker_id: int
+    worker_id: int = -1
     # Model hyperparameters
     learning_rate: float = 0.1
     min_weight: float = 0.02
@@ -60,11 +59,11 @@ class WorkerConfig:
     dropout: float = 0.1
     uncertainty_penalty: float = 1.0
     
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {k: v for k, v in self.__dict__.items() if not k.startswith('_')}
     
     @classmethod
-    def from_dict(cls, d: Dict[str, Any]) -> 'WorkerConfig':
+    def from_dict(cls, d: dict[str, Any]) -> WorkerConfig:
         return cls(**{k: v for k, v in d.items() if k in cls.__dataclass_fields__})
     
     def mutate(self, mutation_rate: float = 0.2, mutation_strength: float = 0.2) -> None:
@@ -114,9 +113,9 @@ class Worker:
     worker_id: int
     config: WorkerConfig
     # Performance tracking
-    recent_rewards: List[float] = field(default_factory=list)
-    recent_returns: List[float] = field(default_factory=list)
-    recent_sharpes: List[float] = field(default_factory=list)
+    recent_rewards: list[float] = field(default_factory=list)
+    recent_returns: list[float] = field(default_factory=list)
+    recent_sharpes: list[float] = field(default_factory=list)
     # Metadata
     created_at: float = field(default_factory=time.time)
     last_exploit_at: float = 0.0
@@ -136,7 +135,6 @@ class Worker:
         effective_n = min(len(returns), 50)
         return float(sharpe * np.sqrt(effective_n))
     
-    @property
     def is_ready_for_exploit(self, min_samples: int = 20) -> bool:
         return len(self.recent_returns) >= min_samples
     
@@ -165,7 +163,7 @@ class PopulationTrainer:
         min_samples_for_exploit: int = 20,
         mutation_rate: float = 0.2,
         mutation_strength: float = 0.2,
-        state_path: Optional[str] = None,
+        state_path: str | None = None,
     ):
         self.population_size = population_size
         self.exploit_fraction = exploit_fraction
@@ -175,7 +173,7 @@ class PopulationTrainer:
         self.mutation_strength = mutation_strength
         self.state_path = state_path or PBT_STATE_PATH
         
-        self.workers: List[Worker] = []
+        self.workers: list[Worker] = []
         self.timestep = 0
         self._lock = threading.Lock()
         self._initialized = False
@@ -183,7 +181,7 @@ class PopulationTrainer:
         if self.state_path:
             self.load()
     
-    def initialize_population(self, base_config: Optional[WorkerConfig] = None) -> None:
+    def initialize_population(self, base_config: WorkerConfig | None = None) -> None:
         """Create initial population with random hyperparameters."""
         with self._lock:
             if self.workers:
@@ -206,8 +204,8 @@ class PopulationTrainer:
     
     def step(
         self, 
-        worker_rewards: Dict[int, Tuple[float, float]]  # worker_id -> (reward, return)
-    ) -> Optional[Dict[str, Any]]:
+        worker_rewards: dict[int, tuple[float, float]]  # worker_id -> (reward, return)
+    ) -> dict[str, Any] | None:
         """Advance PBT by one step.
         
         Args:
@@ -290,7 +288,7 @@ class PopulationTrainer:
                 return max(ready, key=lambda w: w.performance).config
             return max(self.workers, key=lambda w: w.performance).config
     
-    def get_population_stats(self) -> Dict[str, Any]:
+    def get_population_stats(self) -> dict[str, Any]:
         """Get statistics about the population."""
         with self._lock:
             if not self.workers:
@@ -318,7 +316,7 @@ class PopulationTrainer:
                 ],
             }
     
-    def apply_best_to_live(self, live_components: Dict[str, Any]) -> None:
+    def apply_best_to_live(self, live_components: dict[str, Any]) -> None:
         """Apply best hyperparameters to live trading components."""
         best_config = self.get_best_config()
         
@@ -386,7 +384,7 @@ class PopulationTrainer:
         if not self.state_path or not os.path.exists(self.state_path):
             return
         try:
-            with open(self.state_path, "r") as f:
+            with open(self.state_path) as f:
                 state = json.load(f)
             
             self.population_size = state.get('population_size', self.population_size)
@@ -419,7 +417,7 @@ class PopulationTrainer:
 
 
 # Global instance
-_pbt_trainer: Optional[PopulationTrainer] = None
+_pbt_trainer: PopulationTrainer | None = None
 
 
 def get_pbt_trainer() -> PopulationTrainer:
@@ -443,7 +441,7 @@ def reset_pbt_trainer() -> None:
     _pbt_trainer = None
 
 
-async def run_pbt_cycle(live_components: Dict[str, Any]) -> None:
+async def run_pbt_cycle(live_components: dict[str, Any]) -> None:
     """Run one PBT optimization cycle."""
     try:
         trainer = get_pbt_trainer()

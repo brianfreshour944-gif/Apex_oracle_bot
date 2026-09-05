@@ -1,18 +1,18 @@
   
 """Critical alerting via Telegram with email fallback."""  
   
-from __future__ import annotations  
-  
-import asyncio  
-import smtplib  
-import time  
-from email.message import EmailMessage  
-  
-import httpx  
-  
-from src.config import settings  
-from src.logging_config import get_logger  
-  
+from __future__ import annotations
+
+import asyncio
+import smtplib
+import time
+from email.message import EmailMessage
+
+import httpx
+
+from src.config import settings
+from src.logging_config import get_logger
+
 logger = get_logger("alerts")  
   
 _last_sent = {}

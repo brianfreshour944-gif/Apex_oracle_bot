@@ -7,8 +7,8 @@ holding period. The label is simply the sign of net PnL.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from dataclasses import dataclass
+from typing import Any
 
 from src.logging_config import get_logger
 
@@ -23,13 +23,13 @@ class TrainingExample:
     regime: str
     final_action: str
     confidence: float
-    brain_votes: Dict[str, str]  # brain_name -> action
+    brain_votes: dict[str, str]  # brain_name -> action
     realized_pnl: float
     return_pct: float = 0.0
     holding_period_sec: float = 0.0
-    entry_time: Optional[str] = None
-    exit_time: Optional[str] = None
-    decision_id: Optional[str] = None
+    entry_time: str | None = None
+    exit_time: str | None = None
+    decision_id: str | None = None
 
     @property
     def label(self) -> int:
@@ -40,7 +40,7 @@ class TrainingExample:
             return 0
         return -1
 
-    def to_decision_snapshot(self) -> Dict[str, Any]:
+    def to_decision_snapshot(self) -> dict[str, Any]:
         """Shape expected by ``AdaptiveMetaLearner.update`` as its first argument."""
         return {
             "regime": self.regime,
@@ -48,12 +48,12 @@ class TrainingExample:
             "brain_votes": self.brain_votes,
         }
 
-    def to_realized_outcome(self) -> Dict[str, Any]:
+    def to_realized_outcome(self) -> dict[str, Any]:
         """Shape expected by ``AdaptiveMetaLearner.update`` as its second argument."""
         return {"net_pnl": self.realized_pnl, "return_pct": self.return_pct}
 
 
-def _parse_ts(value: Any) -> Optional[float]:
+def _parse_ts(value: Any) -> float | None:
     """Best-effort ISO/epoch timestamp -> epoch seconds."""
     if value is None:
         return None
@@ -75,7 +75,7 @@ def _holding_period(entry_time: Any, exit_time: Any) -> float:
 
 
 def from_decision_snapshot(
-    snapshot: Dict[str, Any],
+    snapshot: dict[str, Any],
     realized_pnl: float,
     *,
     return_pct: float = 0.0,
@@ -113,7 +113,7 @@ def from_backtest_trade(
     trade: Any,
     *,
     regime: str = "default",
-    brain_votes: Optional[Dict[str, str]] = None,
+    brain_votes: dict[str, str] | None = None,
     confidence: float = 0.0,
 ) -> TrainingExample:
     """Convert a ``backtest.BacktestTrade`` (or similar) into a TrainingExample.
@@ -139,7 +139,7 @@ def from_backtest_trade(
     )
 
 
-def apply_to_learner(learner: Any, examples: List[TrainingExample]) -> int:
+def apply_to_learner(learner: Any, examples: list[TrainingExample]) -> int:
     """Feed a batch of examples into a learner. Returns the count applied."""
     applied = 0
     for ex in examples:

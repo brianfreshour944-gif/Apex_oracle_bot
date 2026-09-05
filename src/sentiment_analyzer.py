@@ -4,12 +4,12 @@ Fetches recent news from Alpaca News API and uses an LLM (Groq/Gemini/OpenAI)
 to extract a structured sentiment signal. Fallbacks to a heuristic stub if no keys are found.
 """
 
-import os
+import asyncio
 import json
 import math
+from typing import Any
+
 import httpx
-import asyncio
-from typing import Dict, Any
 
 from src.config import settings
 from src.logging_config import get_logger
@@ -51,7 +51,7 @@ async def fetch_news_headlines(symbol: str, limit: int = 5) -> str:
         logger.error(f"Error fetching news for {symbol}: {e}")
         return "Failed to fetch news."
 
-def _heuristic_fallback(headlines: str) -> Dict[str, Any]:
+def _heuristic_fallback(headlines: str) -> dict[str, Any]:
     """Basic keyword matching fallback if no LLM API key is present."""
     headlines_lower = headlines.lower()
     
@@ -93,7 +93,7 @@ def _heuristic_fallback(headlines: str) -> Dict[str, Any]:
         "duration_hrs": 24.0
     }
 
-async def call_groq_llm(headlines: str, api_key: str) -> Dict[str, Any]:
+async def call_groq_llm(headlines: str, api_key: str) -> dict[str, Any]:
     """Call Groq API (Llama 3 8B) for fast structured output."""
     prompt = f"""
     Analyze the following recent crypto news headlines:
@@ -129,7 +129,7 @@ async def call_groq_llm(headlines: str, api_key: str) -> Dict[str, Any]:
         logger.error(f"Groq LLM extraction failed: {e}")
         return _heuristic_fallback(headlines)
         
-async def call_gemini_llm(headlines: str, api_key: str) -> Dict[str, Any]:
+async def call_gemini_llm(headlines: str, api_key: str) -> dict[str, Any]:
     """Call Gemini API for structured output."""
     prompt = f"""
     Analyze the following recent crypto news headlines:
@@ -158,7 +158,7 @@ async def call_gemini_llm(headlines: str, api_key: str) -> Dict[str, Any]:
         logger.error(f"Gemini LLM extraction failed: {e}")
         return _heuristic_fallback(headlines)
 
-async def extract_sentiment(symbol: str) -> Dict[str, Any]:
+async def extract_sentiment(symbol: str) -> dict[str, Any]:
     """Main entrypoint: Fetch news, parse sentiment using best available LLM."""
     headlines = await fetch_news_headlines(symbol)
     

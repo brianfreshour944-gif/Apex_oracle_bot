@@ -5,11 +5,12 @@ Evaluates technical quantitative indicators (RSI, ATR, Bollinger, Momentum).
 
 from .models import BrainVote
 
+
 async def quant_brain(symbol: str, price: float, signal: dict) -> BrainVote:
     """Evaluates quantitative indicators."""
     rsi = signal.get("rsi")
     regime = signal.get("regime", "neutral")
-    atr = signal.get("atr")
+    _atr = signal.get("atr")
 
     votes = []
 

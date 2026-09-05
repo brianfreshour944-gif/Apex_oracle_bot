@@ -1,12 +1,12 @@
 """Modern Typer CLI for Apex Oracle Bot."""
 
-import sys
 import asyncio
+
 import httpx
 import typer
 
-from src.logging_config import get_logger
 from src.config import settings
+from src.logging_config import get_logger
 
 logger = get_logger(__name__)
 
@@ -35,7 +35,7 @@ def backtest(
     walk_forward: bool = typer.Option(False, "--walk-forward", help="Run walk-forward optimization split"),
 ) -> None:
     """Run backtest simulation or walk-forward optimization."""
-    from src.backtest import run_backtest, run_walk_forward_optimization, print_backtest_summary
+    from src.backtest import print_backtest_summary, run_backtest, run_walk_forward_optimization
 
     typer.secho(f"📊 Running Backtest Engine for {symbol} ({bars} bars)...", fg=typer.colors.CYAN, bold=True)
 

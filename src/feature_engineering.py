@@ -34,19 +34,18 @@
 # main trading loop, and your orchestration was catching/retrying at INFO
 # level without surfacing the traceback where you were looking.
 
-import pandas as pd
-import numpy as np
-
 import json
 import os
-from typing import Dict, Optional
-from scipy.stats import spearmanr, kendalltau
+
+import numpy as np
+import pandas as pd
+
 
 def get_active_features():
     path = os.path.join(os.path.dirname(__file__), '..', 'data', 'active_features.json')
     if os.path.exists(path):
         try:
-            with open(path, 'r') as f:
+            with open(path) as f:
                 return json.load(f)
         except Exception:
             pass
@@ -140,7 +139,7 @@ def _z_score(series: pd.Series, window: int = 20, fill: float = 0.0) -> pd.Serie
 # â”€â”€ Main feature function â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 # Per-symbol feature cache: maps symbol -> (last_bar_timestamp, feature_df)
-_FEATURE_CACHE: Dict[str, tuple] = {}
+_FEATURE_CACHE: dict[str, tuple] = {}
 
 
 def add_features(df: pd.DataFrame, symbol: str = "") -> pd.DataFrame:
@@ -430,3 +429,108 @@ async def add_multi_timeframe_features(
         logger.error(f"Error in add_multi_timeframe_features for {symbol}: {e}")
         return pd.DataFrame()
 
+
+async def _fetch_multi_timeframe_features(
+    exchange,
+    symbol: str,
+    base_timeframe: str,
+    timeframes: list,
+    limit: int
+) -> pd.DataFrame | None:
+    """
+    Fetch bars for additional timeframes and compute derived features.
+    
+    For each additional timeframe, computes:
+    - Trend direction (EMA slope)
+    - Volatility (Parkinson, Garman-Klass)
+    - Momentum (ROC)
+    - Relative strength vs base timeframe
+    """
+    try:
+        import numpy as np
+        
+        # Remove base timeframe from list to avoid duplicate fetch
+        additional_tfs = [tf for tf in timeframes if tf != base_timeframe]
+        if not additional_tfs:
+            return None
+            
+        multi_tf_data = {}
+        
+        for tf in additional_tfs:
+            try:
+                # Fetch bars for this timeframe
+                tf_limit = min(limit, 200)  # Reasonable limit for higher timeframes
+                bars = await exchange.get_bars(symbol, tf, tf_limit)
+                if bars is None or len(bars) == 0:
+                    continue
+                    
+                if hasattr(bars, 'to_pandas'):
+                    bars_df = bars.to_pandas()
+                else:
+                    bars_df = bars
+                    
+                if len(bars_df) < 20:
+                    continue
+                    
+                # Ensure required columns
+                for col in ["open", "high", "low", "close", "volume"]:
+                    if col not in bars_df.columns:
+                        if col == "volume":
+                            bars_df[col] = 0.0
+                        else:
+                            bars_df[col] = bars_df.get("close", 0.0)
+                
+                # Compute timeframe-specific features
+                close = bars_df["close"]
+                high = bars_df["high"]
+                low = bars_df["low"]
+                volume = bars_df["volume"]
+                
+                # Trend: EMA slope
+                ema20 = close.ewm(span=20, adjust=False).mean()
+                ema50 = close.ewm(span=50, adjust=False).mean()
+                trend_slope = (ema20 - ema20.shift(5)) / ema20.shift(5).replace(0, np.nan)
+                
+                # Volatility
+                safe_low = low.replace(0, np.nan)
+                log_hl = _sanitize(np.log(high / safe_low), fill=0.0).clip(lower=0.0)
+                park_vol = np.sqrt(log_hl ** 2 / (4.0 * np.log(2.0)))
+                
+                safe_open = bars_df["open"].replace(0, np.nan)
+                log_co = _sanitize(np.log(close / safe_open), fill=0.0)
+                gk_vol = np.sqrt((0.5 * log_hl ** 2) - ((2.0 * np.log(2.0) - 1.0) * log_co ** 2))
+                gk_vol = np.sqrt(gk_vol.clip(lower=0))
+                
+                # Momentum
+                roc = close.pct_change(10)
+                
+                # Volume trend
+                vol_ema = volume.ewm(span=20).mean()
+                vol_trend = (volume / vol_ema.replace(0, np.nan)).fillna(1.0)
+                
+                # Store with timeframe suffix
+                tf_suffix = tf.replace("Min", "m").replace("Hour", "h").replace("Day", "d")
+                multi_tf_data[f"trend_slope_{tf_suffix}"] = trend_slope
+                multi_tf_data[f"parkinson_vol_{tf_suffix}"] = park_vol
+                multi_tf_data[f"gk_vol_{tf_suffix}"] = gk_vol
+                multi_tf_data[f"roc_{tf_suffix}"] = roc
+                multi_tf_data[f"vol_trend_{tf_suffix}"] = vol_trend
+                multi_tf_data[f"ema20_dist_{tf_suffix}"] = (close - ema20) / ema20.replace(0, np.nan)
+                multi_tf_data[f"ema50_dist_{tf_suffix}"] = (close - ema50) / ema50.replace(0, np.nan)
+                
+            except Exception as e:
+                import logging
+                logging.getLogger(__name__).warning(f"Failed to process timeframe {tf} for {symbol}: {e}")
+                continue
+        
+        if not multi_tf_data:
+            return None
+            
+        # Create DataFrame with same index as base (will be aligned on join)
+        result_df = pd.DataFrame(multi_tf_data)
+        return result_df
+        
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).warning(f"Multi-timeframe feature fetch failed: {e}")
+        return None

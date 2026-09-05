@@ -2,28 +2,26 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional, Tuple
 import asyncio
-import time
 import datetime
-from tenacity import retry, stop_after_attempt, wait_exponential, wait_fixed, retry_if_exception, RetryCallState
+import time
+from typing import Any, Protocol, runtime_checkable
 
 import polars as pl
-
-from src.config import settings
-from src.logging_config import get_logger
-from src.circuit_breaker import CircuitBreaker
-
-from typing import Protocol, runtime_checkable
-
-# Import alpaca-py components
-from alpaca.trading.client import TradingClient
-from alpaca.trading.requests import MarketOrderRequest, GetOrdersRequest
-from alpaca.trading.enums import OrderSide, TimeInForce, OrderStatus
+from alpaca.common.exceptions import APIError
 from alpaca.data.historical.crypto import CryptoHistoricalDataClient
 from alpaca.data.requests import CryptoBarsRequest, CryptoLatestBarRequest
 from alpaca.data.timeframe import TimeFrame, TimeFrameUnit
-from alpaca.common.exceptions import APIError
+
+# Import alpaca-py components
+from alpaca.trading.client import TradingClient
+from alpaca.trading.enums import OrderSide, OrderStatus, TimeInForce
+from alpaca.trading.requests import GetOrdersRequest, MarketOrderRequest
+from tenacity import RetryCallState, retry, retry_if_exception, stop_after_attempt, wait_exponential
+
+from src.circuit_breaker import CircuitBreaker
+from src.config import settings
+from src.logging_config import get_logger
 
 logger = get_logger(__name__)
 
@@ -104,10 +102,10 @@ class BaseExchange(Protocol):
     """Abstract Base Exchange Protocol for multi-exchange adapters."""
     async def load(self) -> None: ...
     async def close(self) -> None: ...
-    async def get_account(self) -> Dict[str, Any]: ...
+    async def get_account(self) -> dict[str, Any]: ...
     async def get_bars(self, symbol: str, timeframe: str = "1D", limit: int = 100) -> pl.DataFrame: ...
-    async def get_positions(self) -> List[Dict[str, Any]]: ...
-    async def create_order(self, symbol: str, qty: float, side: str, type: str = "market", time_in_force: str = "ioc", client_order_id: Optional[str] = None) -> Dict[str, Any]: ...
+    async def get_positions(self) -> list[dict[str, Any]]: ...
+    async def create_order(self, symbol: str, qty: float, side: str, type: str = "market", time_in_force: str = "ioc", client_order_id: str | None = None) -> dict[str, Any]: ...
 
 
 class AlpacaExchange:
@@ -119,8 +117,8 @@ class AlpacaExchange:
         base_url = settings.ALPACA_BASE_URL or "https://paper-api.alpaca.markets"
         self.paper = "paper" in base_url.lower()
         
-        self.trading_client: Optional[TradingClient] = None
-        self.data_client: Optional[CryptoHistoricalDataClient] = None
+        self.trading_client: TradingClient | None = None
+        self.data_client: CryptoHistoricalDataClient | None = None
         
         self.circuit_breaker = CircuitBreaker("alpaca_exchange")
         # Internal lock for mimicking rate limiter if needed, though SDK handles some
@@ -130,10 +128,10 @@ class AlpacaExchange:
         self._rate_limit_reset = 0.0
         self._rate_limit_hits = 0
         # Bar cache: (symbol, timeframe, limit) -> (timestamp, DataFrame)
-        self._bars_cache: Dict[tuple, Tuple[float, pl.DataFrame]] = {}
+        self._bars_cache: dict[tuple, tuple[float, pl.DataFrame]] = {}
         self._bars_cache_ttl: float = 60.0  # cache bars for 60 seconds
         # Idempotency cache: client_order_id -> (timestamp, order_info)
-        self._order_cache: Dict[str, Tuple[float, Dict[str, Any]]] = {}
+        self._order_cache: dict[str, tuple[float, dict[str, Any]]] = {}
         self._order_cache_ttl: float = 300.0  # cache orders for 5 minutes
 
     async def load(self) -> None:
@@ -160,7 +158,7 @@ class AlpacaExchange:
             if getattr(e, "status_code", None) in (401, 403):
                 raise RuntimeError(f"Alpaca authentication failed: {e}") from e
             raise  # Re-raise other API errors as-is for retry logic
-        except Exception as e:
+        except Exception:
             # Network/transient errors - let caller decide retry/offline mode
             self.trading_client = None
             self.data_client = None
@@ -175,7 +173,7 @@ class AlpacaExchange:
         logger.info("Alpaca client closed")
 
     @retry(retry=retry_if_exception(_retry_on_rate_limit), stop=stop_after_attempt(5), wait=_rate_limit_wait)
-    async def get_account(self) -> Dict[str, Any]:
+    async def get_account(self) -> dict[str, Any]:
         """Get account information (formatted to dict for compatibility)."""
         if not self.trading_client:
             await self.load()
@@ -223,7 +221,7 @@ class AlpacaExchange:
         tf = self._parse_timeframe(timeframe)
         
         # Calculate start time heuristically based on limit
-        now = datetime.datetime.now(datetime.timezone.utc)
+        now = datetime.datetime.now(datetime.UTC)
         if tf.unit == TimeFrameUnit.Minute:
             delta = datetime.timedelta(minutes=tf.amount * limit * 1.5)
         elif tf.unit == TimeFrameUnit.Hour:
@@ -298,7 +296,7 @@ class AlpacaExchange:
         return pl.DataFrame()
 
     @retry(retry=retry_if_exception(_retry_unless_circuit_open), stop=stop_after_attempt(5), wait=wait_exponential(multiplier=1, min=2, max=30))
-    async def get_positions(self) -> List[Dict[str, Any]]:
+    async def get_positions(self) -> list[dict[str, Any]]:
         """Get open positions."""
         if not self.trading_client:
             await self.load()
@@ -317,7 +315,7 @@ class AlpacaExchange:
         return result
 
     @retry(retry=retry_if_exception(_retry_unless_circuit_open), stop=stop_after_attempt(5), wait=wait_exponential(multiplier=1, min=2, max=30))
-    async def get_order(self, order_id: str) -> Dict[str, Any]:
+    async def get_order(self, order_id: str) -> dict[str, Any]:
         """Fetch order details by order ID."""
         if not self.trading_client:
             await self.load()
@@ -336,11 +334,11 @@ class AlpacaExchange:
     @retry(retry=retry_if_exception(_retry_unless_circuit_open), stop=stop_after_attempt(5), wait=wait_exponential(multiplier=1, min=2, max=30))
     async def get_orders(
         self,
-        status: Optional[str] = None,
-        after: Optional[str] = None,
-        until: Optional[str] = None,
+        status: str | None = None,
+        after: str | None = None,
+        until: str | None = None,
         limit: int = 500,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """Fetch order history from Alpaca with optional filters.
         
         Args:
@@ -394,7 +392,7 @@ class AlpacaExchange:
             })
         return results
 
-    async def _find_existing_order_by_client_id(self, client_order_id: str) -> Optional[Dict[str, Any]]:
+    async def _find_existing_order_by_client_id(self, client_order_id: str) -> dict[str, Any] | None:
         """
         Look up an order by client_order_id on the exchange. Used by
         create_order to detect an already-submitted order before letting a
@@ -431,8 +429,8 @@ class AlpacaExchange:
         time_in_force: str = "ioc",
         confirm: bool = True,
         confirm_timeout: float = 10.0,
-        client_order_id: Optional[str] = None,
-    ) -> Dict[str, Any]:
+        client_order_id: str | None = None,
+    ) -> dict[str, Any]:
         """Create a new order using alpaca-py.
 
         If ``client_order_id`` is provided and a matching order was already
@@ -469,12 +467,12 @@ class AlpacaExchange:
         order_side = OrderSide.BUY if side.lower() == "buy" else OrderSide.SELL
         
         # We enforce market orders in this bot, but it can be expanded.
-        order_kwargs = dict(
-            symbol=symbol,
-            qty=qty,
-            side=order_side,
-            time_in_force=TimeInForce.IOC if time_in_force.lower() == "ioc" else TimeInForce.GTC,
-        )
+        order_kwargs = {
+            "symbol": symbol,
+            "qty": qty,
+            "side": order_side,
+            "time_in_force": TimeInForce.IOC if time_in_force.lower() == "ioc" else TimeInForce.GTC,
+        }
         if client_order_id is not None:
             order_kwargs["client_order_id"] = client_order_id
 
