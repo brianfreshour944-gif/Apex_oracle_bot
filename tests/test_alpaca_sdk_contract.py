@@ -29,11 +29,14 @@ def test_order_model_drops_payload_commission():
     order = Order.model_validate(
         {
             "id": "00000000-0000-0000-0000-000000000000",
+            "asset_id": "00000000-0000-0000-0000-000000000001",
             "client_order_id": "cid",
             "symbol": "AAPL",
+            "asset_class": "us_equity",
             "qty": "1",
             "side": "buy",
             "type": "market",
+            "order_type": "market",
             "order_class": "simple",
             "extended_hours": False,
             "time_in_force": "day",

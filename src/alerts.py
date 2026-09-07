@@ -22,6 +22,10 @@ def _in_cooldown(key):
     last = _last_sent.get(key, 0.0)
     if now - last < settings.ALERT_COOLDOWN_SEC:
         return True
+    return False
+
+def _record_sent(key):
+    now = time.monotonic()
     _last_sent[key] = now
     # Prune entries older than 2x the cooldown to prevent
     # unbounded growth of the _last_sent dict.
@@ -29,16 +33,16 @@ def _in_cooldown(key):
     expired = [k for k, v in _last_sent.items() if v < cutoff]
     for k in expired:
         del _last_sent[k]
-    return False
-  
-async def send_alert(message, key="default"):  
-    if _in_cooldown(key):  
-        logger.debug(f"Alert suppressed (cooldown): {message}")  
-        return  
-    logger.critical(f"ALERT: {message}")  
-    await _send_telegram(message)  
-    if not settings.TELEGRAM_BOT_TOKEN:  
-        await _send_email(message)  
+
+async def send_alert(message, key="default"):
+    if _in_cooldown(key):
+        logger.debug(f"Alert suppressed (cooldown): {message}")
+        return
+    logger.critical(f"ALERT: {message}")
+    await _send_telegram(message)
+    if not (settings.TELEGRAM_BOT_TOKEN and settings.TELEGRAM_CHAT_ID):
+        await _send_email(message)
+    _record_sent(key)
   
 async def _send_telegram(message):  
     if not (settings.TELEGRAM_BOT_TOKEN and settings.TELEGRAM_CHAT_ID):  

@@ -309,6 +309,14 @@ class RiskManager:
             # reduce_exposure_to_cap's exposure sum below.
             current_exposure = sum(abs(float(p.get("market_value", 0))) for p in positions)
 
+            if not math.isfinite(current_exposure):
+                logger.critical(f"Non-finite exposure detected: {current_exposure!r}. Refusing to evaluate exposure limit.")
+                return {
+                    "status": "error",
+                    "error": f"non-finite exposure: {current_exposure!r}",
+                    "action": "stand_aside",
+                }
+
             # Check portfolio value cap (dynamic: percentage of account base if configured)
             max_portfolio_abs = self._get_max_portfolio_cap()
             if current_exposure > max_portfolio_abs:
@@ -686,6 +694,9 @@ class RiskManager:
             reserved_total = sum(a for a, _ in self._reserved_exposure)
             max_portfolio_abs = self._get_max_portfolio_cap()
             headroom = max_portfolio_abs - current_exposure - reserved_total
+            if not math.isfinite(current_exposure) or not math.isfinite(reserved_total) or not math.isfinite(headroom):
+                logger.critical(f"Non-finite exposure data: current={current_exposure!r} reserved={reserved_total!r} headroom={headroom!r}. Rejecting reservation.")
+                return 0.0, "corrupted_exposure_data"
             if headroom < min_notional:
                 logger.warning(f"Exposure reservation denied: current=${current_exposure:.2f} reserved=${reserved_total:.2f} headroom=${headroom:.2f} (below min ${min_notional:.2f}) cap=${max_portfolio_abs:.2f}")
                 return 0.0, "max_portfolio_value_would_be_exceeded"

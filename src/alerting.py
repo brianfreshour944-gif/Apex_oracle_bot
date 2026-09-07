@@ -14,6 +14,7 @@ Run: python -m src.alerting
 """
 
 import asyncio
+import math
 import time
 from collections import defaultdict, deque
 from dataclasses import dataclass, field
@@ -107,8 +108,11 @@ class AlertingEngine:
         last = self._last_alert_time.get(alert_key, float("-inf"))
         if now - last < cooldown:
             return True
-        self._last_alert_time[alert_key] = now
         return False
+
+    def _record_sent(self, alert_key: str):
+        now = time.monotonic()
+        self._last_alert_time[alert_key] = now
     
     def _should_escalate(self, category: AlertCategory, details: dict[str, Any]) -> bool:
         """Check if alert should trigger escalation."""
@@ -168,6 +172,7 @@ class AlertingEngine:
         # Send via Telegram/email
         full_message = self._format_alert(alert)
         await send_alert(full_message, key=alert_key)
+        self._record_sent(alert_key)
         
         # Check escalation
         if self._should_escalate(category, details or {}):
@@ -349,6 +354,8 @@ class AlertingEngine:
 
         max_exposure = self.risk_manager._get_max_portfolio_cap()
         current_exposure = status.get("current_exposure", 0.0)
+        if not math.isfinite(current_exposure):
+            current_exposure = 0.0
         if max_exposure > 0:
             exposure_pct = current_exposure / max_exposure
             if exposure_pct >= 0.8:
@@ -356,6 +363,8 @@ class AlertingEngine:
 
         max_drawdown = settings.MAX_DRAWDOWN_STOP  # negative, e.g. -10.0
         drawdown_pct = status.get("drawdown_pct", 0.0)  # negative or 0
+        if not math.isfinite(drawdown_pct):
+            drawdown_pct = 0.0
         if max_drawdown < 0:
             pct_of_max = drawdown_pct / max_drawdown  # both negative -> positive ratio
             if pct_of_max >= 0.5:

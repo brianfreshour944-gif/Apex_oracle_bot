@@ -107,6 +107,14 @@ async def _record_committee_outcome(
     interfere with trading. risk.py stays authoritative for the exit itself.
     """
     try:
+        if not math.isfinite(exit_price) or exit_price <= 0.0:
+            logger.warning(
+                f"_record_committee_outcome: invalid exit_price {exit_price!r} for "
+                f"{symbol} — skipping outcome recording to avoid corrupting "
+                f"adaptive learner training data."
+            )
+            return
+
         from datetime import datetime
 
         from src.committee.committee import get_meta_learner
@@ -459,6 +467,19 @@ class BotState:
         self.cooldowns.clear()
         self.position_adds.clear()
         self._symbol_locks.clear()
+        self._background_tasks.clear()
+        self._shutdown_requested = False
+        self._regime_flag_cache.clear()
+        self._regime_flag_cache_mtime = -1.0
+        self._banned_symbols_cache.clear()
+        self._banned_symbols_cache_mtime = -1.0
+        self._transformer_online_updates = 0
+        self._transformer_online_lr_schedule = "cosine"
+        self._transformer_online_lr_base = 1e-5
+        self._transformer_online_lr_min = 1e-6
+        self._transformer_online_warmup_steps = 100
+        self._transformer_online_total_steps = 10000
+        self._transformer_online_lock = asyncio.Lock()
 
     def cleanup_stale_state(self, max_age_seconds: float = 3600) -> Dict[str, int]:
         """Clean up stale state entries to prevent memory leaks.
@@ -511,20 +532,6 @@ class BotState:
             logger.debug(f"Cleaned stale state: {cleaned}")
         
         return cleaned
-        self._background_tasks.clear()
-        self._shutdown_requested = False
-        self._regime_flag_cache.clear()
-        self._regime_flag_cache_mtime = -1.0
-        self._banned_symbols_cache.clear()
-        self._banned_symbols_cache_mtime = -1.0
-        # Reset transformer online learning state
-        self._transformer_online_updates = 0
-        self._transformer_online_lr_schedule = "cosine"
-        self._transformer_online_lr_base = 1e-5
-        self._transformer_online_lr_min = 1e-6
-        self._transformer_online_warmup_steps = 100
-        self._transformer_online_total_steps = 10000
-        self._transformer_online_lock = asyncio.Lock()
 
 
 # Global state instance (single instance for the process)
