@@ -569,6 +569,9 @@ async def flush_crash_recovery_state(force: bool = False) -> None:
             "trailing_peaks": dict(getattr(_state.strategy, "_trailing_peaks", {}) or {}) if _state.strategy else {},
             "cooldowns": dict(_state.cooldowns),
             "position_adds": dict(_state.position_adds),
+            "risk_peak_equity": _state.risk_manager.peak_equity if _state.risk_manager else 0.0,
+            "risk_daily_pnl": _state.risk_manager.daily_pnl if _state.risk_manager else 0.0,
+            "risk_start_of_day_equity": _state.risk_manager.start_of_day_equity if _state.risk_manager else 0.0,
         }
         if _state.risk_manager is not None:
             _state.risk_manager.consume_peaks_dirty()
@@ -643,6 +646,25 @@ async def reconcile_open_snapshots(exchange: AlpacaExchange) -> None:
                 f"decision snapshot (opened before/outside this process). It will be "
                 f"managed normally, but its committee votes were not recorded."
             )
+
+    # Check for stale open orders from a crashed cycle. If the bot submitted an
+    # order to the exchange but crashed before recording the response, the order
+    # may still be open on the exchange. We cannot cancel it safely (partial
+    # fills would leave the bot with an untracked position), so we log a warning
+    # so the operator can review.
+    try:
+        open_orders = await exchange.get_orders(status="new", limit=100)
+        if open_orders:
+            for order in open_orders:
+                o_sym = order.get("symbol", "?").replace("/", "")
+                logger.warning(
+                    f"[RECONCILE] Stale open order {order.get('id', '?')} for {o_sym} "
+                    f"(status={order.get('status')}, qty={order.get('qty')}, "
+                    f"filled_qty={order.get('filled_qty')}) — submitted before crash. "
+                    f"Manual review recommended: may cause position size to exceed intended exposure."
+                )
+    except Exception as e:
+        logger.debug(f"[RECONCILE] Could not fetch open orders (non-fatal): {e}")
 
 
 def get_banned_symbols():
@@ -1926,6 +1948,40 @@ async def run_trading_bot() -> None:
         _state.strategy = TradingStrategy(_state.ex, cache_ttl=settings.LOOP_INTERVAL_SEC * 1.5)
         _state.risk_manager = RiskManager(_state.ex)
         logger.info("Trading strategy and risk manager initialized")
+
+        # Restore crash-recovery state (peak_prices, cooldowns, position_adds,
+        # peak_equity) from the last successful flush so trailing stops and
+        # killswitch logic don't start from scratch after a crash.
+        try:
+            from src.persistent_state import load_persistent_state
+            recovery = load_persistent_state()
+            if recovery and _state.risk_manager is not None:
+                # Restore peak_prices
+                if "peak_prices" in recovery:
+                    _state.risk_manager.peak_prices.update(recovery["peak_prices"])
+                # Restore trailing peaks on strategy
+                if "trailing_peaks" in recovery and _state.strategy is not None:
+                    _state.strategy._trailing_peaks.update(recovery["trailing_peaks"])
+                # Restore cooldowns
+                if "cooldowns" in recovery:
+                    _state.cooldowns.update(recovery["cooldowns"])
+                # Restore position adds
+                if "position_adds" in recovery:
+                    _state.position_adds.update(recovery["position_adds"])
+                # Restore peak equity — prevents drawdown reset to 0% after crash
+                # (without this, a 5% drop + crash + restart = killswitch thinks
+                #  equity is at peak and won't trip at 10% drawdown)
+                if "risk_peak_equity" in recovery and recovery["risk_peak_equity"] > 0:
+                    _state.risk_manager.peak_equity = recovery["risk_peak_equity"]
+                if "risk_daily_pnl" in recovery:
+                    _state.risk_manager.daily_pnl = recovery["risk_daily_pnl"]
+                if "risk_start_of_day_equity" in recovery and recovery["risk_start_of_day_equity"] > 0:
+                    _state.risk_manager.start_of_day_equity = recovery["risk_start_of_day_equity"]
+                logger.info(f"Restored crash-recovery state: peak_equity={_state.risk_manager.peak_equity:.2f}, "
+                           f"{len(recovery.get('peak_prices', {}))} peak prices, "
+                           f"{len(recovery.get('cooldowns', {}))} cooldowns restored")
+        except Exception as restore_err:
+            logger.warning(f"Could not restore crash-recovery state (non-fatal): {restore_err}")
 
         # Startup reconciliation (audit F4): close ghost 'open' decision
         # snapshots whose positions no longer exist on the exchange, and warn
