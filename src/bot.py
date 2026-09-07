@@ -581,6 +581,32 @@ async def flush_crash_recovery_state(force: bool = False) -> None:
         logger.debug(f"Crash-recovery state flush skipped (non-fatal): {e}")
 
 
+async def _close_orphan_position(exchange: AlpacaExchange, symbol_clean: str, positions: list[dict[str, Any]]) -> None:
+    """Close an exchange position the bot has no DB snapshot for.
+
+    Called during startup reconciliation to free position slots consumed by
+    crash-gap orphan positions. Locates the position, flips the qty sign, and
+    submits a market order to flatten it.
+    """
+    try:
+        position = next((p for p in positions if p["symbol"].replace("/", "") == symbol_clean), None)
+        if position is None:
+            return
+
+        qty = abs(float(position.get("qty", 0)))
+        if qty <= 0:
+            return
+
+        side = "sell" if float(position.get("qty", 0)) > 0 else "buy"
+        raw_symbol = position["symbol"]
+        logger.warning(f"[RECONCILE] Closing orphan {raw_symbol} position: qty={qty}, side={side}")
+
+        await exchange.create_order(raw_symbol, qty=qty, side=side, bypass_circuit_breaker=True)
+        logger.warning(f"[RECONCILE] Orphan position {symbol_clean} closed (qty={qty})")
+    except Exception as e:
+        logger.error(f"[RECONCILE] Failed to close orphan position {symbol_clean}: {e}")
+
+
 async def reconcile_open_snapshots(exchange: AlpacaExchange) -> None:
     """Startup reconciliation pass (audit F4).
 
@@ -597,14 +623,31 @@ async def reconcile_open_snapshots(exchange: AlpacaExchange) -> None:
     """
     from src.db import get_all_open_snapshots, close_decision_snapshot
     open_snaps = await asyncio.to_thread(get_all_open_snapshots)
-    if not open_snaps:
-        return
+
     try:
         positions = await exchange.get_positions()
     except Exception as e:
         logger.warning(f"Snapshot reconciliation skipped: could not fetch positions: {e}")
+        if not open_snaps:
+            return
+        positions = []
+
+    held_symbols = {p["symbol"].replace("/", "") for p in positions} if positions else set()
+
+    # Inverse check: exchange positions the bot has no snapshot for.
+    # This handles crash-gap orphan positions that block the position slot limit.
+    snap_symbols = {s["symbol"].replace("/", "") for s in open_snaps} if open_snaps else set()
+    for held in sorted(held_symbols):
+        if held not in snap_symbols:
+            logger.critical(
+                f"[RECONCILE] Exchange reports an open position in {held} with no open "
+                f"decision snapshot (opened before/outside this process). Attempting to "
+                f"close to free position slot."
+            )
+            await _close_orphan_position(exchange, held, positions)
+
+    if not open_snaps:
         return
-    held_symbols = {p["symbol"].replace("/", "") for p in positions}
 
     for snap in open_snaps:
         sym = snap["symbol"]
@@ -636,16 +679,6 @@ async def reconcile_open_snapshots(exchange: AlpacaExchange) -> None:
             f"[RECONCILE] Closed ghost snapshot {snap['decision_id']} for {sym} "
             f"(no exchange position; exit_price={exit_price}, pnl={pnl:.2f}, closed={closed})"
         )
-
-    # Inverse check: exchange positions the bot has no snapshot for.
-    snap_symbols = {s["symbol"].replace("/", "") for s in open_snaps}
-    for held in held_symbols:
-        if held not in snap_symbols:
-            logger.warning(
-                f"[RECONCILE] Exchange reports an open position in {held} with no open "
-                f"decision snapshot (opened before/outside this process). It will be "
-                f"managed normally, but its committee votes were not recorded."
-            )
 
     # Check for stale open orders from a crashed cycle. If the bot submitted an
     # order to the exchange but crashed before recording the response, the order
