@@ -113,6 +113,13 @@ class AlertingEngine:
     def _record_sent(self, alert_key: str):
         now = time.monotonic()
         self._last_alert_time[alert_key] = now
+        # Prune _last_alert_time entries older than 2x the max cooldown
+        # (default max is 600s for MODEL) to prevent unbounded growth.
+        max_cooldown = max(self._default_cooldowns.values()) if self._default_cooldowns else 600.0
+        cutoff = now - max_cooldown * 2
+        expired = [k for k, v in self._last_alert_time.items() if v < cutoff]
+        for k in expired:
+            del self._last_alert_time[k]
     
     def _should_escalate(self, category: AlertCategory, details: dict[str, Any]) -> bool:
         """Check if alert should trigger escalation."""

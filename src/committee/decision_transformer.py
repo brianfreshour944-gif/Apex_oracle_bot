@@ -699,6 +699,12 @@ def get_decision_transformer() -> DecisionTransformer | None:
         _DT_MODEL.load_state_dict(state_dict)
         _DT_MODEL.eval()
 
+        try:
+            _DT_MODEL = torch.compile(_DT_MODEL, mode="reduce-overhead")
+            logger.info("Decision Transformer compiled with torch.compile")
+        except Exception as compile_err:
+            logger.warning(f"torch.compile not available (non-fatal): {compile_err}")
+
         logger.info("Decision Transformer loaded successfully.")
         return _DT_MODEL
     except Exception as e:

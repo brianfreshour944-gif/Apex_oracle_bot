@@ -290,6 +290,37 @@ def _ensure_tables() -> None:
         _ensure_indexes()
         _tables_ensured = True
 
+def _recovery_from_corruption() -> None:
+    """Move a corrupt SQLite database aside so it can be rebuilt cleanly.
+
+    Handles bot.db, bot.db-shm, and bot.db-wal. The corrupt files are
+    renamed to .corrupt.bak so the old data is recoverable for forensics
+    while a fresh database is created on the next create_all().
+    """
+    db_url = settings.DATABASE_URL
+    if not db_url.startswith("sqlite:///"):
+        return
+    db_path = db_url[len("sqlite:///"):]
+    if not db_path or db_path == ":memory:":
+        return
+
+    suffixes = [db_path, db_path + "-shm", db_path + "-wal", db_path + "-journal"]
+    backup_dir = os.path.join(os.path.dirname(db_path), "corrupt_backups")
+    os.makedirs(backup_dir, exist_ok=True)
+
+    for suffix in suffixes:
+        if os.path.exists(suffix):
+            backup_name = os.path.join(backup_dir, f"bot_corrupt_{int(time.time())}_{os.path.basename(suffix)}")
+            try:
+                os.rename(suffix, backup_name)
+                logger.info(f"Moved corrupt database file {suffix} -> {backup_name}")
+            except OSError as e:
+                logger.warning(f"Could not move corrupt file {suffix}: {e}")
+                try:
+                    os.remove(suffix)
+                except OSError:
+                    pass
+
 def get_engine():
     """Get the database engine, creating it if needed."""
     global _engine
@@ -366,12 +397,29 @@ def get_session_factory():
     reraise=True
 )
 def init_db() -> None:
-    """Initialize database connection with exponential backoff retries."""
+    """Initialize database connection with exponential backoff retries.
+
+    On first connect (SQLite only), also runs PRAGMA integrity_check to
+    detect corruption from an unclean shutdown (OOM kill, power loss).
+    If the database is corrupt, it is moved aside so create_all() can
+    rebuild a clean schema rather than crash-looping.
+    """
     global _tables_ensured
     try:
         # Test the connection
         with get_engine().connect() as conn:
             conn.execute(text("SELECT 1"))
+            
+            # SQLite integrity check — detect corruption from unclean shutdown
+            if get_engine().url.drivername == "sqlite":
+                try:
+                    result = conn.execute(text("PRAGMA integrity_check")).fetchone()
+                    if result and result[0] != "ok":
+                        logger.warning(f"SQLite integrity check failed: {result[0]}. "
+                                       f"Database may be corrupt — moving aside and rebuilding.")
+                        _recovery_from_corruption()
+                except SQLAlchemyError as pragma_err:
+                    logger.warning(f"Could not run integrity_check: {pragma_err}")
         # Create ORM tables if they do not exist (safe/idempotent).
         Base.metadata.create_all(get_engine())
         _tables_ensured = True

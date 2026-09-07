@@ -556,8 +556,13 @@ from src.persistent_state import PersistentBotState, save_persistent_state
 _crash_state_writer = PersistentBotState(flush_interval=5.0)
 
 
-def flush_crash_recovery_state(force: bool = False) -> None:
-    """Persist peak_prices / cooldowns / position_adds if (or when) dirty."""
+async def flush_crash_recovery_state(force: bool = False) -> None:
+    """Persist peak_prices / cooldowns / position_adds if (or when) dirty.
+
+    The snapshot dict construction is pure in-memory dict copy (microseconds),
+    but the actual JSON write is offloaded to a worker thread so the event
+    loop is never blocked by disk I/O.
+    """
     try:
         snapshot = {
             "peak_prices": _state.risk_manager.persist_peak_prices() if _state.risk_manager else {},
@@ -567,10 +572,8 @@ def flush_crash_recovery_state(force: bool = False) -> None:
         }
         if _state.risk_manager is not None:
             _state.risk_manager.consume_peaks_dirty()
-        if force:
-            _crash_state_writer.flush(snapshot)
-        else:
-            _crash_state_writer.flush_if_due(snapshot)
+        if force or _crash_state_writer._dirty or (time.monotonic() - _crash_state_writer._last_flush >= _crash_state_writer.flush_interval):
+            await asyncio.to_thread(_crash_state_writer.flush, snapshot)
     except Exception as e:
         logger.debug(f"Crash-recovery state flush skipped (non-fatal): {e}")
 
@@ -1686,7 +1689,7 @@ async def run_periodic_ood_retrain() -> None:
                 continue
             
             # Get historical states from closed decisions
-            closed_decisions = get_closed_decision_snapshots(limit=5000)
+            closed_decisions = await asyncio.to_thread(get_closed_decision_snapshots, limit=5000)
             if len(closed_decisions) < 100:
                 logger.warning("Not enough historical data for OOD retraining")
                 await asyncio.sleep(3600)
@@ -2152,10 +2155,7 @@ async def run_trading_bot() -> None:
                 for k in expired:
                     del _state.cooldowns[k]
 
-                # Persist crash-recovery state (peak_prices/cooldowns/position_adds)
-                # once per cycle, debounced to 5s so this is at most one tiny
-                # atomic JSON write per interval.
-                flush_crash_recovery_state()
+                await flush_crash_recovery_state()
 
                 # --- HARD KILLSWITCH CHECK (every cycle) ---
                 # Block all new entries and flatten positions when the daily-loss
@@ -2253,7 +2253,7 @@ async def run_trading_bot() -> None:
         # Force-persist crash-recovery state on graceful shutdown too, so even
         # a controlled restart keeps trailing peaks/cooldowns/scale-in counts.
         try:
-            flush_crash_recovery_state(force=True)
+            await flush_crash_recovery_state(force=True)
         except Exception:
             pass
         if _state.ex:

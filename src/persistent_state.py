@@ -45,6 +45,22 @@ def load_persistent_state() -> Dict[str, Any]:
         with open(path, "r", encoding="utf-8") as f:
             data = json.load(f)
         return data if isinstance(data, dict) else {}
+    except json.JSONDecodeError as e:
+        logger.warning(f"Persistent state file {path} is corrupted (JSON decode error: {e}). "
+                       f"Renaming to .corrupt for diagnostics and starting fresh.")
+        try:
+            corrupt_path = path + ".corrupt"
+            if os.path.exists(corrupt_path):
+                os.remove(corrupt_path)
+            os.rename(path, corrupt_path)
+            logger.warning(f"Corrupted state saved to {corrupt_path} for inspection.")
+        except OSError as rename_err:
+            logger.warning(f"Could not rename corrupted state file: {rename_err}")
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+        return {}
     except Exception as e:
         logger.warning(f"Could not load persistent bot state from {path} (starting fresh): {e}")
         return {}
