@@ -1059,6 +1059,25 @@ async def process_signal_for_symbol(symbol: str, current_price: float, risk_mana
                 position_size = position_size * committee_mult
                 position_size = round(position_size, 6)
                 logger.info(f"📊 Applied Committee Sizing Multiplier ({committee_mult:.2f}x based on score {committee_result.score:.2f}) → Final Qty: {position_size}")
+
+                # Fix #1: Cap sell qty to available position (prevents 403 insufficient balance loop)
+                if signal["action"] == "sell":
+                    sell_pos = None
+                    for p in positions:
+                        if p["symbol"].replace("/", "") == symbol.replace("/", ""):
+                            sell_pos = p
+                            break
+                    if sell_pos is None or float(sell_pos.get("qty", 0)) <= 0:
+                        logger.warning(f"[{symbol}] Sell vetoed: no position to sell")
+                        return
+                    available = float(sell_pos["qty"])
+                    # leave tiny dust, use 0.99 cap to avoid rounding rejection
+                    max_sell = round(available * 0.999, 6)
+                    if position_size > max_sell:
+                        logger.warning(f"[{symbol}] Sell qty capped {position_size} -> {max_sell} (available {available})")
+                        position_size = max_sell
+                    if position_size <= 0:
+                        return
     
                 # Atomically check and reserve exposure to prevent a race condition
                 # where concurrently-evaluated symbols could each pass an individual
@@ -1107,17 +1126,20 @@ async def process_signal_for_symbol(symbol: str, current_price: float, risk_mana
                         # Gate 1: Max adds cap
                         if add_info["count"] >= MAX_POSITION_ADDS:
                             logger.info(f"[{symbol}] Scale-in vetoed: max adds ({MAX_POSITION_ADDS}) reached (current: {add_info['count']})")
+                            risk_manager.release_reserved_exposure(approved_notional)
                             return
                             
                         # Gate 2: Minimum time since last add
                         if now - add_info["last_add_time"] < POSITION_ADD_MIN_SECONDS:
                             logger.info(f"[{symbol}] Scale-in vetoed: minimum time between adds not met ({now - add_info['last_add_time']:.0f}s < {POSITION_ADD_MIN_SECONDS}s)")
+                            risk_manager.release_reserved_exposure(approved_notional)
                             return
                             
                         # Gate 3: Minimum score improvement
                         committee_score = committee_result.score
                         if committee_score - add_info["last_add_score"] < POSITION_ADD_MIN_SCORE_INCREASE:
                             logger.info(f"[{symbol}] Scale-in vetoed: insufficient score improvement ({committee_score:.3f} - {add_info['last_add_score']:.3f} < {POSITION_ADD_MIN_SCORE_INCREASE})")
+                            risk_manager.release_reserved_exposure(approved_notional)
                             return
                             
                         # All gates passed - apply size decay

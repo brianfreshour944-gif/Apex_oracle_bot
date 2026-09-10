@@ -415,11 +415,14 @@ class AlpacaExchange:
         to its original behavior of re-raising and letting @retry resubmit.
         """
         try:
-            order = await self.circuit_breaker.call(
-                asyncio.to_thread, self.trading_client.get_order_by_client_id, client_order_id
-            )
+            # Fix #3: 404 "order not found" is expected before order exists - don't count toward circuit breaker
+            order = await asyncio.to_thread(self.trading_client.get_order_by_client_id, client_order_id)
         except Exception as e:
-            logger.warning(f"Lookup by client_order_id={client_order_id!r} failed: {e}")
+            # 404 means order hasn't landed yet, not an exchange outage
+            if "404" in str(e) or "not found" in str(e).lower():
+                logger.debug(f"Lookup by client_order_id={client_order_id!r}: not found yet (expected)")
+            else:
+                logger.warning(f"Lookup by client_order_id={client_order_id!r} failed: {e}")
             return None
         return {
             "id": str(order.id),

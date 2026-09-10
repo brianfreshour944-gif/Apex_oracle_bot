@@ -423,7 +423,7 @@ async def run_committee(symbol: str, price: float, signal: dict[str, Any]) -> Co
     # will learn whether these trades actually work.
     effective_threshold = symbol_threshold
     if regime in ("sideways", "low_volatility", "neutral"):
-        effective_threshold = max(0.10, symbol_threshold * 0.5)
+        effective_threshold = max(0.15, symbol_threshold * 0.75)
     
     if not scores and not adaptive_used:
         return CommitteeResult(
