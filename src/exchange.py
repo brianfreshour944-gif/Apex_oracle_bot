@@ -16,7 +16,7 @@ from alpaca.data.timeframe import TimeFrame, TimeFrameUnit
 # Import alpaca-py components
 from alpaca.trading.client import TradingClient
 from alpaca.trading.enums import OrderSide, OrderStatus, TimeInForce
-from alpaca.trading.requests import GetOrdersRequest, MarketOrderRequest
+from alpaca.trading.requests import GetOrdersRequest, MarketOrderRequest, LimitOrderRequest, LimitOrderRequest
 from tenacity import RetryCallState, retry, retry_if_exception, stop_after_attempt, wait_exponential
 
 from src.circuit_breaker import CircuitBreaker
@@ -103,9 +103,10 @@ class BaseExchange(Protocol):
     async def load(self) -> None: ...
     async def close(self) -> None: ...
     async def get_account(self) -> dict[str, Any]: ...
-    async def get_bars(self, symbol: str, timeframe: str = "1D", limit: int = 100) -> pl.DataFrame: ...
+    async def get_bars(self, symbol: str, timeframe: str = "1D", limit: int = 100, end: datetime.datetime | None = None) -> pl.DataFrame: ...
     async def get_positions(self, bypass_circuit_breaker: bool = False) -> list[dict[str, Any]]: ...
     async def create_order(self, symbol: str, qty: float, side: str, type: str = "market", time_in_force: str = "ioc", client_order_id: str | None = None, bypass_circuit_breaker: bool = False) -> dict[str, Any]: ...
+    def invalidate_bars_cache(self, symbol: str | None = None, timeframe: str | None = None) -> int: ...
 
 
 class AlpacaExchange:
@@ -127,9 +128,10 @@ class AlpacaExchange:
         self._rate_limit_remaining = 200
         self._rate_limit_reset = 0.0
         self._rate_limit_hits = 0
-        # Bar cache: (symbol, timeframe, limit) -> (timestamp, DataFrame)
-        self._bars_cache: dict[tuple, tuple[float, pl.DataFrame]] = {}
-        self._bars_cache_ttl: float = 60.0  # cache bars for 60 seconds
+        # Bar cache: (symbol, timeframe, limit) -> (cached_at, latest_bar_timestamp, DataFrame)
+        # latest_bar_timestamp is the timestamp of the most recent bar in the cached data
+        self._bars_cache: dict[tuple, tuple[float, str | None, pl.DataFrame]] = {}
+        self._bars_cache_ttl: float = 15.0  # cache bars for 15 seconds (was 60s - reduced to prevent stale signals)
         # Idempotency cache: client_order_id -> (timestamp, order_info)
         self._order_cache: dict[str, tuple[float, dict[str, Any]]] = {}
         self._order_cache_ttl: float = 300.0  # cache orders for 5 minutes
@@ -205,8 +207,18 @@ class AlpacaExchange:
         return TimeFrame.Day
 
     @retry(retry=retry_if_exception(_retry_on_rate_limit), stop=stop_after_attempt(5), wait=_rate_limit_wait)
-    async def get_bars(self, symbol: str, timeframe: str = "1D", limit: int = 100) -> pl.DataFrame:
-        """Get crypto market data using alpaca-py and convert to Polars."""
+    async def get_bars(self, symbol: str, timeframe: str = "1D", limit: int = 100, end: datetime.datetime | None = None) -> pl.DataFrame:
+        """Get crypto market data using alpaca-py and convert to Polars.
+        
+        Args:
+            symbol: Trading symbol (e.g., "BTC/USD")
+            timeframe: Bar timeframe (e.g., "1Min", "1Hour", "1Day")
+            limit: Maximum number of bars to return
+            end: End timestamp for strict point-in-time query. If provided, bars 
+                 will only include data up to this timestamp. If None, uses current time.
+                 Use this to prevent look-ahead bias in backtesting or when you need
+                 bars as of a specific moment.
+        """
         if not self.data_client:
             await self.load()
 
@@ -214,14 +226,31 @@ class AlpacaExchange:
         now = time.time()
         cached = self._bars_cache.get(cache_key)
         if cached is not None:
-            cached_ts, cached_df = cached
+            cached_ts, cached_latest_bar_ts, cached_df = cached
+            # Check TTL
             if now - cached_ts < self._bars_cache_ttl and len(cached_df) >= limit:
-                return cached_df
+                # Additional check: if we have a latest bar timestamp, verify it hasn't been superseded
+                # This prevents using stale cached data when a new bar has closed
+                if cached_latest_bar_ts is not None and end is not None:
+                    try:
+                        cached_bar_dt = datetime.datetime.fromisoformat(cached_latest_bar_ts.replace('Z', '+00:00'))
+                        end_dt = end if isinstance(end, datetime.datetime) else datetime.datetime.fromisoformat(end.replace('Z', '+00:00'))
+                        # If the requested end time is after our cached latest bar, we need fresh data
+                        if end_dt > cached_bar_dt:
+                            pass  # Fall through to fetch fresh data
+                        else:
+                            return cached_df
+                    except Exception:
+                        pass  # Fall through on parse error
+                else:
+                    return cached_df
 
         tf = self._parse_timeframe(timeframe)
         
+        # Use provided end time or current time for strict PIT
+        end_time = end if end is not None else datetime.datetime.now(datetime.UTC)
+        
         # Calculate start time heuristically based on limit
-        now = datetime.datetime.now(datetime.UTC)
         if tf.unit == TimeFrameUnit.Minute:
             delta = datetime.timedelta(minutes=tf.amount * limit * 1.5)
         elif tf.unit == TimeFrameUnit.Hour:
@@ -229,12 +258,13 @@ class AlpacaExchange:
         else:
             delta = datetime.timedelta(days=tf.amount * limit * 1.5)
             
-        start_time = now - max(delta, datetime.timedelta(hours=1))
+        start_time = end_time - max(delta, datetime.timedelta(hours=1))
         
         request_params = CryptoBarsRequest(
             symbol_or_symbols=symbol,
             timeframe=tf,
             start=start_time,
+            end=end_time,
             limit=limit
         )
 
@@ -246,9 +276,11 @@ class AlpacaExchange:
                 
                 # Convert to dict format expected by downstream
                 data_list = []
+                latest_bar_ts = None
                 for b in bars:
+                    ts = b.timestamp.isoformat() if hasattr(b.timestamp, "isoformat") else b.timestamp
                     data_list.append({
-                        "timestamp": b.timestamp.isoformat() if hasattr(b.timestamp, "isoformat") else b.timestamp,
+                        "timestamp": ts,
                         "open": float(b.open),
                         "high": float(b.high),
                         "low": float(b.low),
@@ -257,15 +289,17 @@ class AlpacaExchange:
                         "vwap": float(b.vwap),
                         "trade_count": int(b.trade_count),
                     })
+                    latest_bar_ts = ts  # Keep the last (most recent) timestamp
                 
                 df_result = pl.DataFrame(data_list)
-                self._bars_cache[cache_key] = (time.time(), df_result)
+                # Cache with latest bar timestamp for invalidation
+                self._bars_cache[cache_key] = (time.time(), latest_bar_ts, df_result)
                 return df_result
         except Exception as e:
             logger.warning(f"Failed to fetch bars for {symbol}: {e}")
 
         result = pl.DataFrame()
-        self._bars_cache[cache_key] = (time.time(), result)
+        self._bars_cache[cache_key] = (time.time(), None, result)
         return result
 
     @retry(retry=retry_if_exception(_retry_on_rate_limit), stop=stop_after_attempt(5), wait=_rate_limit_wait)
@@ -294,6 +328,43 @@ class AlpacaExchange:
             logger.warning(f"Failed to fetch latest bar for {symbol}: {e}")
 
         return pl.DataFrame()
+
+    def invalidate_bars_cache(self, symbol: str | None = None, timeframe: str | None = None) -> int:
+        """
+        Invalidate cached bars data.
+        
+        Args:
+            symbol: If provided, only invalidate cache for this symbol. If None, invalidate all symbols.
+            timeframe: If provided, only invalidate cache for this timeframe. If None, invalidate all timeframes.
+            
+        Returns:
+            Number of cache entries invalidated.
+        """
+        if symbol is None and timeframe is None:
+            # Clear all
+            count = len(self._bars_cache)
+            self._bars_cache.clear()
+            logger.info(f"Invalidated all bars cache ({count} entries)")
+            return count
+        
+        count = 0
+        keys_to_delete = []
+        for key in self._bars_cache:
+            key_symbol, key_timeframe, key_limit = key
+            if symbol is not None and key_symbol != symbol:
+                continue
+            if timeframe is not None and key_timeframe != timeframe:
+                continue
+            keys_to_delete.append(key)
+        
+        for key in keys_to_delete:
+            del self._bars_cache[key]
+            count += 1
+        
+        if count > 0:
+            logger.info(f"Invalidated {count} bars cache entries for symbol={symbol}, timeframe={timeframe}")
+        
+        return count
 
     @retry(retry=retry_if_exception(_retry_unless_circuit_open), stop=stop_after_attempt(5), wait=wait_exponential(multiplier=1, min=2, max=30))
     async def get_positions(self, bypass_circuit_breaker: bool = False) -> list[dict[str, Any]]:
@@ -443,20 +514,28 @@ class AlpacaExchange:
         confirm_timeout: float = 10.0,
         client_order_id: str | None = None,
         bypass_circuit_breaker: bool = False,
+        limit_price: float | None = None,
+        post_only: bool = False,
     ) -> dict[str, Any]:
         """Create a new order using alpaca-py.
 
-        If ``client_order_id`` is provided and a matching order was already
-        placed recently (within the idempotency window), the cached result
-        is returned instead of re-submitting — preventing double-submits
-        from confirmation timeouts.
+        Supports both market and limit orders.
 
-        ``bypass_circuit_breaker``: when True (used for EXIT / close orders),
-        the order is submitted directly via the trading client (still covered
-        by tenacity retries) instead of going through the circuit breaker.
-        This ensures positions can be closed even when the circuit is OPEN
-        from a prior exchange outage — a new entry during an outage should be
-        blocked, but an exit must still attempt to execute.
+        Args:
+            symbol: Trading symbol (e.g., "BTC/USD")
+            qty: Order quantity
+            side: "buy" or "sell"
+            type: "market" or "limit"
+            time_in_force: "ioc", "gtc", "fok", "day"
+            confirm: Whether to wait for fill confirmation
+            confirm_timeout: Seconds to wait for confirmation
+            client_order_id: Optional idempotency key
+            bypass_circuit_breaker: For exit orders during circuit open
+            limit_price: Limit price for limit orders (required if type="limit")
+            post_only: If True, order is post-only (maker only, no taker)
+
+        Returns:
+            Order info dict with id, symbol, qty, status, filled_avg_price, filled_qty, commission
         """
         if not self.trading_client:
             await self.load()
@@ -464,10 +543,6 @@ class AlpacaExchange:
         # --- Idempotency check ---
         if client_order_id is not None:
             now = time.time()
-            # Opportunistic prune: entries expire by TTL on read but were
-            # never evicted, so the dict grew one entry per order forever
-            # (slow leak). Drop expired entries here, same pattern as
-            # alerts._in_cooldown.
             if len(self._order_cache) > 128:
                 self._order_cache = {
                     k: v for k, v in self._order_cache.items()
@@ -486,24 +561,45 @@ class AlpacaExchange:
         # Parse enums
         order_side = OrderSide.BUY if side.lower() == "buy" else OrderSide.SELL
         
-        # We enforce market orders in this bot, but it can be expanded.
-        order_kwargs = {
-            "symbol": symbol,
-            "qty": qty,
-            "side": order_side,
-            "time_in_force": TimeInForce.IOC if time_in_force.lower() == "ioc" else TimeInForce.GTC,
+        # Parse time in force
+        tif_map = {
+            "ioc": TimeInForce.IOC,
+            "gtc": TimeInForce.GTC,
+            "fok": TimeInForce.FOK,
+            "day": TimeInForce.DAY,
         }
-        if client_order_id is not None:
-            order_kwargs["client_order_id"] = client_order_id
-
-        request = MarketOrderRequest(**order_kwargs)
+        tif = tif_map.get(time_in_force.lower(), TimeInForce.IOC)
+        
+        # Build order request based on type
+        if type.lower() == "limit":
+            if limit_price is None:
+                raise ValueError("limit_price is required for limit orders")
+            order_kwargs = {
+                "symbol": symbol,
+                "qty": qty,
+                "side": order_side,
+                "time_in_force": tif,
+                "limit_price": limit_price,
+            }
+            if post_only:
+                order_kwargs["order_class"] = "post_only"
+            if client_order_id is not None:
+                order_kwargs["client_order_id"] = client_order_id
+            request = LimitOrderRequest(**order_kwargs)
+        else:
+            # Market order (default)
+            order_kwargs = {
+                "symbol": symbol,
+                "qty": qty,
+                "side": order_side,
+                "time_in_force": tif,
+            }
+            if client_order_id is not None:
+                order_kwargs["client_order_id"] = client_order_id
+            request = MarketOrderRequest(**order_kwargs)
 
         try:
             if bypass_circuit_breaker:
-                # Exit / close orders must go through even when the circuit
-                # is OPEN — holding a position during an exchange outage is
-                # riskier than attempting the close. Still benefit from the
-                # outer @retry decorator for transient failures.
                 order = await asyncio.to_thread(self.trading_client.submit_order, request)
             else:
                 order = await self.circuit_breaker.call(asyncio.to_thread, self.trading_client.submit_order, request)
@@ -515,20 +611,6 @@ class AlpacaExchange:
                 "status": str(order.status.value) if hasattr(order.status, "value") else str(order.status),
             }
         except Exception as submit_err:
-            # submit_order can fail in a way that's ambiguous about whether
-            # Alpaca actually processed the order server-side -- e.g. the
-            # HTTP response was lost to a network error after the order was
-            # already accepted. The outer @retry would otherwise blindly
-            # resubmit with the same client_order_id; if Alpaca rejects that
-            # as a duplicate instead of deduping it silently, the caller
-            # sees a failure for a trade that actually went through, and
-            # never learns its position/exposure state needs updating.
-            #
-            # Before letting @retry resubmit, check whether an order with
-            # this client_order_id already exists on the exchange. Skip the
-            # lookup (and just re-raise) when submit_err is itself a
-            # circuit-open signal: the breaker blocked the call before it
-            # ever reached Alpaca, so nothing could have been submitted.
             existing = None
             if client_order_id is not None and not _is_circuit_open_error(submit_err):
                 existing = await self._find_existing_order_by_client_id(client_order_id)
@@ -564,19 +646,9 @@ class AlpacaExchange:
                             filled_order = await self.circuit_breaker.call(asyncio.to_thread, self.trading_client.get_order_by_id, order_id)
                             order_info["filled_avg_price"] = float(filled_order.filled_avg_price) if filled_order.filled_avg_price else 0.0
                             order_info["filled_qty"] = float(filled_order.filled_qty) if filled_order.filled_qty else 0.0
-                                                        # Alpaca is commission-free; Order model no longer
-                            # exposes .commission (alpaca-py>=0.43, extra='ignore').
                             order_info["commission"] = 0.0
                             order_info["slippage"] = 0.0
                         except Exception as fetch_err:
-                            # The order reached FILLED status (confirmed above), but
-                            # fetching the precise fill details failed transiently.
-                            # Do NOT zero out the price/qty -- that silently corrupts
-                            # trade records with a real, non-zero fill. Fall back to
-                            # the last known poll_info (which reflects the fill we
-                            # just detected) and retry the detail fetch once before
-                            # giving up, so a single transient error doesn't cost us
-                            # the real fill data.
                             logger.warning(
                                 f"Order {order_id} filled but fetching fill details failed "
                                 f"({fetch_err!r}); retrying once before falling back."
@@ -586,8 +658,6 @@ class AlpacaExchange:
                                 filled_order = await self.circuit_breaker.call(asyncio.to_thread, self.trading_client.get_order_by_id, order_id)
                                 order_info["filled_avg_price"] = float(filled_order.filled_avg_price) if filled_order.filled_avg_price else 0.0
                                 order_info["filled_qty"] = float(filled_order.filled_qty) if filled_order.filled_qty else 0.0
-                                                                # Alpaca is commission-free; Order model no longer
-                                # exposes .commission (alpaca-py>=0.43, extra='ignore').
                                 order_info["commission"] = 0.0
                                 order_info["slippage"] = 0.0
                             except Exception as retry_err:
@@ -601,7 +671,6 @@ class AlpacaExchange:
                                 order_info["commission"] = 0.0
                                 order_info["slippage"] = 0.0
                                 order_info["fill_data_incomplete"] = True
-                    # Update status to final status before returning
                     order_info["status"] = status
                     return order_info
             except Exception as e:
@@ -610,10 +679,7 @@ class AlpacaExchange:
         logger.warning(f"Order {order_id} confirmation timed out after {confirm_timeout}s")
 
         # Fallback: if we have a client_order_id but no confirmed fill yet,
-        # try looking the order up by client_order_id via get_orders() (which
-        # Alpaca supports as a filter). A transient "order not found" on the
-        # by-ID poll can lag the by-client-id lookup, and market orders on
-        # crypto are near-instant -- the fill is almost certainly there.
+        # try looking the order up by client_order_id via get_orders()
         if client_order_id is not None and order_id and "filled_avg_price" not in order_info:
             try:
                 recent_orders = await self.get_orders(limit=50, status="filled")
@@ -622,17 +688,8 @@ class AlpacaExchange:
                         order_info["status"] = "filled"
                         order_info["filled_avg_price"] = float(o.get("filled_avg_price", 0.0) or 0.0)
                         order_info["filled_qty"] = float(o.get("filled_qty", 0.0) or 0.0)
-                        order_info["commission"] = 0.0
-                        logger.warning(
-                            f"Order {order_id} ({client_order_id}): recovered fill via "
-                            f"client_order_id lookup -> price={order_info['filled_avg_price']}, "
-                            f"qty={order_info['filled_qty']}"
-                        )
                         break
-            except Exception as fallback_err:
-                logger.warning(
-                    f"Order {order_id} fallback lookup by client_order_id "
-                    f"{client_order_id!r} failed: {fallback_err}"
-                )
+            except Exception as e:
+                logger.debug(f"Fallback order lookup failed: {e}")
 
         return order_info

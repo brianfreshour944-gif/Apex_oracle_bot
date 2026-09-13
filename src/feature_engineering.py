@@ -1,10 +1,10 @@
-# feature_engineering.py â€” Institutional-grade market microstructure features.
+# feature_engineering.py — Institutional-grade market microstructure features.
 #
 # Replaces retail indicators (RSI, MACD, bar shape ratios) with academically
 # grounded, regime-invariant features that encode mathematically distinct
 # sources of market information.
 #
-# â”€â”€ Why institutional features beat retail features â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# ——— Why institutional features beat retail features ———————————————————————————
 # Retail features (close_position, price_vs_open, vol_acceleration) are all
 # asking the same question: "was this a bull bar or bear bar?"  They are highly
 # correlated, so a neural network given 11 of them just learns a weighted sum
@@ -18,17 +18,17 @@
 #   - HOW VOLATILE the market truly is (Parkinson vol, Garman-Klass vol)
 #
 # Academic references:
-#   Parkinson (1980)    â€” Range-based volatility estimation
-#   Garman & Klass (1980) â€” OHLC volatility estimation
-#   Kyle (1985)         â€” Continuous auction and insider trading (lambda)
-#   Amihud (2002)       â€” Illiquidity and stock returns
+#   Parkinson (1980)    — Range-based volatility estimation
+#   Garman & Klass (1980) — OHLC volatility estimation
+#   Kyle (1985)         — Continuous auction and insider trading (lambda)
+#   Amihud (2002)       — Illiquidity and stock returns
 #
 # NOTE: This feature set was confirmed against feature_scaler.pkl, which was
-# fit with n_features_in_ == 11 â€” i.e. the model currently deployed
+# fit with n_features_in_ == 11 — i.e. the model currently deployed
 # (grok_gqa_v9_best.pth) WAS TRAINED ON THIS EXACT 11-FEATURE SET. A previous
 # unresolved git merge conflict in this file (leftover <<<<<<< HEAD /
 # ======= / >>>>>>> markers) was crashing the bot at import time
-# ("SyntaxError: invalid decimal literal") every single restart â€” this is
+# ("SyntaxError: invalid decimal literal") every single restart — this is
 # very likely the true root cause of the "permanently idle" bot: it wasn't
 # silently rejecting trades, it was crash-looping before it ever reached the
 # main trading loop, and your orchestration was catching/retrying at INFO
@@ -41,6 +41,43 @@ import numpy as np
 import pandas as pd
 
 
+# ── Feature columns ───────────────────────────────────────────────────────────
+# CORE_FEATURE_COLS (11) - The exact features the deployed transformer model (grok_gqa_v9_best.pth)
+# was trained on. These are mathematically orthogonal, regime-invariant, institutional-grade features.
+# Order matters: must match feature_scaler.pkl fit order.
+CORE_FEATURE_COLS = [
+    "z_return",          # Vol-normalized log return — regime-invariant momentum
+    "parkinson_vol",     # Parkinson (1980) range-based vol — 5x more efficient than std
+    "garman_klass_vol",  # Garman-Klass (1980) OHLC vol — most efficient open-market estimator
+    "kyle_lambda",       # Kyle (1985) price impact proxy — |ret|/sqrt(vol), Z-scored
+    "signed_flow",       # Signed order flow proxy — vol x sign(C-O), Z-scored
+    "vwap_z",            # Z-scored VWAP deviation — regime-invariant fair-value distance
+    "vol_of_vol",        # Volatility of volatility — regime uncertainty / transition signal
+    "amihud_z",          # Amihud (2002) illiquidity — |ret|/vol, Z-scored
+    "trade_size_proxy",  # Avg trade size (vol/trade_count), Z-scored — inst. vs retail flow
+    "roll_autocorr",     # Rolling lag-1 return autocorrelation — trend vs mean-reversion
+    "range_position_z",  # Z-scored close position within 20-bar H/L range — breakout signal
+]
+
+# LEGACY_FEATURE_COLS - Retail/alternative features NOT used by the deployed model.
+# Kept for backwards compatibility and potential future research.
+# These are correlated with core features and add compute/memory overhead without predictive power.
+LEGACY_FEATURE_COLS = [
+    "rsi",               # Redundant with roll_autocorr + range_position_z
+    "macd",              # Redundant with z_return + roll_autocorr
+    "atr",               # Redundant with parkinson_vol + garman_klass_vol
+    "volume_spike",      # Redundant with trade_size_proxy + signed_flow
+    "bollinger_width",   # Redundant with vol_of_vol + parkinson_vol
+    "funding_rate",      # Derivatives - not Z-scored, structural drift
+    "open_interest",     # Derivatives - grows with market cap, not normalized
+    "long_short_ratio",  # Derivatives - regime shifts, not normalized
+    "bid_ask_imbalance", # L2 depth - noisy, 5s timeout fallback
+]
+
+# MASTER_FEATURE_COLS = CORE + LEGACY (for any legacy consumers)
+MASTER_FEATURE_COLS = CORE_FEATURE_COLS + LEGACY_FEATURE_COLS
+
+# Active features used by the live model - defaults to CORE_FEATURE_COLS
 def get_active_features():
     path = os.path.join(os.path.dirname(__file__), '..', 'data', 'active_features.json')
     if os.path.exists(path):
@@ -49,38 +86,9 @@ def get_active_features():
                 return json.load(f)
         except Exception:
             pass
-    # default to the original 11
-    return [
-        "z_return", "parkinson_vol", "garman_klass_vol", "kyle_lambda",
-        "signed_flow", "vwap_z", "vol_of_vol", "amihud_z",
-        "trade_size_proxy", "roll_autocorr", "range_position_z"
-    ]
+    # default to the 11 core features the model was trained on
+    return CORE_FEATURE_COLS.copy()
 
-# â”€â”€ Feature columns â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-# NOTE: This list contains the master pool of ALL available features.
-# The active list used for training is dynamically pulled via get_active_features().
-MASTER_FEATURE_COLS = [
-    "z_return",          # Vol-normalized log return â€” regime-invariant momentum
-    "parkinson_vol",     # Parkinson (1980) range-based vol â€” 5x more efficient than std
-    "garman_klass_vol",  # Garman-Klass (1980) OHLC vol â€” most efficient open-market estimator
-    "kyle_lambda",       # Kyle (1985) price impact proxy â€” |ret|/sqrt(vol), Z-scored
-    "signed_flow",       # Signed order flow proxy â€” vol x sign(C-O), Z-scored
-    "vwap_z",            # Z-scored VWAP deviation â€” regime-invariant fair-value distance
-    "vol_of_vol",        # Volatility of volatility â€” regime uncertainty / transition signal
-    "amihud_z",          # Amihud (2002) illiquidity â€” |ret|/vol, Z-scored
-    "trade_size_proxy",  # Avg trade size (vol/trade_count), Z-scored â€” inst. vs retail flow
-    "roll_autocorr",     # Rolling lag-1 return autocorrelation â€” trend vs mean-reversion
-    "range_position_z",  # Z-scored close position within 20-bar H/L range â€” breakout signal
-    "rsi",               # Relative Strength Index
-    "macd",              # MACD
-    "atr",               # Average True Range
-    "volume_spike",      # Volume anomaly
-    "bollinger_width",   # Bollinger Band Width
-    "funding_rate",      # Binance Futures Funding Rate
-    "open_interest",     # Binance Futures Open Interest
-    "long_short_ratio",  # Binance Futures Global Long/Short Ratio
-    "bid_ask_imbalance", # L2 Depth Imbalance
-]
 
 # Neutral fill values for each feature (used on empty input or edge failures).
 # Z-scored features are centred at 0.  Volatility features are 0 (no vol).
@@ -108,15 +116,15 @@ FEATURE_DEFAULTS = {
 }
 
 
-# â”€â”€ Helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# ── Helpers ───────────────────────────────────────────────────────────────────
 
 def _sanitize(series: pd.Series, fill: float = 0.0) -> pd.Series:
     """
     Force a Series to float64 with no None/NaN/inf.
-      pd.to_numeric  â€” non-numeric strings -> NaN
-      .astype(float) â€” Python None in object-dtype -> NaN  (critical step)
-      .replace(inf)  â€” inf/-inf -> fill
-      .fillna(fill)  â€” remaining NaN -> fill
+      pd.to_numeric  — non-numeric strings -> NaN
+      .astype(float) — Python None in object-dtype -> NaN  (critical step)
+      .replace(inf)  — inf/-inf -> fill
+      .fillna(fill)  — remaining NaN -> fill
     """
     return (
         pd.to_numeric(series, errors="coerce")
@@ -136,7 +144,7 @@ def _z_score(series: pd.Series, window: int = 20, fill: float = 0.0) -> pd.Serie
     return _sanitize((series - mu) / sig, fill=fill)
 
 
-# â”€â”€ Main feature function â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# ── Main feature function ──────────────────────────────────────────────────────
 
 # Per-symbol feature cache: maps symbol -> (last_bar_timestamp, feature_df)
 _FEATURE_CACHE: dict[str, tuple] = {}
@@ -175,7 +183,7 @@ def add_features(df: pd.DataFrame, symbol: str = "") -> pd.DataFrame:
 
     d = df.copy()
 
-    # â”€â”€ Step 1: Sanitize all raw input columns â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    # ── Step 1: Sanitize all raw input columns ─────────────────────────────────
     for col in ("open", "high", "low", "close", "volume"):
         src = d[col] if col in d.columns else pd.Series(0.0, index=d.index)
         d[col] = _sanitize(src)
@@ -201,16 +209,16 @@ def add_features(df: pd.DataFrame, symbol: str = "") -> pd.DataFrame:
     vwap   = d["vwap"]
     tc     = d["trade_count"]
 
-    # â”€â”€ Step 2: Log returns (base for several features) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    # ── Step 2: Log returns (base for several features) ────────────────────────
     safe_prev_close = close.shift(1).replace(0.0, np.nan)
     log_ret = _sanitize(np.log(close / safe_prev_close), fill=0.0)
 
-    # â”€â”€ Feature 1: z_return â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    # ── Feature 1: z_return ─────────────────────────────────────────────────────
     # Regime-invariant momentum: the same % move means very different things
     # in a quiet vs wild market.  Dividing by rolling vol standardises it.
     d["z_return"] = _z_score(log_ret, window=20, fill=0.0)
 
-    # â”€â”€ Feature 2: parkinson_vol â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    # ── Feature 2: parkinson_vol ────────────────────────────────────────────────
     # Parkinson (1980): uses the intrabar high-low range.
     # sigma_park = sqrt( log(H/L)^2 / (4*ln2) )
     # 5x more statistically efficient than close-to-close std on the same data.
@@ -219,7 +227,7 @@ def add_features(df: pd.DataFrame, symbol: str = "") -> pd.DataFrame:
     park_raw    = np.sqrt(log_hl ** 2 / (4.0 * np.log(2.0)))
     d["parkinson_vol"] = _sanitize(park_raw, fill=0.0)
 
-    # â”€â”€ Feature 3: garman_klass_vol â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    # ── Feature 3: garman_klass_vol ─────────────────────────────────────────────
     # Garman & Klass (1980): uses all four OHLC points.
     # sigma_GK = sqrt( 0.5*log(H/L)^2 - (2ln2-1)*log(C/O)^2 )
     # Most efficient estimator for continuously traded open markets.
@@ -228,7 +236,7 @@ def add_features(df: pd.DataFrame, symbol: str = "") -> pd.DataFrame:
     gk_raw     = (0.5 * log_hl ** 2) - ((2.0 * np.log(2.0) - 1.0) * log_co ** 2)
     d["garman_klass_vol"] = _sanitize(np.sqrt(gk_raw.clip(lower=0.0)), fill=0.0)
 
-    # â”€â”€ Feature 4: kyle_lambda â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    # ── Feature 4: kyle_lambda ──────────────────────────────────────────────────
     # Kyle (1985) price impact proxy: lambda ~ |dP| / Q
     # Approximated as |log_ret| / sqrt(volume) (standard proxy when order book unavailable).
     # Z-scored over 20 bars so lambda is comparable across regimes.
@@ -236,7 +244,7 @@ def add_features(df: pd.DataFrame, symbol: str = "") -> pd.DataFrame:
     kyle_raw    = _sanitize(np.abs(log_ret) / np.sqrt(safe_vol), fill=0.0)
     d["kyle_lambda"] = _z_score(kyle_raw, window=20, fill=0.0)
 
-    # â”€â”€ Feature 5: signed_flow â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    # ── Feature 5: signed_flow ──────────────────────────────────────────────────
     # Signed volume: volume x sign(close - open).
     # Positive  -> net buying pressure this bar.
     # Negative  -> net selling pressure this bar.
@@ -244,14 +252,14 @@ def add_features(df: pd.DataFrame, symbol: str = "") -> pd.DataFrame:
     raw_flow = volume * np.sign(close - open_)
     d["signed_flow"] = _z_score(_sanitize(raw_flow, fill=0.0), window=20, fill=0.0)
 
-    # â”€â”€ Feature 6: vwap_z â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    # ── Feature 6: vwap_z ───────────────────────────────────────────────────────
     # Z-scored VWAP deviation: (close - VWAP) / rolling_std(close - VWAP, 20).
     # The old raw vwap_deviation (close-VWAP)/VWAP is not comparable across
     # different volatility regimes.  Z-scoring normalises the scale.
     vwap_dev = _sanitize(close - vwap, fill=0.0)
     d["vwap_z"] = _z_score(vwap_dev, window=20, fill=0.0)
 
-    # â”€â”€ Feature 7: vol_of_vol â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    # ── Feature 7: vol_of_vol ───────────────────────────────────────────────────
     # Rolling standard deviation of Parkinson vol over 14 bars.
     # High VoV -> uncertain, transition regime (model should be less confident).
     # Low  VoV -> stable, predictable regime.
@@ -260,14 +268,14 @@ def add_features(df: pd.DataFrame, symbol: str = "") -> pd.DataFrame:
         park_series.rolling(14, min_periods=2).std(), fill=0.0
     )
 
-    # â”€â”€ Feature 8: amihud_z â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    # ── Feature 8: amihud_z ─────────────────────────────────────────────────────
     # Amihud (2002) illiquidity ratio: |ret| / volume.
     # High ratio = large price move on thin volume = market is thin = more alpha.
     # Z-scored for regime invariance.
     amihud_raw = _sanitize(np.abs(log_ret) / safe_vol, fill=0.0)
     d["amihud_z"] = _z_score(amihud_raw, window=20, fill=0.0)
 
-    # â”€â”€ Feature 9: trade_size_proxy â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    # ── Feature 9: trade_size_proxy ─────────────────────────────────────────────
     # Average trade size = volume / trade_count.
     # Large avg trade  -> institutional block flow.
     # Small avg trade  -> retail limit-order churn.
@@ -275,7 +283,7 @@ def add_features(df: pd.DataFrame, symbol: str = "") -> pd.DataFrame:
     trade_size_raw = _sanitize(volume / tc, fill=0.0)
     d["trade_size_proxy"] = _z_score(trade_size_raw, window=20, fill=0.0)
 
-    # â”€â”€ Feature 10: roll_autocorr â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    # ── Feature 10: roll_autocorr ───────────────────────────────────────────────
     # Rolling lag-1 Pearson autocorrelation of log returns over a 10-bar window.
     # Negative autocorr -> mean-reverting regime  (buy dips, sell rips).
     # Positive autocorr -> trending regime         (momentum works).
@@ -287,7 +295,7 @@ def add_features(df: pd.DataFrame, symbol: str = "") -> pd.DataFrame:
     denom       = (roll_std_x * roll_std_l1).replace(0.0, np.nan)
     d["roll_autocorr"] = _sanitize(roll_cov / denom, fill=0.0).clip(-1.0, 1.0)
 
-    # â”€â”€ Feature 11: range_position_z â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    # ── Feature 11: range_position_z ────────────────────────────────────────────
     # Where does close sit within the 20-bar rolling high-low range? [0, 1].
     # Then Z-scored to capture breakouts (>> 0) vs. mean reversion (<< 0)
     # in a scale-free, regime-invariant way.
@@ -297,7 +305,8 @@ def add_features(df: pd.DataFrame, symbol: str = "") -> pd.DataFrame:
     range_pos_raw = _sanitize((close - roll_low_20) / roll_range_20, fill=0.5)
     d["range_position_z"] = _z_score(range_pos_raw, window=20, fill=0.0)
 
-    # â”€â”€ Feature 12: rsi â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    # ── Legacy features (not used by deployed model, kept for compatibility) ────
+    # Feature 12: rsi
     diff = close.diff()
     gain = _sanitize(diff.clip(lower=0.0), fill=0.0)
     loss = _sanitize(-diff.clip(upper=0.0), fill=0.0)
@@ -306,13 +315,13 @@ def add_features(df: pd.DataFrame, symbol: str = "") -> pd.DataFrame:
     rs = avg_gain / avg_loss
     d["rsi"] = _sanitize(100.0 - (100.0 / (1.0 + rs)), fill=50.0)
 
-    # â”€â”€ Feature 13: macd â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    # Feature 13: macd
     ema12 = close.ewm(span=12, adjust=False).mean()
     ema26 = close.ewm(span=26, adjust=False).mean()
     macd_raw = ema12 - ema26
     d["macd"] = _z_score(macd_raw, window=20, fill=0.0)
 
-    # â”€â”€ Feature 14: atr â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    # Feature 14: atr
     tr1 = high - low
     tr2 = (high - safe_prev_close).abs()
     tr3 = (low - safe_prev_close).abs()
@@ -320,18 +329,26 @@ def add_features(df: pd.DataFrame, symbol: str = "") -> pd.DataFrame:
     atr_raw = tr.rolling(14, min_periods=2).mean()
     d["atr"] = _sanitize(atr_raw, fill=0.0)
 
-    # â”€â”€ Feature 15: volume_spike â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    # Feature 15: volume_spike
     vol_mean = volume.rolling(20, min_periods=2).mean().replace(0.0, np.nan)
     vol_spike_raw = volume / vol_mean
     d["volume_spike"] = _sanitize(vol_spike_raw, fill=1.0)
 
-    # â”€â”€ Feature 16: bollinger_width â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    # Feature 16: bollinger_width
     roll_std_20 = close.rolling(20, min_periods=2).std()
     roll_mean_20 = close.rolling(20, min_periods=2).mean().replace(0.0, np.nan)
     bw_raw = (roll_std_20 * 2) / roll_mean_20
     d["bollinger_width"] = _z_score(bw_raw, window=20, fill=0.0)
 
-    # â”€â”€ Step 3: Final guard â€” all MASTER_FEATURE_COLS present, correct dtype â”€â”€
+    # Features 17-20: derivatives (funding_rate, open_interest, long_short_ratio, bid_ask_imbalance)
+    # These are populated from onchain_data.py, not computed here.
+    # We ensure they exist with defaults.
+    for col in ["funding_rate", "open_interest", "long_short_ratio", "bid_ask_imbalance"]:
+        if col not in d.columns:
+            d[col] = FEATURE_DEFAULTS.get(col, 0.0)
+        d[col] = _sanitize(d[col], fill=FEATURE_DEFAULTS.get(col, 0.0))
+
+    # ── Step 3: Final guard — all MASTER_FEATURE_COLS present, correct dtype ────
     for col in MASTER_FEATURE_COLS:
         if col not in d.columns:
             d[col] = FEATURE_DEFAULTS.get(col, 0.0)
@@ -534,3 +551,108 @@ async def _fetch_multi_timeframe_features(
         import logging
         logging.getLogger(__name__).warning(f"Multi-timeframe feature fetch failed: {e}")
         return None
+
+
+def compute_cross_asset_returns(
+    symbols: list[str],
+    feature_dfs: dict[str, pd.DataFrame],
+    lookback: int = 50,
+) -> dict[str, np.ndarray]:
+    """
+    Compute synchronized log-return series for cross-asset correlation analysis.
+    
+    Args:
+        symbols: List of trading symbols
+        feature_dfs: Dict of symbol -> feature DataFrame (from add_multi_timeframe_features)
+        lookback: Number of bars to use for correlation calculation
+        
+    Returns:
+        Dict of symbol -> log-return array (aligned on common timestamps)
+        
+    Note: Uses the base timeframe's z_return feature as the return proxy,
+    which is already volatility-normalized and regime-invariant.
+    """
+    if not feature_dfs:
+        return {}
+    
+    # Extract z_return series for each symbol
+    returns_dict = {}
+    for symbol in symbols:
+        if symbol not in feature_dfs:
+            continue
+        df = feature_dfs[symbol]
+        if df is None or df.empty or 'z_return' not in df.columns:
+            continue
+        # Take the last `lookback` values
+        z_ret = df['z_return'].tail(lookback).values
+        if len(z_ret) >= 10:  # Minimum for meaningful correlation
+            returns_dict[symbol] = z_ret
+    
+    if len(returns_dict) < 2:
+        return {}
+    
+    # Align all series to the same length (shortest)
+    min_len = min(len(v) for v in returns_dict.values())
+    aligned = {k: v[-min_len:] for k, v in returns_dict.items()}
+    
+    return aligned
+
+
+def compute_correlation_matrix(
+    returns_dict: dict[str, np.ndarray],
+    method: str = "pearson",
+) -> tuple[np.ndarray, list[str]]:
+    """
+    Compute correlation matrix from aligned return series.
+    
+    Returns:
+        (correlation_matrix, symbol_order_list)
+    """
+    if len(returns_dict) < 2:
+        return np.array([]), []
+    
+    symbols = list(returns_dict.keys())
+    returns_matrix = np.array([returns_dict[s] for s in symbols])
+    
+    if method == "pearson":
+        corr = np.corrcoef(returns_matrix)
+    elif method == "spearman":
+        from scipy.stats import spearmanr
+        corr, _ = spearmanr(returns_matrix, axis=1)
+    elif method == "kendall":
+        from scipy.stats import kendalltau
+        n = len(symbols)
+        corr = np.eye(n)
+        for i in range(n):
+            for j in range(i+1, n):
+                tau, _ = kendalltau(returns_matrix[i], returns_matrix[j])
+                corr[i, j] = corr[j, i] = tau if not np.isnan(tau) else 0.0
+    else:
+        corr = np.corrcoef(returns_matrix)
+    
+    # Sanitize
+    corr = np.nan_to_num(corr, nan=0.0, posinf=1.0, neginf=-1.0)
+    np.fill_diagonal(corr, 1.0)
+    
+    return corr, symbols
+
+
+def get_symbol_correlation(
+    corr_matrix: np.ndarray,
+    symbols: list[str],
+    target_symbol: str,
+) -> float:
+    """
+    Get average correlation of target_symbol with all other symbols.
+    
+    Returns:
+        Average correlation (excluding self-correlation of 1.0)
+    """
+    if target_symbol not in symbols or len(symbols) < 2:
+        return 0.0
+    
+    idx = symbols.index(target_symbol)
+    corrs = corr_matrix[idx]
+    # Exclude self-correlation
+    other_corrs = np.delete(corrs, idx)
+    return float(np.mean(other_corrs)) if len(other_corrs) > 0 else 0.0

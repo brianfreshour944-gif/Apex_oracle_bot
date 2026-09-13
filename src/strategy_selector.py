@@ -1,10 +1,14 @@
 """AI Strategy Selector that uses Adaptive Meta-Learning to pick the best strategy."""
 
 import os
+from datetime import datetime
+from typing import Any
 
 from src.committee.adaptive_meta import AdaptiveMetaLearner
+from src.config import settings
 from src.execution_strategies import STRATEGIES
 from src.logging_config import get_logger
+from src.performance_tracker import record_trade_outcome
 
 logger = get_logger("strategy_selector")
 
@@ -28,14 +32,54 @@ def get_strategy_learner() -> AdaptiveMetaLearner:
             raise
     return _STRATEGY_LEARNER
 
-def select_best_strategy(regime: str) -> str:
-    """Select the best strategy for the current regime."""
+
+def _estimate_strategy_costs(strategy_name: str, regime: str, atr_pct: float) -> float:
+    """
+    Estimate relative transaction cost burden for a strategy in a given regime.
+    Returns a multiplier (1.0 = baseline, >1.0 = higher cost burden).
+    """
+    # Base cost per round trip in bps
+    base_cost_bps = settings.TX_COST_FEE_BPS + settings.TX_COST_SLIPPAGE_BPS + settings.TX_COST_SPREAD_BPS
+    
+    # Strategy-specific trade frequency multipliers (relative to trend_following)
+    freq_multipliers = {
+        "trend_following": 1.0,      # ~1-2 trades/day max
+        "mean_reversion": 1.5,       # ~2-3 trades/day in chop
+        "momentum": 1.3,             # ~1-2 trades/day
+        "breakout": 1.2,             # ~1 trade/day
+        "grid": 3.0,                 # Many small trades in range
+        "scalping": 5.0,             # Very high frequency
+    }
+    
+    freq_mult = freq_multipliers.get(strategy_name, 1.0)
+    
+    # Regime adjustments: in low vol, spread costs dominate; in high vol, slippage dominates
+    if regime == "low_volatility":
+        # Spread is relatively larger vs moves
+        regime_mult = 1.5
+    elif regime == "high_volatility":
+        # Slippage is larger
+        regime_mult = 1.3
+    else:
+        regime_mult = 1.0
+    
+    # ATR adjustment: higher ATR means larger moves, costs are smaller relative to move
+    atr_adj = max(0.5, min(2.0, 2.0 / max(atr_pct, 0.5)))
+    
+    return freq_mult * regime_mult * atr_adj
+
+
+def select_best_strategy(regime: str, features: dict[str, Any] | None = None) -> str:
+    """Select the best strategy for the current regime with cost-awareness."""
     learner = get_strategy_learner()
     weights = learner._clamp_normalize(learner._regime_weights(regime))
     
+    # Extract regime features for cost-aware selection
+    atr_pct = features.get("atr", 0.0) / features.get("close", 1.0) * 100 if features else 1.0
+    in_transition = features.get("in_transition", False) if features else False
+    hurst_velocity = features.get("hurst_velocity", 0.0) if features else 0.0
+    
     # Default logical priors based on market regime
-    # If the meta-learner is uninitialized, we shouldn't just guess randomly.
-    # We should seed it with domain knowledge.
     if not weights:
         strategies = list(STRATEGIES.keys())
         for s in strategies:
@@ -67,7 +111,20 @@ def select_best_strategy(regime: str) -> str:
     stale_keys = [k for k in weights.keys() if k not in STRATEGIES]
     for k in stale_keys:
         del weights[k]
-            
+    
+    # Apply cost-aware penalties
+    for strat_name in weights:
+        cost_mult = _estimate_strategy_costs(strat_name, regime, atr_pct)
+        # Penalty increases with cost multiplier; cap at 50% reduction
+        penalty = min(0.5, (cost_mult - 1.0) * 0.2)
+        weights[strat_name] *= (1.0 - penalty)
+    
+    # During regime transitions, penalize ALL strategies to reduce conviction
+    # and favor the previous strategy (handled by _active_strategy in TradingStrategy)
+    if in_transition:
+        for strat_name in weights:
+            weights[strat_name] *= 0.7  # Reduce all weights during transition
+    
     # Re-normalize to ensure they sum to 1
     total = sum(weights.values())
     if total > 0:
@@ -122,3 +179,9 @@ def record_strategy_outcome(regime: str, strategy_name: str, action: str, pnl: f
             logger.info(f"Strategy weights updated for regime {regime}: {strategy_name} {'profitable' if profitable else 'loss'}")
     except Exception as e:
         logger.error(f"Failed to update strategy learner: {e}")
+
+    # Also record in performance tracker for decay monitoring
+    try:
+        record_trade_outcome(strategy_name, regime, pnl, return_pct, datetime.utcnow())
+    except Exception as e:
+        logger.error(f"Failed to record trade outcome in performance tracker: {e}")

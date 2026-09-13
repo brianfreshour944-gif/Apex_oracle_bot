@@ -5,6 +5,7 @@ from datetime import UTC
 from typing import Any
 
 import numpy as np
+import pandas as pd
 
 from src.config import settings
 from src.exchange import AlpacaExchange
@@ -25,12 +26,30 @@ class TradingStrategy:
         self.backtest = backtest
         self._active_strategy: dict[str, str] = {}
         self._trailing_peaks: dict[str, float] = {}
+        self._prev_regime: dict[str, str] = {}  # Hysteresis: track previous regime per symbol
+        self._hurst_history: dict[str, list[float]] = {}  # Track Hurst velocity for transition detection
         # Cycle-level caches for on-chain and sentiment data so they
         # are fetched once per cycle instead of once per symbol.
         self._cycle_derivatives: dict[str, dict[str, float]] = {}
         self._cycle_sentiment: dict[str, dict[str, Any]] = {}
         self._cycle_derivatives_ts: float = 0.0
         self._cycle_sentiment_ts: float = 0.0
+        # Cache of feature DataFrames from add_multi_timeframe_features
+        # (symbol -> DataFrame) for cross-asset correlation analysis
+        self._feature_dfs: dict[str, pd.DataFrame] = {}
+
+    def get_cached_feature_dfs(self) -> dict[str, pd.DataFrame]:
+        """
+        Get cached feature DataFrames for cross-asset correlation analysis.
+        
+        Returns:
+            Dict of symbol -> feature DataFrame (only symbols with cached features)
+        """
+        return self._feature_dfs.copy()
+
+    def clear_feature_cache(self) -> None:
+        """Clear the feature DataFrame cache."""
+        self._feature_dfs.clear()
 
     async def analyze_market_regime(self, symbol: str, timeframe: str = "1D", limit: int = 100) -> dict[str, Any]:
         """Analyze market regime using Hurst exponent, ATR, and RSI with TTL caching."""
@@ -59,15 +78,34 @@ class TradingStrategy:
                 bars_df=bars_df_raw
             )
 
+            # Cache feature DataFrame for cross-asset correlation analysis
+            if bars_df_features is not None and not bars_df_features.empty:
+                self._feature_dfs[symbol] = bars_df_features
+
             if len(bars_df_raw) < 20 or bars_df_features is None or len(bars_df_features) < 20:
                 logger.warning(f"Insufficient data for {symbol}, raw={len(bars_df_raw) if bars_df_raw is not None else 0}, features={len(bars_df_features) if bars_df_features is not None else 0}")
                 res = {
                     "regime": "neutral",
                     "hurst": 0.5,
+                    "hurst_velocity": 0.0,
+                    "in_transition": False,
+                    "close": 0.0,
                     "atr": 0.0,
                     "rsi": 50.0,
                     "prev_rsi": 50.0,
-                    "confidence": 0.0
+                    "price_zscore": 0.0,
+                    "confidence": 0.0,
+                    "funding_rate": 0.0,
+                    "funding_rate_z": 0.0,
+                    "open_interest": 0.0,
+                    "open_interest_z": 0.0,
+                    "long_short_ratio": 1.0,
+                    "long_short_ratio_z": 1.0,
+                    "bid_ask_imbalance": 0.0,
+                    "bid_ask_imbalance_z": 0.0,
+                    "sentiment_score": 0.0,
+                    "event_type": "none",
+                    "sentiment_conf": 0.0,
                 }
                 # Do NOT cache insufficient-data fallback so subsequent calls
                 # within the TTL still re-fetch and may succeed.
@@ -139,30 +177,71 @@ class TradingStrategy:
                 ema20 = float(bars_df_raw["close"].to_pandas().ewm(span=20).mean().iloc[-1])
                 htf_trend = "bullish" if close_arr[-1] > ema20 else "bearish"
 
-            # Classify regime
+            # Classify regime with hysteresis to prevent churn in transition zones
             atr_pct = (atr / close_arr[-1]) * 100 if close_arr[-1] > 0 else 0
+            
+            # Track Hurst history for velocity calculation (transition detection)
+            if symbol not in self._hurst_history:
+                self._hurst_history[symbol] = []
+            self._hurst_history[symbol].append(hurst)
+            if len(self._hurst_history[symbol]) > 20:
+                self._hurst_history[symbol].pop(0)
+            
+            # Calculate Hurst velocity (rate of change) for transition detection
+            hurst_velocity = 0.0
+            if len(self._hurst_history[symbol]) >= 5:
+                recent = self._hurst_history[symbol][-5:]
+                hurst_velocity = (recent[-1] - recent[0]) / 5.0  # per-bar change
+            
+            prev_regime = self._prev_regime.get(symbol, "neutral")
+            
+            # Volatility regimes take precedence (no hysteresis needed - they're clear)
             if atr_pct > settings.HIGH_VOLATILITY_PCT:
                 regime = "high_volatility"
             elif atr_pct < settings.HIGH_VOLATILITY_PCT * 0.25:
                 regime = "low_volatility"
-            elif hurst > settings.HURST_TREND_UP:
-                if htf_trend == "bullish":
-                    regime = "bull"
-                elif htf_trend == "bearish":
-                    regime = "bear"
-                else:
-                    regime = "trending"
-            elif hurst < settings.HURST_MEAN_REVERT:
-                regime = "sideways"
             else:
-                regime = "neutral"
+                # Hysteresis bands: wider thresholds when switching regimes
+                trend_up_thresh = settings.HURST_TREND_UP
+                mean_rev_thresh = settings.HURST_MEAN_REVERT
+                
+                # If currently in a trend regime, require stronger evidence to leave it
+                if prev_regime in ["bull", "bear", "trending"]:
+                    mean_rev_thresh = max(mean_rev_thresh, settings.HURST_MEAN_REVERT - 0.02)
+                # If currently in mean-reversion, require stronger evidence to leave it
+                elif prev_regime == "sideways":
+                    trend_up_thresh = min(trend_up_thresh, settings.HURST_TREND_UP + 0.02)
+                
+                if hurst > trend_up_thresh:
+                    if htf_trend == "bullish":
+                        regime = "bull"
+                    elif htf_trend == "bearish":
+                        regime = "bear"
+                    else:
+                        regime = "trending"
+                elif hurst < mean_rev_thresh:
+                    regime = "sideways"
+                else:
+                    regime = "neutral"
+            
+            # Detect regime transition (Hurst moving fast through neutral zone)
+            in_transition = (
+                abs(hurst_velocity) > 0.02 and  # Hurst changing > 0.02 per bar
+                prev_regime not in ["high_volatility", "low_volatility"] and
+                regime != prev_regime
+            )
+            
+            # Update previous regime tracker
+            self._prev_regime[symbol] = regime
 
             volatility = float(np.std(returns) * 100) if len(returns) > 0 else 0.0
             logger.info(
                 f"Regime: {regime.upper()} "
                 f"Hurst={hurst:.3f} "
+                f"Hurst_vel={hurst_velocity:.4f} "
                 f"ATR={atr_pct:.2f}% "
                 f"Volatility={volatility:.2f}%"
+                f"{' [TRANSITION]' if in_transition else ''}"
             )
 
             # Fetch On-Chain Derivatives Data (once per cycle, cached)
@@ -183,14 +262,22 @@ class TradingStrategy:
                         }
                 deriv_data = self._cycle_derivatives[symbol]
                 funding_rate = float(deriv_data.get("funding_rate", 0.0))
+                funding_rate_z = float(deriv_data.get("funding_rate_z", 0.0))
                 open_interest = float(deriv_data.get("open_interest", 0.0))
+                open_interest_z = float(deriv_data.get("open_interest_z", 0.0))
                 long_short_ratio = float(deriv_data.get("long_short_ratio", 1.0))
+                long_short_ratio_z = float(deriv_data.get("long_short_ratio_z", 1.0))
                 bid_ask_imbalance = float(deriv_data.get("bid_ask_imbalance", 0.0))
+                bid_ask_imbalance_z = float(deriv_data.get("bid_ask_imbalance_z", 0.0))
             else:
                 funding_rate = 0.0
+                funding_rate_z = 0.0
                 open_interest = 0.0
+                open_interest_z = 0.0
                 long_short_ratio = 1.0
+                long_short_ratio_z = 1.0
                 bid_ask_imbalance = 0.0
+                bid_ask_imbalance_z = 0.0
                  
             # Fetch News Sentiment Alternative Data (once per cycle, cached)
             if not self.backtest:
@@ -220,6 +307,9 @@ class TradingStrategy:
             res = {
                 "regime": regime,
                 "hurst": float(hurst),
+                "hurst_velocity": float(hurst_velocity),
+                "in_transition": in_transition,
+                "close": float(close_arr[-1]),
                 "atr": float(atr),
                 "rsi": float(rsi),
                 "prev_rsi": float(prev_rsi),
@@ -227,14 +317,27 @@ class TradingStrategy:
                 "htf_trend": htf_trend,
                 "confidence": self._calculate_regime_confidence(regime, hurst, atr, rsi),
                 "funding_rate": funding_rate,
+                "funding_rate_z": funding_rate_z,
                 "open_interest": open_interest,
+                "open_interest_z": open_interest_z,
                 "long_short_ratio": long_short_ratio,
+                "long_short_ratio_z": long_short_ratio_z,
                 "bid_ask_imbalance": bid_ask_imbalance,
+                "bid_ask_imbalance_z": bid_ask_imbalance_z,
                 "sentiment_score": sentiment_score,
                 "event_type": event_type,
                 "sentiment_conf": sentiment_conf,
             }
             self._regime_cache[symbol] = (regime_cache_now, res)
+            
+            # Record features for drift monitoring (non-blocking)
+            try:
+                from src.feature_drift_monitor import record_features_for_drift
+                from datetime import datetime
+                record_features_for_drift(symbol, res, datetime.utcnow())
+            except Exception:
+                pass  # Don't let drift monitoring affect trading
+            
             return res
 
 
@@ -244,11 +347,25 @@ class TradingStrategy:
             return {
                 "regime": "neutral",
                 "hurst": 0.5,
+                "hurst_velocity": 0.0,
+                "in_transition": False,
+                "close": 0.0,
                 "atr": 0.0,
                 "rsi": 50.0,
                 "prev_rsi": 50.0,
                 "price_zscore": 0.0,
-                "confidence": 0.0
+                "confidence": 0.0,
+                "funding_rate": 0.0,
+                "funding_rate_z": 0.0,
+                "open_interest": 0.0,
+                "open_interest_z": 0.0,
+                "long_short_ratio": 1.0,
+                "long_short_ratio_z": 1.0,
+                "bid_ask_imbalance": 0.0,
+                "bid_ask_imbalance_z": 0.0,
+                "sentiment_score": 0.0,
+                "event_type": "none",
+                "sentiment_conf": 0.0,
             }
 
     def _calculate_hurst(self, returns: np.ndarray) -> float:
@@ -387,10 +504,10 @@ class TradingStrategy:
                 # Reuse whichever strategy opened this position (if we have a
                 # record of it) instead of re-selecting every cycle -- see the
                 # note on self._active_strategy in __init__ for why.
-                best_strategy_name = self._active_strategy.get(symbol) or select_best_strategy(regime)
+                best_strategy_name = self._active_strategy.get(symbol) or select_best_strategy(regime, regime_data)
                 self._active_strategy[symbol] = best_strategy_name
             else:
-                best_strategy_name = select_best_strategy(regime)
+                best_strategy_name = select_best_strategy(regime, regime_data)
             active_strategy = STRATEGIES.get(best_strategy_name)
 
             if not active_strategy:

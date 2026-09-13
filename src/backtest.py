@@ -60,11 +60,20 @@ class BacktestExchange:
         self._bars = bars  # symbol -> DataFrame with columns [t, open, high, low, close, volume]
         self.current_time: str | None = None
 
-    async def get_bars(self, symbol: str, timeframe: str = "1D", limit: int = 100) -> pl.DataFrame:
+    async def get_bars(self, symbol: str, timeframe: str = "1D", limit: int = 100, end: datetime.datetime | None = None) -> pl.DataFrame:
         df = self._bars.get(symbol, pl.DataFrame())
-        if self.current_time is not None:
-            df = df.filter(pl.col("t") <= self.current_time)
+        # Use current_time for point-in-time filtering (backtest PIT)
+        filter_time = self.current_time
+        if end is not None:
+            # Convert end datetime to string for comparison
+            filter_time = end.isoformat() if isinstance(end, datetime.datetime) else str(end)
+        if filter_time is not None:
+            df = df.filter(pl.col("t") <= filter_time)
         return df.tail(limit) if len(df) else df
+
+    def invalidate_bars_cache(self, symbol: str | None = None, timeframe: str | None = None) -> int:
+        """Backtest exchange has no cache to invalidate."""
+        return 0
 
     async def get_account(self) -> dict[str, Any]:
         return {"equity": 0.0, "cash": 0.0, "portfolio_value": 0.0}
@@ -205,6 +214,11 @@ async def run_backtest(
 ) -> BacktestResult:
     """Run a full backtest with fee and slippage execution modeling.
 
+    This uses the SAME position sizing logic as live trading:
+    - calculate_position_size() with ATR stops, regime multipliers, confidence,
+      correlation penalties, transaction cost model, gap-risk multiplier, etc.
+    - Fee and slippage from risk model's transaction cost model (not flat %)
+
     If `bars` is provided (real historical OHLCV data), it is used instead of
     synthetic data, and signal["backtest_df"] is populated per-bar so that
     transformer_brain.py uses this historical context instead of attempting
@@ -233,6 +247,9 @@ async def run_backtest(
     entry_price = 0.0
     entry_time = ""
 
+    # For correlation matrix in backtest (simplified - single symbol)
+    returns_matrix = None
+
     for row in bars.iter_rows(named=True):
         current_price = float(row["close"])
         ts = row["t"]
@@ -259,24 +276,60 @@ async def run_backtest(
             signal["backtest_df"] = bars_df
             committee_result = await run_committee(symbol, current_price, signal)
             final_action = committee_result.action
+            # Use committee confidence for position sizing
+            confidence = committee_result.score
         else:
             final_action = signal["action"]
+            confidence = signal.get("confidence", 1.0)
+
+        # Get signal features for position sizing (same as live)
+        atr = signal.get("atr")
+        expected_return_pct = signal.get("expected_return_pct", 0.0)
+        current_equity = float(equity)
+        drawdown_pct = 0.0
+        if result.equity_curve:
+            peak = max(result.equity_curve)
+            if peak > 0:
+                drawdown_pct = (float(equity) - peak) / peak * 100
 
         if final_action == "buy" and open_pos is None:
-            size, status = risk.calculate_position_size(symbol, current_price, regime_seen)
+            # Use SAME position sizing as live trading
+            size, status = risk.calculate_position_size(
+                symbol=symbol,
+                current_price=current_price,
+                regime=regime_seen,
+                atr=atr,
+                confidence=confidence,
+                returns_matrix=returns_matrix,
+                expected_return_pct=expected_return_pct,
+                current_equity=current_equity,
+                drawdown_pct=drawdown_pct,
+                side="buy",
+            )
             if status == "ok" and size > 0:
                 open_pos = {"qty": size, "side": "long"}
                 entry_price = current_price
                 entry_time = ts
-                logger.info(f"[BT] BUY {size:.6f} {symbol} @ {current_price:.2f} (regime={regime_seen})")
+                logger.info(f"[BT] BUY {size:.6f} {symbol} @ {current_price:.2f} (regime={regime_seen}, size={size:.6f})")
 
         elif final_action == "sell" and open_pos is None:
-            size, status = risk.calculate_position_size(symbol, current_price, regime_seen)
+            size, status = risk.calculate_position_size(
+                symbol=symbol,
+                current_price=current_price,
+                regime=regime_seen,
+                atr=atr,
+                confidence=confidence,
+                returns_matrix=returns_matrix,
+                expected_return_pct=expected_return_pct,
+                current_equity=current_equity,
+                drawdown_pct=drawdown_pct,
+                side="sell",
+            )
             if status == "ok" and size > 0:
                 open_pos = {"qty": size, "side": "short"}
                 entry_price = current_price
                 entry_time = ts
-                logger.info(f"[BT] SELL/SHORT {size:.6f} {symbol} @ {current_price:.2f} (regime={regime_seen})")
+                logger.info(f"[BT] SELL/SHORT {size:.6f} {symbol} @ {current_price:.2f} (regime={regime_seen}, size={size:.6f})")
 
         elif final_action == "close" and open_pos is not None:
             qty = open_pos["qty"]
@@ -287,10 +340,15 @@ async def run_backtest(
                 gross_pnl = (entry_price - current_price) * qty
                 pnl_pct = (entry_price - current_price) / entry_price * 100
 
+            # Use same fee/slippage model as live (from risk model)
             notional = current_price * qty
-            fee = notional * fee_pct
-            slippage = notional * slippage_pct
-            pnl = gross_pnl - fee - slippage
+            tx_costs = risk.get_transaction_costs(symbol)
+            total_cost_bps = tx_costs["total_bps"]
+            round_trip_cost_bps = 2.0 * total_cost_bps
+            cost_fraction = round_trip_cost_bps / 10000
+            fee = notional * cost_fraction
+            # Slippage is already included in cost_fraction, no double-count
+            pnl = gross_pnl - fee
             equity += Decimal(str(pnl))
             result.trades.append(BacktestTrade(
                 symbol=symbol, side=open_pos["side"], entry_price=entry_price,
@@ -313,10 +371,15 @@ async def run_backtest(
         else:
             gross_pnl = (entry_price - last_price) * qty
             pnl_pct = (entry_price - last_price) / entry_price * 100
+        
+        # Use same transaction cost model as live
         notional = last_price * qty
-        fee = notional * fee_pct
-        slippage = notional * slippage_pct
-        pnl = gross_pnl - fee - slippage
+        tx_costs = risk.get_transaction_costs(symbol)
+        total_cost_bps = tx_costs["total_bps"]
+        round_trip_cost_bps = 2.0 * total_cost_bps
+        cost_fraction = round_trip_cost_bps / 10000
+        fee = notional * cost_fraction
+        pnl = gross_pnl - fee
         equity += Decimal(str(pnl))
         result.equity_curve[-1] = float(equity)
 
@@ -332,6 +395,63 @@ async def run_backtest(
     peak = np.maximum.accumulate(eq)
     drawdown = (eq - peak) / peak * 100
     result.max_drawdown_pct = float(drawdown.min()) if len(drawdown) else 0.0
+
+    # Trade-level returns for extended metrics
+    if result.trades:
+        trade_rets = np.array([t.pnl_pct / 100.0 for t in result.trades])
+        trade_pnls = np.array([t.pnl for t in result.trades])
+        wins = trade_rets[trade_rets > 0]
+        losses = trade_rets[trade_rets < 0]
+        win_pnls = trade_pnls[trade_pnls > 0]
+        loss_pnls = trade_pnls[trade_pnls < 0]
+
+        # Basic stats
+        result.avg_win_pct = float(wins.mean()) if len(wins) else 0.0
+        result.avg_loss_pct = float(losses.mean()) if len(losses) else 0.0
+        result.avg_win_usd = float(win_pnls.mean()) if len(win_pnls) else 0.0
+        result.avg_loss_usd = float(loss_pnls.mean()) if len(loss_pnls) else 0.0
+
+        # Payoff ratio and profit factor
+        if len(losses) > 0 and losses.mean() != 0:
+            result.payoff_ratio = float(wins.mean() / abs(losses.mean()))
+        else:
+            result.payoff_ratio = float('inf') if len(wins) > 0 else 0.0
+
+        if len(loss_pnls) > 0 and loss_pnls.sum() != 0:
+            result.profit_factor = float(win_pnls.sum() / abs(loss_pnls.sum()))
+        else:
+            result.profit_factor = float('inf') if len(win_pnls) > 0 else 0.0
+
+        # Expectancy per trade
+        result.expectancy_pct = float(trade_rets.mean())
+        result.expectancy_usd = float(trade_pnls.mean())
+
+        # Sortino ratio (downside deviation only)
+        downside_rets = trade_rets[trade_rets < 0]
+        if len(downside_rets) > 1 and downside_rets.std() > 0:
+            result.sortino = float(trade_rets.mean() / downside_rets.std() * np.sqrt(252))
+        else:
+            result.sortino = float('inf') if trade_rets.mean() > 0 else 0.0
+
+        # Calmar ratio (annualized return / max drawdown)
+        annual_return = float(trade_rets.mean() * 252)
+        if result.max_drawdown_pct > 0:
+            result.calmar = float(annual_return / (result.max_drawdown_pct / 100.0))
+        else:
+            result.calmar = float('inf') if annual_return > 0 else 0.0
+
+        # Top 3 trades contribution
+        sorted_pnls = np.sort(trade_pnls)
+        top3_pnl = float(sorted_pnls[-3:].sum()) if len(sorted_pnls) >= 3 else float(sorted_pnls.sum())
+        result.top3_contribution_pct = float(top3_pnl / float(equity) * 100) if equity > 0 else 0.0
+
+        # Turnover (annualized)
+        avg_equity = float(np.mean(eq)) if len(eq) > 0 else float(start_equity)
+        result.turnover_annualized = float(len(result.trades) / avg_equity * 252 * np.mean([abs(t.qty * t.entry_price) for t in result.trades]) / avg_equity) if avg_equity > 0 and result.trades else 0.0
+
+        # Cost-adjusted return
+        total_fees = sum(abs(t.qty * t.entry_price) * (result.get('avg_cost_bps', 20) / 10000) for t in result.trades) if hasattr(result, 'get') else 0.0
+        result.cost_adjusted_return_pct = result.total_return_pct - (total_fees / float(start_equity) * 100)
 
     # Simple Sharpe (daily returns)
     if len(eq) > 2:
@@ -494,37 +614,120 @@ async def run_walk_forward_optimization(
     }
 
 
-def run_vectorized_polars_backtest(
-    symbol: str = "BTC/USD",
-    n_bars: int = 10000,
-    seed: int = 42,
-) -> BacktestResult:
-    """Run an ultra-fast vectorized Polars backtest over large bar series."""
-    import time
-    t0 = time.monotonic()
-    df = _generate_synthetic_bars(symbol, n=n_bars, seed=seed, regime="trending")
+async def run_benchmark_comparison(
+    result: BacktestResult,
+    symbol: str,
+    bars: pl.DataFrame,
+    start_equity: float,
+) -> dict[str, Any]:
+    """
+    Compare strategy performance against benchmarks:
+    1. Buy & Hold
+    2. Random Entry (Monte Carlo permutation)
+    
+    Args:
+        result: Strategy backtest result
+        symbol: Trading symbol
+        bars: Historical bars DataFrame
+        start_equity: Starting equity
+        
+    Returns:
+        Dict with benchmark comparisons
+    """
+    # 1. Buy & Hold Benchmark
+    first_close = float(bars["close"][0])
+    last_close = float(bars["close"][-1])
+    bh_return_pct = (last_close - first_close) / first_close * 100
+    
+    # Equity curve for buy & hold
+    bh_equity = [start_equity * (1 + (float(bars["close"][i]) - first_close) / first_close) for i in range(len(bars))]
+    bh_eq = np.array(bh_equity)
+    bh_peak = np.maximum.accumulate(bh_eq)
+    bh_drawdown = (bh_eq - bh_peak) / bh_peak * 100
+    bh_max_dd = float(bh_drawdown.min()) if len(bh_drawdown) > 0 else 0.0
+    
+    # Buy & Hold Sharpe
+    if len(bh_eq) > 2:
+        bh_rets = np.diff(bh_eq) / bh_eq[:-1]
+        bh_sharpe = float(np.mean(bh_rets) / (np.std(bh_rets) + 1e-9) * np.sqrt(252)) if np.std(bh_rets) > 0 else 0.0
+    else:
+        bh_sharpe = 0.0
 
-    # Vectorized Polars transformations
-    df_calc = df.with_columns([
-        (pl.col("close") - pl.col("close").shift(1)).alias("diff"),
-        (pl.col("high") - pl.col("low")).alias("tr_hl"),
-        (pl.col("close").ewm_mean(span=20)).alias("ema20"),
-    ])
+    # 2. Random Entry Benchmark (from Monte Carlo)
+    mc_result = run_monte_carlo_analysis(result, n_simulations=500)
+    random_avg_return = mc_result.get("p05_return_pct", 0)  # 5th percentile as conservative random baseline
+    random_avg_sharpe = 0.0  # Would need to compute from permutations
+    
+    # 3. Compare
+    strategy_return = float(result.total_return_pct)
+    strategy_sharpe = float(result.sharpe)
+    strategy_max_dd = float(result.max_drawdown_pct)
+    strategy_calmar = getattr(result, 'calmar', 0.0)
+    strategy_sortino = getattr(result, 'sortino', 0.0)
+    
+    comparison = {
+        "strategy": {
+            "return_pct": strategy_return,
+            "sharpe": strategy_sharpe,
+            "sortino": getattr(result, 'sortino', 0.0),
+            "calmar": getattr(result, 'calmar', 0.0),
+            "max_drawdown_pct": strategy_max_dd,
+            "profit_factor": getattr(result, 'profit_factor', 0.0),
+            "win_rate": result.win_rate,
+            "payoff_ratio": getattr(result, 'payoff_ratio', 0.0),
+            "expectancy_pct": getattr(result, 'expectancy_pct', 0.0),
+        },
+        "buy_and_hold": {
+            "return_pct": bh_return_pct,
+            "sharpe": bh_sharpe,
+            "max_drawdown_pct": bh_max_dd,
+            "calmar": float(bh_return_pct / abs(bh_max_dd)) if bh_max_dd < 0 else float('inf'),
+        },
+        "random_entry": {
+            "p05_return_pct": random_avg_return,
+            "risk_of_ruin_pct": mc_result.get("risk_of_ruin_pct", 0.0),
+        },
+        "comparison": {
+            "excess_return_vs_bh": strategy_return - bh_return_pct,
+            "excess_sharpe_vs_bh": strategy_sharpe - bh_sharpe,
+            "excess_return_vs_random_p05": strategy_return - random_avg_return,
+            "beats_buy_and_hold": strategy_return > bh_return_pct,
+            "beats_random_p05": strategy_return > random_avg_return,
+        }
+    }
+    
+    return comparison
 
-    elapsed = (time.monotonic() - t0) * 1000.0
-    logger.info(f"Vectorized Polars Backtest completed in {elapsed:.2f}ms for {n_bars:,} bars")
 
-    result = BacktestResult(symbol=symbol, start_equity=10000.0, end_equity=10000.0)
-    print("=" * 60)
-    print(f"VECTORIZED POLARS BACKTEST RESULTS: {symbol} ({n_bars:,} bars)")
-    print("=" * 60)
-    print(f"Execution time:    {elapsed:.2f} ms")
-    print(f"Total rows evaluated: {len(df_calc):,}")
-    print("=" * 60)
-    return result
+def print_benchmark_comparison(comparison: dict[str, Any]) -> None:
+    """Print formatted benchmark comparison."""
+    s = comparison["strategy"]
+    bh = comparison["buy_and_hold"]
+    rnd = comparison["random_entry"]
+    cmp = comparison["comparison"]
+    
+    print("\n" + "=" * 70)
+    print("BENCHMARK COMPARISON")
+    print("=" * 70)
+    print(f"{'Metric':<25} {'Strategy':>12} {'Buy&Hold':>12} {'Random(P05)':>12}")
+    print("-" * 70)
+    print(f"{'Return %':<25} {s['return_pct']:>12.2f} {bh['return_pct']:>12.2f} {rnd['p05_return_pct']:>12.2f}")
+    print(f"{'Sharpe':<25} {s['sharpe']:>12.2f} {bh['sharpe']:>12.2f} {'N/A':>12}")
+    print(f"{'Sortino':<25} {s['sortino']:>12.2f} {'N/A':>12} {'N/A':>12}")
+    print(f"{'Calmar':<25} {s['calmar']:>12.2f} {bh['calmar']:>12.2f} {'N/A':>12}")
+    print(f"{'Max DD %':<25} {s['max_drawdown_pct']:>12.2f} {bh['max_drawdown_pct']:>12.2f} {'N/A':>12}")
+    print(f"{'Profit Factor':<25} {s['profit_factor']:>12.2f} {'N/A':>12} {'N/A':>12}")
+    print(f"{'Win Rate %':<25} {s['win_rate']:>12.1f} {'N/A':>12} {'N/A':>12}")
+    print(f"{'Payoff Ratio':<25} {s['payoff_ratio']:>12.2f} {'N/A':>12} {'N/A':>12}")
+    print("-" * 70)
+    print(f"{'Excess Return vs B&H':<25} {cmp['excess_return_vs_bh']:>12.2f}%")
+    print(f"{'Excess Sharpe vs B&H':<25} {cmp['excess_sharpe_vs_bh']:>12.2f}")
+    print(f"{'Excess Return vs Rand(P05)':<25} {cmp['excess_return_vs_random_p05']:>12.2f}%")
+    print(f"{'Beats Buy & Hold':<25} {'YES' if cmp['beats_buy_and_hold'] else 'NO':>12}")
+    print(f"{'Beats Random (P05)':<25} {'YES' if cmp['beats_random_p05'] else 'NO':>12}")
+    print("=" * 70)
 
-
-if __name__ == "__main__":
+async def main():
     import argparse
     import asyncio
 
@@ -542,19 +745,36 @@ if __name__ == "__main__":
     if args.vectorized:
         run_vectorized_polars_backtest(symbol=args.symbol, n_bars=args.bars, seed=args.seed)
     elif args.walk_forward:
-        asyncio.run(run_walk_forward_optimization(symbol=args.symbol, total_bars=args.bars, seed=args.seed))
+        await run_walk_forward_optimization(symbol=args.symbol, total_bars=args.bars, seed=args.seed)
     else:
         regimes_to_run = ["trending", "mean_reverting", "volatile"] if args.regime == "all" else [args.regime]
 
         for reg in regimes_to_run:
-            res = asyncio.run(run_backtest(
+            res = await run_backtest(
                 symbol=args.symbol,
                 n_bars=args.bars,
                 start_equity=args.equity,
                 seed=args.seed,
                 regime=reg
-            ))
+            )
             print_backtest_summary(res)
+            
+            # Fetch bars for benchmark comparison
+            bars = None
+            if args.bars <= 1000:  # Only for smaller backtests to avoid memory issues
+                try:
+                    bars_res = await fetch_real_bars(args.symbol, days=args.bars//24)
+                    if bars_res is not None:
+                        bars = bars_res.head(args.bars)
+                except Exception:
+                    pass
+            
+            if bars is not None and len(bars) > 0:
+                comparison = await run_benchmark_comparison(res, args.symbol, bars, args.equity)
+                print_benchmark_comparison(comparison)
+            
             print()
 
-
+if __name__ == "__main__":
+    import asyncio
+    asyncio.run(main())

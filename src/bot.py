@@ -1033,6 +1033,7 @@ async def process_signal_for_symbol(symbol: str, current_price: float, risk_mana
                     expected_return_pct=expected_return_pct,
                     current_equity=risk_status.get("equity"),
                     drawdown_pct=risk_status.get("drawdown_pct"),
+                    side=signal["action"],  # "buy" or "sell" for market impact
                 )
     
                 if sizing_status != "ok":

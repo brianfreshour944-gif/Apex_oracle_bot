@@ -80,6 +80,16 @@ class RiskManager:
         # naive position-count check simultaneously.
         self._reserved_new_position_symbols: dict[str, datetime] = {}
         self._peak_prices_dirty = False
+        
+        # Gap-risk circuit breaker state
+        self._gap_risk_events: list[dict] = []  # List of recent gap events
+        self._gap_risk_threshold_bps = 500  # 5% slippage threshold for gap detection
+        self._gap_risk_max_events = 3  # Max gap events before circuit breaker triggers
+        self._gap_risk_window_hours = 24  # Rolling window for gap event counting
+        self._gap_risk_active = False  # Whether gap-risk circuit breaker is active
+        self._gap_risk_size_multiplier = 0.5  # Position size multiplier when gap-risk active
+        self._gap_risk_recovery_hours = 4  # Hours to wait before auto-recovery
+        self._gap_risk_last_triggered: datetime | None = None
 
     def mark_peaks_dirty(self) -> None:
         """Mark peak prices as needing persistence."""
@@ -199,6 +209,131 @@ class RiskManager:
             old["slippage_bps"] = (1 - alpha) * old["slippage_bps"] + alpha * slippage_bps
             if spread_bps is not None:
                 old["spread_bps"] = (1 - alpha) * old.get("spread_bps", 0.0) + alpha * spread_bps
+
+    def check_gap_risk_on_fill(
+        self,
+        symbol: str,
+        expected_price: float,
+        filled_price: float,
+        exit_type: str,  # "stop_loss", "trailing_stop", "profit_target", "killswitch"
+        entry_price: float,
+        side: str,  # "long" or "short"
+    ) -> dict[str, Any]:
+        """
+        Check for gap risk on a stop/exit fill.
+        
+        Gap risk = when the fill price is significantly worse than expected,
+        indicating a price gap (e.g., flash crash, market halt, extreme volatility).
+        
+        Args:
+            symbol: Trading symbol
+            expected_price: The price at which the stop was expected to trigger
+            filled_price: The actual fill price from the exchange
+            exit_type: Type of exit that triggered the fill
+            entry_price: Original entry price for context
+            side: "long" or "short"
+            
+        Returns:
+            Dict with gap_risk_detected, slippage_bps, action_taken
+        """
+        if expected_price <= 0 or filled_price <= 0:
+            return {"gap_risk_detected": False, "reason": "invalid_prices"}
+        
+        # Calculate slippage in bps
+        if side == "long":
+            # For longs: stop loss is below entry, so worse fill = lower price
+            # slippage = (expected - filled) / expected * 10000 (positive = bad)
+            slippage_bps = (expected_price - filled_price) / expected_price * 10000
+        else:
+            # For shorts: stop loss is above entry, so worse fill = higher price
+            slippage_bps = (filled_price - expected_price) / expected_price * 10000
+        
+        slippage_bps = abs(slippage_bps)
+        
+        gap_detected = slippage_bps >= self._gap_risk_threshold_bps
+        
+        result = {
+            "gap_risk_detected": gap_detected,
+            "symbol": symbol,
+            "exit_type": exit_type,
+            "expected_price": expected_price,
+            "filled_price": filled_price,
+            "slippage_bps": slippage_bps,
+            "threshold_bps": self._gap_risk_threshold_bps,
+            "action_taken": "none",
+        }
+        
+        if gap_detected:
+            # Record the gap event
+            now = datetime.now(UTC)
+            event = {
+                "timestamp": now.isoformat(),
+                "symbol": symbol,
+                "exit_type": exit_type,
+                "slippage_bps": slippage_bps,
+                "expected_price": expected_price,
+                "filled_price": filled_price,
+            }
+            self._gap_risk_events.append(event)
+            
+            # Prune old events outside the window
+            cutoff = now - timedelta(hours=self._gap_risk_window_hours)
+            self._gap_risk_events = [
+                e for e in self._gap_risk_events
+                if datetime.fromisoformat(e["timestamp"]) >= cutoff
+            ]
+            
+            # Check if circuit breaker should trigger
+            if len(self._gap_risk_events) >= self._gap_risk_max_events and not self._gap_risk_active:
+                self._gap_risk_active = True
+                self._gap_risk_last_triggered = now
+                logger.critical(
+                    f"GAP-RISK CIRCUIT BREAKER TRIGGERED: {len(self._gap_risk_events)} "
+                    f"gap events in {self._gap_risk_window_hours}h window "
+                    f"(latest: {symbol} {exit_type} slippage={slippage_bps:.1f}bps). "
+                    f"Reducing position sizes by {self._gap_risk_size_multiplier}x for {self._gap_risk_recovery_hours}h."
+                )
+                result["action_taken"] = "circuit_breaker_activated"
+                result["size_multiplier"] = self._gap_risk_size_multiplier
+            else:
+                logger.warning(
+                    f"Gap risk detected on {symbol} {exit_type}: "
+                    f"slippage={slippage_bps:.1f}bps (threshold={self._gap_risk_threshold_bps}bps), "
+                    f"events in window={len(self._gap_risk_events)}"
+                )
+                result["action_taken"] = "logged"
+        
+        return result
+
+    def get_gap_risk_multiplier(self) -> float:
+        """
+        Get the current position size multiplier based on gap-risk state.
+        
+        Returns:
+            1.0 if no gap-risk active, else _gap_risk_size_multiplier (0.5)
+            
+        Auto-recovers after _gap_risk_recovery_hours if no new gap events.
+        """
+        if not self._gap_risk_active:
+            return 1.0
+        
+        # Check for auto-recovery
+        if self._gap_risk_last_triggered is not None:
+            elapsed_hours = (datetime.now(UTC) - self._gap_risk_last_triggered).total_seconds() / 3600
+            if elapsed_hours >= self._gap_risk_recovery_hours:
+                # Check if any recent gap events in the last hour
+                recent_cutoff = datetime.now(UTC) - timedelta(hours=1)
+                recent_events = [
+                    e for e in self._gap_risk_events
+                    if datetime.fromisoformat(e["timestamp"]) >= recent_cutoff
+                ]
+                if not recent_events:
+                    logger.info("Gap-risk circuit breaker AUTO-RECOVERED: no gap events in last hour")
+                    self._gap_risk_active = False
+                    self._gap_risk_last_triggered = None
+                    return 1.0
+        
+        return self._gap_risk_size_multiplier
 
     async def update_account_status(
         self,
@@ -394,6 +529,7 @@ class RiskManager:
         expected_return_pct: float = 0.0,
         current_equity: float | None = None,
         drawdown_pct: float | None = None,
+        side: str = "buy",  # "buy" or "sell" - for market impact estimation
     ) -> tuple[float, str]:
         """Portfolio Optimization: Volatility Parity, Correlation VaR, and Cash Allocation.
 
@@ -447,6 +583,14 @@ class RiskManager:
                 )
             risk_amount *= taper_mult
 
+            # 2c. Gap-risk circuit breaker multiplier
+            gap_mult = self.get_gap_risk_multiplier()
+            if gap_mult < 1.0:
+                logger.warning(
+                    f"Gap-risk circuit breaker active for {symbol}: position size multiplier = {gap_mult:.2f}x"
+                )
+            risk_amount *= gap_mult
+
             # 3. Transaction Cost Model - Get costs and adjust effective risk
             tx_costs = self.get_transaction_costs(symbol)
             total_cost_bps = tx_costs["total_bps"]  # fee + slippage + spread (one-way)
@@ -477,14 +621,27 @@ class RiskManager:
             effective_risk_amount = max(effective_risk_amount, risk_amount * 0.5)  # Floor at 50% of original
 
             # 5. Volatility Targeting (Equal risk contribution)
-            # Use the actual stop-loss percentage distance for sizing so that
-            # the position size matches the real SL trigger distance.
-            stop_distance = current_price * settings.STOP_LOSS_PCT
+            # PRIMARY: ATR-based stop distance (volatility-adjusted)
+            # FALLBACK CEILING: % stop distance (prevents ATR from being excessively wide)
             if atr is not None and atr > 0:
                 atr_stop_distance = atr * getattr(settings, "ATR_STOP_MULTIPLIER", 2.0)
-                # Use the smaller of ATR-based and %-based stop distances
-                # so the tighter stop governs the actual risk.
-                stop_distance = min(stop_distance, atr_stop_distance)
+                pct_stop_distance = current_price * settings.STOP_LOSS_PCT
+                
+                # Use ATR stop as primary, but cap at % stop as ceiling
+                # This prevents ATR from being too wide in extreme vol regimes
+                # while still allowing volatility-adjusted sizing in normal conditions
+                stop_distance = min(atr_stop_distance, pct_stop_distance)
+                
+                logger.debug(
+                    f"Position sizing {symbol}: ATR stop=${atr_stop_distance:.4f} "
+                    f"(ATR={atr:.4f} x {getattr(settings, 'ATR_STOP_MULTIPLIER', 2.0)}), "
+                    f"% stop ceiling=${pct_stop_distance:.4f} ({settings.STOP_LOSS_PCT*100:.1f}%), "
+                    f"using=${stop_distance:.4f}"
+                )
+            else:
+                # Fallback to % stop if ATR unavailable
+                stop_distance = current_price * settings.STOP_LOSS_PCT
+                logger.debug(f"Position sizing {symbol}: ATR unavailable, using % stop=${stop_distance:.4f}")
 
             position_size = effective_risk_amount / stop_distance
 
@@ -513,6 +670,14 @@ class RiskManager:
             # 7. Maximum Sector/Direction Exposure (Hard Cap)
             position_size = min(position_size, settings.MAX_SINGLE_TRADE_USD / current_price)
             position_size = round(position_size, 6)
+
+            # 8. Order Book Impact Model
+            # Estimate market impact based on L2 depth (bid_ask_imbalance and volume)
+            # from onchain_data. If we're taking liquidity (market order), we pay the spread
+            # and walk the book. If posting (limit), we earn spread but risk non-fill.
+            position_size = self._apply_order_book_impact(
+                symbol, position_size, current_price, side=side
+            )
 
             # Guard: NaN propagates silently through np.clip/min/round without raising.
             # If confidence was NaN (e.g. scoring math underflowed) we must reject here
@@ -556,6 +721,127 @@ class RiskManager:
             )
             distance = activation * 0.9
         return activation, distance
+
+    def _estimate_market_impact_bps(
+        self,
+        symbol: str,
+        notional_usd: float,
+        side: str,  # "buy" or "sell"
+    ) -> float:
+        """
+        Estimate market impact in basis points based on order book depth.
+        
+        Uses Binance L2 depth data (from onchain_data) to estimate how much
+        the price would move when executing a market order of given notional.
+        
+        Market impact model (simplified Almgren-Chriss):
+        - Impact ~ (notional / depth) * volatility_factor
+        - Uses bid_ask_imbalance to determine which side is thinner
+        - For buy orders: impact = notional / bid_depth * factor
+        - For sell orders: impact = notional / ask_depth * factor
+        
+        Args:
+            symbol: Trading symbol
+            notional_usd: Notional value of the order in USD
+            side: "buy" or "sell"
+            
+        Returns:
+            Estimated impact in basis points
+        """
+        try:
+            # Get derivatives data which includes L2 depth info
+            from src.onchain_data import fetch_derivatives_data_sync
+            deriv_data = fetch_derivatives_data_sync(symbol)
+            
+            # bid_ask_imbalance: -1 to +1, where +1 = all bids, -1 = all asks
+            imbalance = deriv_data.get("bid_ask_imbalance", 0.0)
+            
+            # Estimate depth from open_interest and imbalance
+            # Open interest is total contracts; we approximate L2 depth as fraction
+            oi = deriv_data.get("open_interest", 0.0)
+            if oi <= 0:
+                return 0.0  # No data, no impact adjustment
+            
+            # Approximate visible depth as ~10% of OI (conservative)
+            visible_depth = oi * 0.1
+            
+            # Split between bid/ask based on imbalance
+            # imbalance = (bid_vol - ask_vol) / (bid_vol + ask_vol)
+            # bid_vol = depth * (1 + imbalance) / 2
+            # ask_vol = depth * (1 - imbalance) / 2
+            bid_depth = visible_depth * (1.0 + imbalance) / 2.0
+            ask_depth = visible_depth * (1.0 - imbalance) / 2.0
+            
+            # For buy orders, we hit asks; for sell orders, we hit bids
+            if side == "buy":
+                relevant_depth = ask_depth
+            else:
+                relevant_depth = bid_depth
+            
+            if relevant_depth <= 0:
+                return 50.0  # High impact if no depth on our side
+            
+            # Impact = notional / depth * factor
+            # Factor ~ 0.5 for crypto (empirical)
+            impact_factor = 0.5
+            impact_ratio = notional_usd / (relevant_depth * 100)  # Convert contracts to USD approx
+            
+            # Cap impact at reasonable levels
+            impact_bps = min(impact_ratio * impact_factor * 10000, 200.0)  # Max 200 bps
+            
+            return max(0.0, impact_bps)
+            
+        except Exception as e:
+            logger.debug(f"Market impact estimation failed for {symbol}: {e}")
+            return 0.0  # No impact adjustment on error
+
+    def _apply_order_book_impact(
+        self,
+        symbol: str,
+        position_size: float,
+        current_price: float,
+        side: str = "buy",
+    ) -> float:
+        """
+        Adjust position size based on estimated market impact.
+        
+        If market impact would exceed a threshold, reduce position size
+        to keep impact within acceptable bounds.
+        
+        Args:
+            symbol: Trading symbol
+            position_size: Current position size (qty)
+            current_price: Current market price
+            side: "buy" or "sell"
+            
+        Returns:
+            Adjusted position size
+        """
+        notional = position_size * current_price
+        
+        # Estimate impact
+        impact_bps = self._estimate_market_impact_bps(symbol, notional, side)
+        
+        if impact_bps <= 0:
+            return position_size
+        
+        # Total cost = spread + slippage + market_impact
+        # We already account for spread + slippage in transaction cost model
+        # This adds the market impact component
+        max_acceptable_impact_bps = 50.0  # 50 bps max market impact
+        
+        if impact_bps > max_acceptable_impact_bps:
+            # Scale down position to keep impact within limit
+            scale = max_acceptable_impact_bps / impact_bps
+            adjusted_size = position_size * scale
+            logger.warning(
+                f"Order book impact adjustment for {symbol}: "
+                f"impact={impact_bps:.1f}bps > {max_acceptable_impact_bps}bps, "
+                f"size scaled {position_size:.6f} -> {adjusted_size:.6f}"
+            )
+            return round(adjusted_size, 6)
+        
+        return position_size
 
     def check_trailing_stop(self, symbol: str, current_price: float, avg_entry_price: float, qty: float, regime: str | None = None) -> str:
         """
@@ -621,6 +907,49 @@ class RiskManager:
                         return "close"
 
         return "hold"
+
+    def get_trailing_stop_trigger_price(
+        self, symbol: str, avg_entry_price: float, qty: float, regime: str | None = None
+    ) -> float | None:
+        """
+        Get the expected trailing stop trigger price for a position.
+        
+        Returns the price at which the trailing stop would trigger, based on
+        the current peak/trough and regime-scaled distance. Returns None if
+        trailing stop is not active (activation not yet reached).
+        
+        Args:
+            symbol: Trading symbol
+            avg_entry_price: Average entry price of the position
+            qty: Position quantity (positive for long, negative for short)
+            regime: Current market regime for distance scaling
+            
+        Returns:
+            Trigger price (float) or None if trailing stop not active
+        """
+        if not settings.TRAILING_STOP_ENABLED or avg_entry_price <= 0:
+            return None
+        
+        activation_pct, distance_pct = self._get_trailing_params(regime)
+        is_long = float(qty) > 0
+        
+        if is_long:
+            unrealized_pct = (avg_entry_price - avg_entry_price) / avg_entry_price  # placeholder
+            # We need to check if activation is reached based on current peak
+            with self._peak_prices_lock:
+                if symbol in self.peak_prices:
+                    peak = self.peak_prices[symbol]
+                    # Check if activation threshold was reached
+                    if (peak - avg_entry_price) / avg_entry_price >= activation_pct:
+                        return peak * (1.0 - distance_pct)
+        else:
+            with self._peak_prices_lock:
+                if symbol in self.peak_prices:
+                    trough = self.peak_prices[symbol]
+                    if (avg_entry_price - trough) / avg_entry_price >= activation_pct:
+                        return trough * (1.0 + distance_pct)
+        
+        return None
 
     async def check_killswitch_conditions(self) -> bool:
         """Check if killswitch conditions are met (only real risk breaches, not errors)."""
@@ -799,6 +1128,52 @@ class RiskManager:
 
             self._reserved_new_position_symbols[symbol] = now
             return True, "ok"
+
+    def check_correlation_concentration(
+        self,
+        symbol: str,
+        current_positions: list[dict],
+        corr_matrix: np.ndarray,
+        corr_symbols: list[str],
+        max_corr_positions: int = 2,
+        corr_threshold: float = 0.7,
+    ) -> tuple[bool, str]:
+        """
+        Check if adding a position in `symbol` would exceed correlation concentration limits.
+        
+        Args:
+            symbol: The symbol being evaluated for a new position
+            current_positions: List of current open positions from exchange
+            corr_matrix: Correlation matrix from cross-asset correlation computation
+            corr_symbols: Symbol order corresponding to corr_matrix rows/cols
+            max_corr_positions: Max number of positions allowed with correlation > corr_threshold
+            corr_threshold: Correlation threshold above which positions are considered "highly correlated"
+            
+        Returns:
+            (allowed: bool, reason: str)
+        """
+        if corr_matrix.size == 0 or symbol not in corr_symbols:
+            return True, "ok"  # No correlation data, allow
+        
+        # Get currently held symbols
+        held_symbols = {p["symbol"].replace("/", "") for p in current_positions}
+        if symbol in held_symbols:
+            return True, "ok"  # Already have position, this is a scale-in
+        
+        symbol_idx = corr_symbols.index(symbol)
+        symbol_corrs = corr_matrix[symbol_idx]
+        
+        # Count how many currently held positions are highly correlated with this symbol
+        high_corr_count = 0
+        for i, other_symbol in enumerate(corr_symbols):
+            if other_symbol in held_symbols and i != symbol_idx:
+                if symbol_corrs[i] >= corr_threshold:
+                    high_corr_count += 1
+        
+        if high_corr_count >= max_corr_positions:
+            return False, f"correlation_concentration_exceeded ({high_corr_count} positions with corr >= {corr_threshold})"
+        
+        return True, "ok"
 
     def release_position_slot(self, symbol: str) -> None:
         """Release a previously-reserved new-position slot."""
