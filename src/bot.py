@@ -902,8 +902,43 @@ async def process_signal_for_symbol(symbol: str, current_price: float, risk_mana
                     dashboard.append(f"Reason......... {committee_result.veto_reason}")
                     dashboard.append("==============================")
                     print("\n".join(dashboard), flush=True)
-                    # Update scan results for this symbol
                     _state.latest_scan_results[symbol] = {"score": committee_result.score, "action": "VETO", "price": current_price}
+                    return
+
+                # ADVERARIAL BRAIN VETO — Brain B (execution/risk) + Brain C (validation/anti-overfit)
+                # Don't optimize toward consensus; require each brain's domain to pass
+                adversarial_veto = False
+                veto_reasons = []
+                
+                # Brain B veto: execution cost > expected edge (hard constraint)
+                signal_edge = signal.get("expected_edge_bps", 0)
+                execution_cost = signal.get("execution_cost_bps", 0) + (signal.get("final_edge_bps", 0) - signal_edge)
+                if execution_cost > signal_edge:
+                    adversarial_veto = True
+                    veto_reasons.append(f"Brain B veto: execution_cost ({execution_cost:.1f}bps) > expected_edge ({signal_edge:.1f}bps)")
+                
+                # Brain C veto: statistical validity / anti-overfit
+                if _state.strategy is not None:
+                    try:
+                        validated = _state.strategy.is_regime_validated(signal.get("regime", "neutral"))
+                        if not validated:
+                            adversarial_veto = True
+                            veto_reasons.append("Brain C veto: regime not validated (OOS Sharpe < 0.5 or win_rate < 52%)")
+                    except Exception:
+                        pass  # Fail safe
+                
+                # Brain disagreement check: high disagreement reduces confidence
+                brain_disagreement = signal.get("brain_disagreement", "LOW")
+                if brain_disagreement == "HIGH" and committee_result.score < 0.55:
+                    adversarial_veto = True
+                    veto_reasons.append(f"Brain disagreement HIGH + score {committee_result.score:.2f} < 0.55")
+                
+                if adversarial_veto:
+                    dashboard.append("FINAL.......... NO TRADE")
+                    dashboard.append(f"Reason......... Adversarial veto: {'; '.join(veto_reasons)}")
+                    dashboard.append("==============================")
+                    print("\n".join(dashboard), flush=True)
+                    _state.latest_scan_results[symbol] = {"score": committee_result.score, "action": "VETO_ADVERSARIAL", "price": current_price}
                     return
     
                 if committee_result.action in ["stand_aside", "skip", "hold"]:

@@ -146,9 +146,10 @@ def record_strategy_outcome(regime: str, strategy_name: str, action: str, pnl: f
     # Fall back to "buy" for unexpected values so downstream code is safe.
     effective_action = action if action in ("buy", "sell") else "buy"
 
-    # Reward signal: strategy made money on this trade? (not "did it agree with final action")
-    # This avoids circular logic where the strategy's mock vote is forced to match the action.
-    profitable = pnl > 0
+    # Continuous reward instead of binary (prevents overfitting to small wins)
+    # Scale by return_pct for normalized reward [-1, 1] range
+    reward_score = max(-1.0, min(1.0, return_pct / 10.0))
+    profitable = reward_score > 0  # Keep binary for log message only
     
     # Construct votes: each strategy gets a directional vote based on its actual signal
     # at entry time. Since we only know which strategy was SELECTED, we simulate:

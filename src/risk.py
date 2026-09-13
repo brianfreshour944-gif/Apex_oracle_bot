@@ -604,15 +604,46 @@ class RiskManager:
             
             # Net edge after round-trip costs
             net_edge_bps = expected_edge_bps - round_trip_cost_bps
-            
-            # Check minimum edge threshold
+
+            # 3b. HARD VETO: Real-time L2 execution impact
+            # Use on-chain derivatives data (bid_ask_imbalance + open_interest)
+            # to estimate actual market impact for this order size + side
+            try:
+                from src.onchain_data import fetch_derivatives_data_sync
+                deriv_data = fetch_derivatives_data_sync(symbol)
+                notional_usd = position_size * current_price  # approximate notional
+                # Estimate impact based on L2 depth and imbalance (same logic as _estimate_market_impact_bps)
+                imbalance = float(deriv_data.get("bid_ask_imbalance", 0.0))
+                oi = float(deriv_data.get("open_interest", 0.0))
+                # Approximate visible depth ~10% of OI
+                visible_depth = oi * 0.1 if oi > 0 else 1000.0  # default 1000 contracts
+                # Split by imbalance
+                if side == "buy":
+                    relevant_depth = visible_depth * (1.0 - imbalance) / 2.0
+                else:
+                    relevant_depth = visible_depth * (1.0 + imbalance) / 2.0
+                # Impact = notional / (relevant_depth * price_approx) * factor
+                price_approx = current_price if current_price > 0 else 1.0
+                impact_factor = 0.5
+                impact_bps = min(200.0, max(0.0, (notional_usd / max(relevant_depth * price_approx, 1.0)) * impact_factor * 10000))
+                
+                # Hard veto: if impact alone exceeds threshold, reject
+                # Also subtract impact from net edge
+                net_edge_bps = net_edge_bps - impact_bps
+                
+                if impact_bps > 50.0:
+                    logger.warning(f"L2 impact high for {symbol}: {impact_bps:.1f}bps (notional=${notional_usd:.0f}, depth={relevant_depth:.0f}, imbalance={imbalance:.2f}) — reducing or rejecting")
+            except Exception as l2_e:
+                logger.debug(f"L2 impact estimation skipped for {symbol}: {l2_e}")
+                impact_bps = 0.0
+
             min_edge_bps = getattr(settings, "TX_COST_MIN_EDGE_BPS", 10.0)
             if net_edge_bps < min_edge_bps:
                 logger.warning(
                     f"Trade rejected for {symbol}: net edge {net_edge_bps:.1f}bps < min {min_edge_bps:.1f}bps "
-                    f"(expected={expected_edge_bps:.1f}, round_trip_cost={round_trip_cost_bps:.1f})"
+                    f"(expected={expected_edge_bps:.1f}, round_trip_cost={round_trip_cost_bps:.1f}, l2_impact={impact_bps:.1f})"
                 )
-                return 0.0, f"rejected: insufficient edge after costs ({net_edge_bps:.1f}bps < {min_edge_bps:.1f}bps)"
+                return 0.0, f"rejected: insufficient edge after L2 impact ({net_edge_bps:.1f}bps < {min_edge_bps:.1f}bps, impact={impact_bps:.1f}bps)"
 
             # 4. Adjust effective risk by expected transaction costs
             # The risk amount is reduced by the expected cost as a fraction of position

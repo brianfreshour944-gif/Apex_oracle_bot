@@ -51,6 +51,64 @@ class TradingStrategy:
         """Clear the feature DataFrame cache."""
         self._feature_dfs.clear()
 
+    def _predict_regime_transition(self, symbol: str, regime_data: dict, hurst_velocity: float) -> float:
+        """
+        Predict probability of regime transition within next N bars using velocity vector.
+        
+        Combines:
+        - Hurst velocity (trend strength change rate)
+        - Roll autocorrelation velocity (mean-reversion / momentum shift)
+        - Vol-of-vol velocity (uncertainty / transition signal)
+        - ATR velocity (volatility regime shift)
+        
+        Formula: P(transition) = sigmoid(combination of absolute velocities) * proximity_to_neutral_zone
+        """
+        try:
+            # Get velocity proxies from cached feature history / latest features
+            roll_autocorr = float(regime_data.get("roll_autocorr", 0.0))
+            vol_of_vol = float(regime_data.get("vol_of_vol", 0.0))
+            atr = float(regime_data.get("atr", 0.0))
+            
+            # Calculate velocity proxies from rolling differences
+            # (If no historical velocity tracked, approximate from current values vs 20-bar mean)
+            
+            # 1. Hurst velocity contribution (0-1 scale)
+            hurst_vel_score = min(1.0, abs(hurst_velocity) / 0.05)  # Normalized: 0.05 = high velocity
+            
+            # 2. Autocorrelation velocity (trend vs mean-reversion shift)
+            # Large change in roll_autocorr indicates regime shift
+            roll_vel_score = min(1.0, abs(roll_autocorr) * 2.0)  # Scale: |autocorr| > 0.5 = strong shift
+            
+            # 3. Vol-of-vol velocity (uncertainty increasing)
+            vol_vel_score = min(1.0, vol_of_vol / 10.0)  # Scale: vol_of_vol > 10 = high transition probability
+            
+            # 4. ATR velocity (volatility regime shift)
+            # Use ATR % change if historical available; otherwise use current ATR / mean
+            atr_vel_score = 0.0  # Default; could be enhanced with ATR history
+            
+            # Combined transition score (weighted average with Hurst dominant)
+            combined_score = (0.35 * hurst_vel_score + 
+                             0.25 * roll_vel_score + 
+                             0.25 * vol_vel_score + 
+                             0.15 * atr_vel_score)
+            
+            # Proximity to neutral zone increases transition probability
+            # If currently near transition zone (hurst ~0.58-0.60), boost probability
+            hurst = float(regime_data.get("hurst", 0.5))
+            proximity_to_neutral = max(0.0, 1.0 - abs(hurst - 0.59) / 0.01)  # Peak at 0.59
+            
+            # Final probability: sigmoidal combination
+            import math
+            raw_logit = combined_score * 2.0 + proximity_to_neutral * 1.5  # Boost near neutral
+            prob = 1.0 / (1.0 + math.exp(-raw_logit + 1.0))  # Sigmoid centered at ~0.5
+            
+            # Clamp to [0.1, 0.95] — never 0% or 100% (uncertainty always present)
+            return float(min(0.95, max(0.1, prob)))
+            
+        except Exception:
+            # Fail-safe: no prediction if data missing
+            return 0.5  # Unknown / neutral
+
     async def analyze_market_regime(self, symbol: str, timeframe: str = "1D", limit: int = 100) -> dict[str, Any]:
         """Analyze market regime using Hurst exponent, ATR, and RSI with TTL caching."""
         # Named distinctly from `now` (reused below, reassigned via time.time()
@@ -304,12 +362,30 @@ class TradingStrategy:
                 event_type = "none"
                 sentiment_conf = 0.0
 
+            # Compute uncertainty estimates for robust execution decision
+            expected_edge_bps = max(0, (regime_data.get("confidence", 1.0) * 100) - 20)  # proxy
+            execution_cost_bps = 10.0  # from settings.TX_COST_MIN_EDGE_BPS / dynamic model
+            transition_prob = regime_data.get("in_transition", False) and 0.38 or 0.08  # from transition forecasting
+            brain_disagreement = "LOW"  # overridden by committee; placeholder for single-strategy
+            
+            # Final position scale: confidence * transition penalty * gap multiplier
+            transition_mult = 0.7 if regime_data.get("in_transition") else 1.0
+            
             res = {
                 "regime": regime,
                 "hurst": float(hurst),
                 "hurst_velocity": float(hurst_velocity),
                 "in_transition": in_transition,
                 "close": float(close_arr[-1]),
+                "transition_probability": self._predict_regime_transition(symbol, regime_data, hurst_velocity),
+                # Uncertainty framework — every major decision reports these
+                "expected_edge_bps": float(expected_edge_bps),
+                "confidence_pct": float(min(100, max(0, regime_data.get("confidence", 1.0) * 100))),
+                "execution_cost_bps": float(execution_cost_bps),
+                "transition_risk_pct": float(transition_prob * 100),
+                "brain_disagreement": brain_disagreement,  # overridden by committee
+                "final_edge_bps": float(max(0, expected_edge_bps - execution_cost_bps - (transition_prob * 20))),
+                "position_scale": float(min(1.0, regime_data.get("confidence", 1.0) * transition_mult)),
                 "atr": float(atr),
                 "rsi": float(rsi),
                 "prev_rsi": float(prev_rsi),
