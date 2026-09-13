@@ -9,14 +9,11 @@ Cost-adjusted returns, Top trade contribution.
 
 import json
 import os
-from collections import defaultdict
 from datetime import datetime, timedelta
 from typing import Any
 
 import numpy as np
 
-from src.config import settings
-from src.db import Trade, get_db_session
 from src.logging_config import get_logger
 
 logger = get_logger("performance_tracker")

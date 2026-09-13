@@ -362,21 +362,31 @@ class TradingStrategy:
                 event_type = "none"
                 sentiment_conf = 0.0
 
-            # Compute uncertainty estimates for robust execution decision
-            expected_edge_bps = max(0, (regime_data.get("confidence", 1.0) * 100) - 20)  # proxy
-            execution_cost_bps = 10.0  # from settings.TX_COST_MIN_EDGE_BPS / dynamic model
-            transition_prob = regime_data.get("in_transition", False) and 0.38 or 0.08  # from transition forecasting
-            brain_disagreement = "LOW"  # overridden by committee; placeholder for single-strategy
-            
-            # Final position scale: confidence * transition penalty * gap multiplier
-            transition_mult = 0.7 if regime_data.get("in_transition") else 1.0
-            
-            res = {
+            # Build partial regime_data for uncertainty estimates
+            regime_data = {
                 "regime": regime,
                 "hurst": float(hurst),
                 "hurst_velocity": float(hurst_velocity),
                 "in_transition": in_transition,
                 "close": float(close_arr[-1]),
+                "atr": float(atr),
+                "rsi": float(rsi),
+                "prev_rsi": float(prev_rsi),
+                "price_zscore": float(price_zscore),
+                "htf_trend": htf_trend,
+                "confidence": self._calculate_regime_confidence(regime, hurst, atr, rsi),
+            }
+
+            # Compute uncertainty estimates for robust execution decision
+            expected_edge_bps = max(0, (regime_data.get("confidence", 1.0) * 100) - 20)  # proxy
+            execution_cost_bps = 10.0  # from settings.TX_COST_MIN_EDGE_BPS / dynamic model
+            transition_prob = regime_data.get("in_transition", False) and 0.38 or 0.08  # from transition forecasting
+            brain_disagreement = "LOW"  # overridden by committee; placeholder for single-strategy
+
+            # Final position scale: confidence * transition penalty * gap multiplier
+            transition_mult = 0.7 if regime_data.get("in_transition") else 1.0
+
+            res = regime_data | {
                 "transition_probability": self._predict_regime_transition(symbol, regime_data, hurst_velocity),
                 # Uncertainty framework — every major decision reports these
                 "expected_edge_bps": float(expected_edge_bps),
@@ -386,12 +396,6 @@ class TradingStrategy:
                 "brain_disagreement": brain_disagreement,  # overridden by committee
                 "final_edge_bps": float(max(0, expected_edge_bps - execution_cost_bps - (transition_prob * 20))),
                 "position_scale": float(min(1.0, regime_data.get("confidence", 1.0) * transition_mult)),
-                "atr": float(atr),
-                "rsi": float(rsi),
-                "prev_rsi": float(prev_rsi),
-                "price_zscore": float(price_zscore),
-                "htf_trend": htf_trend,
-                "confidence": self._calculate_regime_confidence(regime, hurst, atr, rsi),
                 "funding_rate": funding_rate,
                 "funding_rate_z": funding_rate_z,
                 "open_interest": open_interest,
