@@ -305,8 +305,39 @@ async def main() -> int:
             
         logger.info(f"✅ Candidate SURVIVED! Added {len(all_snapshots)} trades to PPO training buffer.")
         surviving_snapshots.extend(all_snapshots)
-        
-        score = composite_sharpe * 100 + avg_ret
+
+        # 4. Fitness evaluation + hard promotion gate.
+        # Champions are ranked by PENALIZED fitness (complexity/instability/
+        # drawdown/turnover), never raw historical PnL alone. The gate also
+        # enforces minimum sample size and OOS performance floors. Failure
+        # only blocks CHAMPION promotion -- the snapshots above still feed the
+        # PPO training buffer.
+        from src.fitness_evaluation import compute_fitness, promotion_gate
+        returns_arr = np.array(composite_returns)
+        years_of_data = 180 / 365.0
+        annual_turnover_pct = (total_trades / max(len(bars_dict), 1)) / years_of_data
+        candidate_fitness = compute_fitness(
+            oos_return_pct=float(avg_ret),
+            max_drawdown_pct=float(worst_dd),  # negative
+            annual_turnover_pct=float(annual_turnover_pct),
+            n_parameters=len(candidate),
+            return_std=float(np.std(returns_arr)),
+            return_mean=float(np.mean(returns_arr)),
+        )
+        gate_pass, gate_reason = promotion_gate(
+            fitness=candidate_fitness,
+            shadow_sharpe=float(composite_sharpe),
+            shadow_win_rate=composite_wr / 100.0,
+            n_shadow_trades=int(total_trades),
+        )
+        if not gate_pass:
+            logger.info(
+                f"Gen {generation+1}: Promotion gate REJECTED candidate "
+                f"({gate_reason}; fitness={candidate_fitness:.3f})"
+            )
+            continue
+
+        score = candidate_fitness  # rank by penalized fitness, not raw PnL
         if score > champion_score:
             champion_score = score
             current_model = candidate

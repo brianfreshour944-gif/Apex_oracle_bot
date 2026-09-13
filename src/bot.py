@@ -26,7 +26,7 @@ from src.db import init_db
 from src.exchange import AlpacaExchange
 from src.logging_config import get_logger
 from src.population_trainer import get_pbt_trainer
-from src.risk import RiskManager
+from src.risk import RiskManager, apply_uncertainty_scaling
 from src.strategies import TradingStrategy
 from src.telegram_alerts import send_telegram_alert
 
@@ -860,7 +860,16 @@ async def process_signal_for_symbol(symbol: str, current_price: float, risk_mana
             else:
                 # ─── 5-BRAIN ENSEMBLE COMMITTEE EVALUATION ───
                 from src.committee.committee import run_committee
+                from src.committee.models import disagreement_from_entropy
                 committee_result = await run_committee(symbol, current_price, signal)
+
+                # Brain disagreement comes from the committee vote entropy.
+                # strategies.py defaults it to "LOW" as a placeholder -- this
+                # override is what makes the HIGH-disagreement adversarial
+                # veto below actually reachable.
+                signal["brain_disagreement"] = disagreement_from_entropy(
+                    float(getattr(committee_result, "entropy", 0.0) or 0.0)
+                )
     
                 # ─── BUILD REGIME DASHBOARD ───
                 dashboard = []
@@ -1084,7 +1093,23 @@ async def process_signal_for_symbol(symbol: str, current_price: float, risk_mana
                 dashboard.append(f"FINAL.......... EXECUTE {signal['action'].upper()}")
                 dashboard.append("==============================")
                 print("\n".join(dashboard), flush=True)
-                    
+
+                # Uncertainty framework: transition-risk conviction + position-scale cap.
+                # "transition probability ↑ → conviction ↓ → position size ↓"
+                # (apply_uncertainty_scaling is fail-safe: degrades to a no-op on bad input)
+                _pre_uncertainty_qty = position_size
+                position_size, uncertainty_mult = apply_uncertainty_scaling(
+                    position_size,
+                    transition_risk_pct=float(signal.get("transition_risk_pct", 0.0) or 0.0),
+                    position_scale=float(signal.get("position_scale", 1.0) or 1.0),
+                )
+                if uncertainty_mult < 0.999:
+                    logger.info(
+                        f"📉 Uncertainty scaling applied for {symbol}: {uncertainty_mult:.2f}x "
+                        f"(transition_risk={signal.get('transition_risk_pct', 0.0):.0f}%, "
+                        f"position_scale={signal.get('position_scale', 1.0):.2f}) → Qty: {position_size} (was {_pre_uncertainty_qty})"
+                    )
+
                 # Apply Regime Switch Multiplier if buying
                 if signal["action"] == "buy":
                     multiplier = regime_flag.get("oracle_multiplier", 1.0)

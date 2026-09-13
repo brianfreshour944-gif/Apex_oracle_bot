@@ -36,9 +36,11 @@ def compute_fitness(
     """
     # Base expectancy (annualized, from walk-forward windows)
     expectancy = oos_return_pct
-    
-    # Drawdown penalty (non-linear: worse past -10% gets heavier)
-    dd_penalty = max(0.0, (max_drawdown_pct - max_acceptable_dd) / 100.0) * drawdown_weight * abs(oos_return_pct)
+
+    # Drawdown penalty (non-linear: worse past max_acceptable_dd gets heavier).
+    # max_drawdown_pct is NEGATIVE (e.g. -20.0). A drawdown deeper than the
+    # acceptable floor (-15 default) must penalize: (acceptable - actual) > 0.
+    dd_penalty = max(0.0, (max_acceptable_dd - max_drawdown_pct) / 100.0) * drawdown_weight * abs(oos_return_pct)
     
     # Turnover penalty (high turnover = high cost, high risk of edge decay)
     turnover_penalty = max(0.0, annual_turnover_pct - max_acceptable_turnover) / 100.0 * turnover_weight * abs(oos_return_pct)

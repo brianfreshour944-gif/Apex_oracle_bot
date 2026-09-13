@@ -25,8 +25,7 @@ DEFAULT_TX_COSTS = {
 # Regime -> (activation_multiplier, distance_multiplier) for check_trailing_stop.
 # Unrecognized/None regime always maps to (1.0, 1.0) -- exact match to the
 # static (unscaled) behavior. Starting values, easy to tune once observed.
-_TRAILING_REGIME_MULTIPLIERS = {
-    "high_volatility": (1.5, 1.5),  # wider both ways -- avoid noise-driven stopouts
+_TRAILING_REGIME_MULTIPLIERS = {    "high_volatility": (1.5, 1.5),  # wider both ways -- avoid noise-driven stopouts
     "low_volatility":  (0.6, 0.6),  # tighter -- capture smaller moves when noise is low
     "trending":        (1.0, 1.3),  # let winners run further, same entry bar
     "bull":            (1.0, 1.3),
@@ -43,6 +42,53 @@ _TRAILING_REGIME_MULTIPLIERS = {
 # floor() (not ceil()) so this has a real effect even at small MAX_OPEN_POSITIONS
 # values like the current default of 3 -- ceil(3*0.67)=3 (no-op), floor=2.
 _MAX_SAME_REGIME_FRACTION = 0.67
+
+
+def apply_uncertainty_scaling(
+    position_size: float,
+    transition_risk_pct: float,
+    position_scale: float,
+) -> tuple[float, float]:
+    """Scale position size down under regime-transition risk and low conviction.
+
+    Wires the strategy layer's uncertainty metrics (previously computed but
+    never consumed) into sizing, per the hierarchical-adaptive design:
+    "transition probability ↑ → conviction ↓ → position size ↓".
+
+    - transition_risk_pct (0-100): P(regime transition) from the strategy
+      layer. Conviction multiplier = 1 - risk/100, floored at 0.5 so extreme
+      transition risk halves the size instead of zeroing it.
+    - position_scale (0-1): confidence × transition multiplier produced by
+      strategies.analyze_market_regime. Acts as a hard cap on the
+      pre-uncertainty size (floored at 0.25x) so a low-confidence signal can
+      never be sized at full risk. confidence is NOT double-counted here as a
+      multiplier because calculate_position_size already applies it via
+      conf_weight -- it only acts as a ceiling.
+
+    Returns (adjusted_size, combined_multiplier). multiplier is the ratio
+    adjusted/original (1.0 = unchanged) for logging. Any invalid input
+    degrades to a no-op.
+    """
+    try:
+        if not position_size or position_size <= 0:
+            return position_size, 1.0
+        risk = float(transition_risk_pct) if transition_risk_pct is not None else 0.0
+        if not (risk == risk):  # NaN guard
+            risk = 0.0
+        risk = min(max(risk, 0.0), 100.0)
+        conviction_mult = max(0.5, 1.0 - risk / 100.0)
+
+        scale = float(position_scale) if position_scale is not None else 1.0
+        if not (scale == scale):  # NaN guard
+            scale = 1.0
+        scale_cap_mult = min(max(scale, 0.0), 1.0)
+        if scale_cap_mult <= 0.0:
+            scale_cap_mult = 0.25
+        adjusted = min(position_size * conviction_mult, position_size * scale_cap_mult)
+        return adjusted, adjusted / position_size
+    except Exception:
+        return position_size, 1.0
+
 
 class RiskManager:
     """Modern risk management with position sizing and drawdown protection."""
@@ -304,6 +350,31 @@ class RiskManager:
                 result["action_taken"] = "logged"
         
         return result
+
+    def calibrate_impact_factor(self, symbol: str, predicted_impact_bps: float, actual_slippage_bps: float) -> None:
+        """Calibrate L2 impact model using actual fill vs predicted.
+        
+        If actual > predicted, increase impact_factor; if actual < predicted, decrease.
+        Uses EMA with alpha=0.1 for stability.
+        """
+        try:
+            # Estimate current impact_factor from predictions
+            current_factor = 0.5  # default
+            # Simple calibration: adjust factor based on error ratio
+            error_ratio = actual_slippage_bps / max(predicted_impact_bps, 1.0)
+            calibrated_factor = current_factor * (0.9 + 0.1 * error_ratio)  # Slow adaptation
+            
+            # Store for future estimates (could add to self._realized_tx_costs or new dict)
+            if not hasattr(self, '_calibrated_impact_factors'):
+                self._calibrated_impact_factors = {}
+            self._calibrated_impact_factors[symbol] = max(0.1, min(2.0, calibrated_factor))
+            
+            if error_ratio > 1.5:
+                logger.warning(f"L2 impact calibration: {symbol} actual {actual_slippage_bps:.1f}bps >> predicted {predicted_impact_bps:.1f}bps (factor->{calibrated_factor:.2f})")
+            elif error_ratio < 0.5:
+                logger.info(f"L2 impact calibration: {symbol} actual {actual_slippage_bps:.1f}bps << predicted {predicted_impact_bps:.1f}bps (factor->{calibrated_factor:.2f})")
+        except Exception as e:
+            logger.debug(f"L2 calibration failed for {symbol}: {e}")
 
     def get_gap_risk_multiplier(self) -> float:
         """
@@ -605,46 +676,6 @@ class RiskManager:
             # Net edge after round-trip costs
             net_edge_bps = expected_edge_bps - round_trip_cost_bps
 
-            # 3b. HARD VETO: Real-time L2 execution impact
-            # Use on-chain derivatives data (bid_ask_imbalance + open_interest)
-            # to estimate actual market impact for this order size + side
-            try:
-                from src.onchain_data import fetch_derivatives_data_sync
-                deriv_data = fetch_derivatives_data_sync(symbol)
-                notional_usd = position_size * current_price  # approximate notional
-                # Estimate impact based on L2 depth and imbalance (same logic as _estimate_market_impact_bps)
-                imbalance = float(deriv_data.get("bid_ask_imbalance", 0.0))
-                oi = float(deriv_data.get("open_interest", 0.0))
-                # Approximate visible depth ~10% of OI
-                visible_depth = oi * 0.1 if oi > 0 else 1000.0  # default 1000 contracts
-                # Split by imbalance
-                if side == "buy":
-                    relevant_depth = visible_depth * (1.0 - imbalance) / 2.0
-                else:
-                    relevant_depth = visible_depth * (1.0 + imbalance) / 2.0
-                # Impact = notional / (relevant_depth * price_approx) * factor
-                price_approx = current_price if current_price > 0 else 1.0
-                impact_factor = 0.5
-                impact_bps = min(200.0, max(0.0, (notional_usd / max(relevant_depth * price_approx, 1.0)) * impact_factor * 10000))
-                
-                # Hard veto: if impact alone exceeds threshold, reject
-                # Also subtract impact from net edge
-                net_edge_bps = net_edge_bps - impact_bps
-                
-                if impact_bps > 50.0:
-                    logger.warning(f"L2 impact high for {symbol}: {impact_bps:.1f}bps (notional=${notional_usd:.0f}, depth={relevant_depth:.0f}, imbalance={imbalance:.2f}) — reducing or rejecting")
-            except Exception as l2_e:
-                logger.debug(f"L2 impact estimation skipped for {symbol}: {l2_e}")
-                impact_bps = 0.0
-
-            min_edge_bps = getattr(settings, "TX_COST_MIN_EDGE_BPS", 10.0)
-            if net_edge_bps < min_edge_bps:
-                logger.warning(
-                    f"Trade rejected for {symbol}: net edge {net_edge_bps:.1f}bps < min {min_edge_bps:.1f}bps "
-                    f"(expected={expected_edge_bps:.1f}, round_trip_cost={round_trip_cost_bps:.1f}, l2_impact={impact_bps:.1f})"
-                )
-                return 0.0, f"rejected: insufficient edge after L2 impact ({net_edge_bps:.1f}bps < {min_edge_bps:.1f}bps, impact={impact_bps:.1f}bps)"
-
             # 4. Adjust effective risk by expected transaction costs
             # The risk amount is reduced by the expected cost as a fraction of position
             cost_fraction = round_trip_cost_bps / 10000  # Convert bps to fraction
@@ -675,6 +706,51 @@ class RiskManager:
                 logger.debug(f"Position sizing {symbol}: ATR unavailable, using % stop=${stop_distance:.4f}")
 
             position_size = effective_risk_amount / stop_distance
+
+            # 5b. HARD VETO: Real-time L2 execution impact
+            # Use on-chain derivatives data (bid_ask_imbalance + open_interest)
+            # to estimate actual market impact for this order size + side.
+            # Must run AFTER the provisional position_size exists (the notional
+            # drives the impact estimate). It used to sit before sizing and
+            # raised UnboundLocalError on every call -- swallowed by the except
+            # below, silently disabling the veto entirely.
+            impact_bps = 0.0
+            try:
+                from src.onchain_data import fetch_derivatives_data_sync
+                deriv_data = fetch_derivatives_data_sync(symbol)
+                notional_usd = position_size * current_price  # approximate notional
+                # Estimate impact based on L2 depth and imbalance (same logic as _estimate_market_impact_bps)
+                imbalance = float(deriv_data.get("bid_ask_imbalance", 0.0))
+                oi = float(deriv_data.get("open_interest", 0.0))
+                # Approximate visible depth ~10% of OI
+                visible_depth = oi * 0.1 if oi > 0 else 1000.0  # default 1000 contracts
+                # Split by imbalance
+                if side == "buy":
+                    relevant_depth = visible_depth * (1.0 - imbalance) / 2.0
+                else:
+                    relevant_depth = visible_depth * (1.0 + imbalance) / 2.0
+                # Impact = notional / (relevant_depth * price_approx) * factor
+                price_approx = current_price if current_price > 0 else 1.0
+                impact_factor = 0.5
+                impact_bps = min(200.0, max(0.0, (notional_usd / max(relevant_depth * price_approx, 1.0)) * impact_factor * 10000))
+
+                # Hard veto: if impact alone exceeds threshold, reject
+                # Also subtract impact from net edge
+                net_edge_bps = net_edge_bps - impact_bps
+
+                if impact_bps > 50.0:
+                    logger.warning(f"L2 impact high for {symbol}: {impact_bps:.1f}bps (notional=${notional_usd:.0f}, depth={relevant_depth:.0f}, imbalance={imbalance:.2f}) — reducing or rejecting")
+            except Exception as l2_e:
+                logger.debug(f"L2 impact estimation skipped for {symbol}: {l2_e}")
+                impact_bps = 0.0
+
+            min_edge_bps = getattr(settings, "TX_COST_MIN_EDGE_BPS", 10.0)
+            if net_edge_bps < min_edge_bps:
+                logger.warning(
+                    f"Trade rejected for {symbol}: net edge {net_edge_bps:.1f}bps < min {min_edge_bps:.1f}bps "
+                    f"(expected={expected_edge_bps:.1f}, round_trip_cost={round_trip_cost_bps:.1f}, l2_impact={impact_bps:.1f})"
+                )
+                return 0.0, f"rejected: insufficient edge after L2 impact ({net_edge_bps:.1f}bps < {min_edge_bps:.1f}bps, impact={impact_bps:.1f}bps)"
 
             # 6. Correlation Matrix & Portfolio VaR
             if returns_matrix and len(returns_matrix) > 1:

@@ -25,7 +25,7 @@ from .adaptive_meta import AdaptiveMetaLearner
 from .decision_gate import check_decision_source_gate
 from .decision_transformer import run_decision_transformer
 from .llm_brain import llm_brain
-from .models import BrainVote, CommitteeResult
+from .models import BrainVote, CommitteeResult, calculate_vote_entropy, disagreement_from_entropy
 from .momentum_brain import momentum_brain
 from .quant_brain import quant_brain
 from .rl_meta import RLMetaLearner
@@ -159,24 +159,6 @@ REGIME_WEIGHT_MATRIX = {
         "llm": 0.10
     }
 }
-
-def calculate_vote_entropy(votes: list[BrainVote]) -> float:
-    """Calculates Shannon Entropy across brain actions to measure consensus conflict."""
-    actions = [v.action for v in votes if v.action not in ["stand_aside", "skip"]]
-    if not actions:
-        return 0.0
-    
-    counts = defaultdict(int)
-    for a in actions:
-        counts[a] += 1
-        
-    entropy = 0.0
-    total = len(actions)
-    for count in counts.values():
-        p = count / total
-        entropy -= p * math.log2(p)
-        
-    return entropy
 
 def calculate_confidence_size_multiplier(score: float, entropy: float, threshold: float) -> float:
     """Calculates dynamic position sizing multiplier based on committee conviction score.
