@@ -11,6 +11,14 @@ services:
       # bind mount resolves against the ephemeral per-deploy /artifacts dir,
       # which would wipe the trade DB / crash-recovery state on every redeploy.
       - bot_data:/app/data
+      # Persist the OOD discriminator's hourly-retrained weights across
+      # container restarts. Must mount at /app/models/ood ONLY (not
+      # /app/models), otherwise this volume would shadow the baked-in
+      # transformer weights at /app/models/grok_gqa_v9_best.pth that are
+      # loaded at startup. OOD_DIR in src/ood_discriminator.py resolves to
+      # this exact path; save() calls os.makedirs(exist_ok=True) so a fresh
+      # volume is created before the first torch.save.
+      - bot_models:/app/models/ood
     # `expose` (not `ports`): Coolify's Traefik proxy routes the configured
     # FQDN to this container. Publishing a fixed host port (8000:8000) collides
     # with the previous deployment's container and any other app on the host.
@@ -33,3 +41,4 @@ services:
 
 volumes:
   bot_data:
+  bot_models:

@@ -4,7 +4,7 @@ import asyncio
 import math
 import threading
 import time
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any, Dict, Optional
 
 import numpy as np
@@ -460,10 +460,36 @@ class RiskManager:
                     "action": "liquidate_all"
                 }
 
+            # Drawdown killswitch recovery -- previously missing entirely.
+            # The flag was permanent for a max-drawdown breach: the only clear
+            # path was the daily-loss reset just below, which requires
+            # "daily_loss_limit" in the reason string, so a drawdown breach
+            # block ALL new entries and force-flattened the book forever (the
+            # class docstring *claimed* an equity-recovery clear existed, but no
+            # code implemented it). A restart did not help either: bot.py
+            # restores peak_equity from bot_state.json and the same breach
+            # re-computes on the first status update.
+            # Clear once equity has recovered to at least half the drawdown
+            # budget (e.g. -5% when MAX_DRAWDOWN_STOP is -10%). The halfway line
+            # is deliberate hysteresis -- clearing exactly on the threshold
+            # would let equity hovering at the limit flap the killswitch on and
+            # off every cycle, and every flap liquidates the book. Liquidation
+            # still happens at the breach itself; this only decides when it is
+            # safe to start trading again.
+            if self.killswitch_active and "max_drawdown" in self._killswitch_reason:
+                recovery_line = settings.MAX_DRAWDOWN_STOP / 2.0
+                if math.isfinite(drawdown_pct) and drawdown_pct >= recovery_line:
+                    logger.critical(
+                        f"Killswitch cleared: drawdown recovered to {drawdown_pct:.2f}% "
+                        f"(recovery line {recovery_line:.2f}%, limit {settings.MAX_DRAWDOWN_STOP:.2f}%) "
+                        "-- new entries re-enabled."
+                    )
+                    self.killswitch_active = False
+                    self._killswitch_reason = ""
+
             # Reset daily PnL if new day -- also clear the daily-loss
             # killswitch since the loss counter resets at the calendar day
-            # boundary. The drawdown killswitch is cleared below only when
-            # equity has actually recovered.
+            # boundary.
             now = datetime.now(UTC)
             if now.day != self.last_check_time.day:
                 async with self._equity_lock:

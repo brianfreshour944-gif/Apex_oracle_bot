@@ -10,6 +10,8 @@ import gymnasium as gym
 import numpy as np
 from gymnasium import spaces
 
+from .regime_utils import normalize_regime
+
 BRAINS = ["transformer", "quant", "momentum", "sentinel", "llm"]
 REGIMES = ["trending", "mean_reverting", "volatile", "choppy", "breakout", "default"]
 

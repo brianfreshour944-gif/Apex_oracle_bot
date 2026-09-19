@@ -28,7 +28,14 @@ from src.logging_config import get_logger
 logger = get_logger("ood_discriminator")
 
 # Paths
-OOD_DIR = os.path.join(os.path.dirname(__file__), '..', '..', 'models', 'ood')
+# NOTE: one '..' too many here used to resolve this OUTSIDE the project
+# (src/ood_discriminator.py -> <repo>/../models/ood = /models/ood in the
+# container), so the discriminator never found a trained model, _is_trained
+# stayed False and check_ood_and_override() silently no-op'd forever. It also
+# meant save() wrote the trained model outside the repo/image. This must stay
+# in sync with the other relative model paths in src/config.py
+# (TRANSFORMER_MODEL_PATH = "models/grok_gqa_v9_best.pth" etc.).
+OOD_DIR = os.path.join(os.path.dirname(__file__), '..', 'models', 'ood')
 OOD_MODEL_PATH = os.path.join(OOD_DIR, 'ood_discriminator.pth')
 OOD_CONFIG_PATH = os.path.join(OOD_DIR, 'ood_discriminator_config.json')
 

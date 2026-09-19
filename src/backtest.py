@@ -8,6 +8,7 @@ This is empirical validation of the deployed strategy - not a placeholder.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import datetime
 from decimal import Decimal
 from typing import Any
 
@@ -738,12 +739,27 @@ async def main():
     parser.add_argument("--seed", type=int, default=7, help="Random seed for synthetic data generation (default: 7)")
     parser.add_argument("--regime", type=str, choices=["all", "trending", "mean_reverting", "volatile"], default="all", help="Market regime to simulate")
     parser.add_argument("--walk-forward", action="store_true", help="Run walk-forward optimization (In-Sample / Out-of-Sample split)")
-    parser.add_argument("--vectorized", action="store_true", help="Run ultra-fast vectorized Polars backtest")
+    parser.add_argument(
+        "--vectorized", action="store_true",
+        help="Reserved: run an ultra-fast vectorized Polars backtest. "
+        "Not implemented in this release -- see the RuntimeError below.",
+    )
 
     args = parser.parse_args()
 
     if args.vectorized:
-        run_vectorized_polars_backtest(symbol=args.symbol, n_bars=args.bars, seed=args.seed)
+        # `run_vectorized_polars_backtest` was never defined (the function does
+        # not exist anywhere in the repo), so `python -m src.backtest --vectorized`
+        # used to crash with an opaque `NameError: name 'run_vectorized_polars_backtest'
+        # is not defined`. A half-implemented "vectorized" engine is risky to ship here
+        # because this module is the *validation* tool -- wrong numbers would give false
+        # confidence in the live strategy. Fail loudly and point at the working path.
+        raise RuntimeError(
+            "--vectorized is not implemented in this release "
+            "(run_vectorized_polars_backtest does not exist). The full strategy "
+            "-- committee + risk + simulated fills -- is already exercised by the "
+            "regular `run_backtest` path; run without --vectorized to use it."
+        )
     elif args.walk_forward:
         await run_walk_forward_optimization(symbol=args.symbol, total_bars=args.bars, seed=args.seed)
     else:

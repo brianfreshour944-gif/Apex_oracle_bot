@@ -47,3 +47,28 @@ def test_is_rl_regime_helper():
     assert is_rl_regime("default")
     assert not is_rl_regime("bull")
     assert not is_rl_regime("uptrend")
+
+
+# ── Consumers must actually have the helper bound ─────────────────────────────
+# Regression: rl_meta._build_obs() and rl_env's state builder both called
+# normalize_regime() without importing it (the M1 normalization fix added the
+# call but not the import), so building the RL observation raised NameError and
+# the PPO meta-learner silently fell back instead of normalizing DT-8 regimes.
+# Found via ruff F821.
+
+def test_rl_meta_has_normalize_regime_bound():
+    import pytest
+
+    pytest.importorskip("numpy", reason="rl_meta imports numpy")
+    from src.committee import rl_meta
+
+    assert rl_meta.normalize_regime is normalize_regime
+
+
+def test_rl_env_has_normalize_regime_bound():
+    import pytest
+
+    pytest.importorskip("gymnasium", reason="rl_env imports gymnasium")
+    from src.committee import rl_env
+
+    assert rl_env.normalize_regime is normalize_regime

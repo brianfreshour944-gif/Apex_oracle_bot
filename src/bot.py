@@ -537,6 +537,15 @@ class BotState:
 # Global state instance (single instance for the process)
 _state = BotState()
 
+# Score floor for the HIGH-disagreement adversarial veto in
+# process_signal_for_symbol(): genuine directional disagreement paired with a
+# weak conviction score (< this) is rejected. Named (it was a bare 0.55
+# literal) so the gate is greppable and tunable, and it applies to the
+# DIRECTIONAL disagreement level -- see
+# src/committee/models.py:calculate_directional_entropy for why abstentions
+# must not count as disagreement here.
+ADVERSARIAL_SCORE_FLOOR = 0.55
+
 # Paths for config files
 _REGIME_FLAG_PATH = "data/regime_flag.txt"
 _BANNED_SYMBOLS_PATH = _os.path.join(_os.path.dirname(__file__), '..', 'data', 'banned_symbols.json')
@@ -860,16 +869,32 @@ async def process_signal_for_symbol(symbol: str, current_price: float, risk_mana
             else:
                 # ─── 5-BRAIN ENSEMBLE COMMITTEE EVALUATION ───
                 from src.committee.committee import run_committee
-                from src.committee.models import disagreement_from_entropy
+                from src.committee.models import (
+                    calculate_directional_entropy,
+                    disagreement_from_entropy,
+                )
                 committee_result = await run_committee(symbol, current_price, signal)
 
                 # Brain disagreement comes from the committee vote entropy.
                 # strategies.py defaults it to "LOW" as a placeholder -- this
                 # override is what makes the HIGH-disagreement adversarial
                 # veto below actually reachable.
-                signal["brain_disagreement"] = disagreement_from_entropy(
-                    float(getattr(committee_result, "entropy", 0.0) or 0.0)
+                #
+                # It MUST use the DIRECTIONAL entropy (buy/sell votes only),
+                # NOT committee_result.entropy. That value counts HOLD votes as
+                # disagreement, while the committee score the veto compares it
+                # against excludes HOLD from its numerator but still counts the
+                # weight in its denominator -- mixing the two made the veto
+                # self-locking (1 directional vote + 3 HOLDs = entropy 0.811
+                # "HIGH" with a diluted ~0.23 score -> rejected every symbol
+                # every cycle). See calculate_directional_entropy()'s docstring.
+                # committee_result.entropy itself is unchanged: the sizing
+                # multiplier, Prometheus metrics and the OOD/decision-transformer
+                # state vectors still consume it and expect the full range.
+                directional_entropy = calculate_directional_entropy(
+                    getattr(committee_result, "votes", None) or []
                 )
+                signal["brain_disagreement"] = disagreement_from_entropy(directional_entropy)
     
                 # ─── BUILD REGIME DASHBOARD ───
                 dashboard = []
@@ -904,6 +929,11 @@ async def process_signal_for_symbol(symbol: str, current_price: float, risk_mana
                     committee_action = "PASS"
                      
                 dashboard.append(f"Committee...... {committee_action}")
+                dashboard.append(
+                    f"Disagreement... {signal['brain_disagreement']} "
+                    f"(directional entropy {directional_entropy:.2f}, score {committee_result.score:.2f}, "
+                    f"veto floor {ADVERSARIAL_SCORE_FLOOR:.2f})"
+                )
                 dashboard.append("")
     
                 if committee_result.vetoed:
@@ -926,21 +956,50 @@ async def process_signal_for_symbol(symbol: str, current_price: float, risk_mana
                     adversarial_veto = True
                     veto_reasons.append(f"Brain B veto: execution_cost ({execution_cost:.1f}bps) > expected_edge ({signal_edge:.1f}bps)")
                 
-                # Brain C veto: statistical validity / anti-overfit
-                if _state.strategy is not None:
-                    try:
-                        validated = _state.strategy.is_regime_validated(signal.get("regime", "neutral"))
-                        if not validated:
+                # Brain C veto: statistical validity / anti-overfit.
+                # This used to call _state.strategy.is_regime_validated(...) -- a
+                # method that only exists on AdaptiveMetaLearner. TradingStrategy
+                # has no such attribute, so EVERY evaluation raised
+                # AttributeError and the bare `except: pass` swallowed it: the
+                # gate was dead code disguised as a fail-safe. It is now wired to
+                # the real learner (the same singleton the decision gate uses),
+                # and it only vetoes once that regime has enough realized
+                # outcomes to be judged. "No validation data yet" is not evidence
+                # of overfitting, and vetoing on it would block every trade
+                # forever -- the learner legitimately starts at 0 validated
+                # regimes (see the "Insufficient regime samples: 0 < 10" gate
+                # reason in the logs).
+                try:
+                    from src.committee.adaptive_meta import VALIDATION_MIN_TRADES
+                    from src.committee.committee import get_meta_learner
+
+                    learner = get_meta_learner()
+                    if learner is not None:
+                        regime_for_gate = signal.get("regime", "neutral")
+                        gate_metrics = learner.get_regime_validation_metrics(regime_for_gate) or {}
+                        n_trades = int(gate_metrics.get("n_trades", 0) or 0)
+                        if n_trades >= VALIDATION_MIN_TRADES and not gate_metrics.get("validated", False):
                             adversarial_veto = True
-                            veto_reasons.append("Brain C veto: regime not validated (OOS Sharpe < 0.5 or win_rate < 52%)")
-                    except Exception:
-                        pass  # Fail safe
+                            veto_reasons.append(
+                                f"Brain C veto: regime '{regime_for_gate}' not validated (OOS Sharpe "
+                                f"{gate_metrics.get('sharpe', 0.0):.2f} < 0.5 or win rate "
+                                f"{gate_metrics.get('win_rate', 0.0):.2f} < 52%, n={n_trades})"
+                            )
+                except Exception as brain_c_err:
+                    logger.debug(f"Brain C validation gate unavailable (non-fatal): {brain_c_err}")
                 
-                # Brain disagreement check: high disagreement reduces confidence
+                # Brain disagreement check: genuine directional conflict paired
+                # with a weak conviction score. Both sides of this comparison now
+                # cover the same votes (buy/sell), which is what makes the
+                # score floor meaningful -- see the directional entropy comment
+                # above. Abstentions (HOLD/PASS) no longer count as disagreement.
                 brain_disagreement = signal.get("brain_disagreement", "LOW")
-                if brain_disagreement == "HIGH" and committee_result.score < 0.55:
+                if brain_disagreement == "HIGH" and committee_result.score < ADVERSARIAL_SCORE_FLOOR:
                     adversarial_veto = True
-                    veto_reasons.append(f"Brain disagreement HIGH + score {committee_result.score:.2f} < 0.55")
+                    veto_reasons.append(
+                        f"Brain disagreement HIGH (directional) + score "
+                        f"{committee_result.score:.2f} < {ADVERSARIAL_SCORE_FLOOR:.2f}"
+                    )
                 
                 if adversarial_veto:
                     dashboard.append("FINAL.......... NO TRADE")
