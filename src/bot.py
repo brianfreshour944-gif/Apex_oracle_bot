@@ -1096,6 +1096,27 @@ async def process_signal_for_symbol(symbol: str, current_price: float, risk_mana
                     dashboard.append("==============================")
                     print("\n".join(dashboard), flush=True)
                     return
+                if risk_status["status"] == "error":
+                    # Exchange/risk status fetch failed (e.g. circuit breaker
+                    # OPEN, network error, auth failure). Refuse new entries --
+                    # sizing against guessed equity or placing orders through
+                    # a down exchange just generates noise and leaked
+                    # reservations. Existing positions can still exit via
+                    # trailing stops / SL / TP paths that bypass the circuit.
+                    error_msg = risk_status.get("error", "risk_update_failed")
+                    dashboard.append("Risk........... VETO")
+                    dashboard.append("FINAL.......... NO TRADE")
+                    dashboard.append(f"Reason......... Risk update failed: {error_msg}")
+                    dashboard.append("==============================")
+                    print("\n".join(dashboard), flush=True)
+                    _state.latest_scan_results[symbol] = {
+                        "score": committee_result.score,
+                        "action": "VETO_ERROR",
+                        "price": current_price,
+                        "reason": error_msg,
+                    }
+                    return
+
     
                 # Calculate position size
                 # Estimate expected return using committee score, regime, and consensus
@@ -1514,22 +1535,27 @@ async def monitor_killswitch(risk_manager: RiskManager) -> None:
     """Background task to monitor killswitch continuously."""
     while True:
         try:
-            if await risk_manager.check_killswitch_conditions():
+            # Call update_account_status() once and reuse the result for both
+            # the killswitch and exposure-cap checks. Previously this called
+            # check_killswitch_conditions() (which itself calls
+            # update_account_status()) AND then update_account_status() again,
+            # producing 2x the failed network calls and 2x the error log spam
+            # every cycle whenever the circuit breaker was OPEN.
+            status = await risk_manager.update_account_status()
+            if status.get("status") == "killswitch_activated":
                 logger.critical("KILLSWITCH ACTIVATED - Liquidating all positions")
                 await send_telegram_alert("🛑 <b>KILLSWITCH ACTIVATED</b>\nLiquidating all positions immediately.")
                 await risk_manager.liquidate_all_positions()
                 _state._shutdown_requested = True
                 return  # Exit the task, let main loop handle shutdown
 
-            exposure_status = await risk_manager.update_account_status()
-            if exposure_status.get("status") == "exposure_limit_exceeded":
+            if status.get("status") == "exposure_limit_exceeded":
                 logger.warning("Exposure cap breached - reducing")
                 await risk_manager.reduce_exposure_to_cap()
             await asyncio.sleep(settings.KILLSWITCH_CHECK_INTERVAL_SEC)
         except Exception as e:
             logger.error(f"Killswitch monitor error: {e}")
             await asyncio.sleep(settings.KILLSWITCH_CHECK_INTERVAL_SEC)
-
 
 async def run_periodic_analyzer() -> None:
     """Background task to run the analyzer script periodically."""

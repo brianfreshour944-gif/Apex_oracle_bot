@@ -1136,7 +1136,7 @@ class RiskManager:
         if current_exposure is None:
             status = await self.update_account_status()
             if status.get("status") != "risk_ok":
-                return 0.0, status.get("reason", status.get("status", "risk_check_failed"))
+                return 0.0, status.get("reason", status.get("error", status.get("status", "risk_check_failed")))
             current_exposure = status["current_exposure"]
 
         async with self._exposure_lock:
@@ -1146,7 +1146,7 @@ class RiskManager:
             if current_exposure is None:
                 status = await self.update_account_status()
                 if status.get("status") != "risk_ok":
-                    return 0.0, status.get("reason", status.get("status", "risk_check_failed"))
+                    return 0.0, status.get("reason", status.get("error", status.get("status", "risk_check_failed")))
                 current_exposure = status["current_exposure"]
 
             now = datetime.now(UTC)
