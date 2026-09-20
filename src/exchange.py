@@ -135,6 +135,15 @@ class AlpacaExchange:
         # Idempotency cache: client_order_id -> (timestamp, order_info)
         self._order_cache: dict[str, tuple[float, dict[str, Any]]] = {}
         self._order_cache_ttl: float = 300.0  # cache orders for 5 minutes
+        # Duplicate-submission detector: (symbol, side) -> list of recent
+        # submission timestamps. Distinct from the idempotency cache above --
+        # this catches two DIFFERENT client_order_ids for the same
+        # symbol+side arriving within a short window (e.g. a race between
+        # concurrent scan cycles), which the idempotency cache can't detect
+        # since it keys on an already-unique id. Alert-only, does not block
+        # the order (found as a missing alert in ADVERSARIAL_AUDIT_2026-09-20.md).
+        self._recent_order_submissions: dict[tuple[str, str], list[float]] = {}
+        self._duplicate_order_window_sec: float = 10.0
 
     async def load(self) -> None:
         """Initialize the exchange client and verify credentials."""
@@ -557,6 +566,33 @@ class AlpacaExchange:
                         f"returning cached result"
                     )
                     return order_info
+
+        # --- Duplicate-submission detection (distinct symbol+side arriving
+        # close together, e.g. from a concurrent-scan-cycle race) ---
+        # getattr-guarded: some tests construct AlpacaExchange with __init__
+        # patched out, so these attributes may not exist.
+        if not hasattr(self, "_recent_order_submissions"):
+            self._recent_order_submissions = {}
+        if not hasattr(self, "_duplicate_order_window_sec"):
+            self._duplicate_order_window_sec = 10.0
+        now = time.time()
+        dup_key = (symbol, side.lower())
+        recent = [t for t in self._recent_order_submissions.get(dup_key, []) if now - t < self._duplicate_order_window_sec]
+        if recent:
+            logger.warning(
+                f"Possible duplicate order: {symbol} {side} submitted {now - recent[-1]:.1f}s "
+                f"after a prior {symbol} {side} submission (client_order_id={client_order_id})"
+            )
+            try:
+                from src.alerting import get_alerting_engine
+                asyncio.create_task(get_alerting_engine().alert_duplicate_order(
+                    symbol, client_order_id or "none",
+                    f"{len(recent)} prior {side} submission(s) for {symbol} in last {self._duplicate_order_window_sec:.0f}s",
+                ))
+            except Exception as alert_err:
+                logger.debug(f"Duplicate-order alert skipped (non-fatal): {alert_err}")
+        recent.append(now)
+        self._recent_order_submissions[dup_key] = recent[-10:]  # bounded
 
         # Parse enums
         order_side = OrderSide.BUY if side.lower() == "buy" else OrderSide.SELL

@@ -52,6 +52,26 @@ class BacktestResult:
     max_drawdown_pct: float = 0.0
     sharpe: float = 0.0
     regimes_seen: dict[str, int] = field(default_factory=dict)
+    # Cumulative fee+slippage+spread $ actually deducted across all closes
+    # (regular closes + final mark-to-market). Set incrementally by
+    # run_backtest(); used for cost_adjusted_return_pct below, which
+    # previously always computed against a hardcoded 0.0 due to a broken
+    # `hasattr(result, 'get')` check on a dataclass, and then crashed with a
+    # Decimal/float TypeError the moment any trade closed (found + fixed
+    # 2026-09-20 while testing the cost_multiplier addition above -- backtest.py
+    # had zero test coverage before this, so this was never exercised).
+    total_fees_paid: float = 0.0
+    # Return with total_fees_paid added back -- i.e. what the return would
+    # have been at zero transaction cost. total_return_pct itself is already
+    # NET of fees (fee is subtracted from pnl before it hits equity), so this
+    # is the complementary number that makes the cost drag visible:
+    # gross_return_pct - total_return_pct = cost drag as % of equity.
+    gross_return_pct: float = 0.0
+    # The actual bars this run consumed (real or synthetic) -- lets a caller
+    # feed the same bars into run_benchmark_comparison() for a buy-and-hold
+    # comparison without re-fetching/re-generating them. None until set by
+    # run_backtest() below (wired in 2026-09-20).
+    bars_used: Any = None
 
 
 class BacktestExchange:
@@ -207,18 +227,24 @@ async def run_backtest(
     start_equity: float = 10000.0,
     seed: int = 7,
     regime: str = "trending",
-    fee_pct: float = 0.001,       # 0.1% Taker Fee
-    slippage_pct: float = 0.0005, # 0.05% Slippage Buffer
     bars: pl.DataFrame | None = None,  # Real historical bars; if None, uses synthetic data
     use_committee: bool = True,   # If True, run the full 5-brain committee (AI-driven decisions).
                                    # If False, use the raw rule-based strategy signal only.
+    cost_multiplier: float = 1.0,  # Multiplies the round-trip transaction cost
+                                    # (fee+slippage+spread bps from risk.get_transaction_costs)
+                                    # applied on every close. 1.0 = normal costs. Use 2.0/3.0 for
+                                    # a cost-stress test (was previously impossible: the old
+                                    # fee_pct/slippage_pct params here were accepted but never
+                                    # referenced anywhere in the function body -- fixed
+                                    # 2026-09-20, see ADVERSARIAL_AUDIT_2026-09-20.md §7).
 ) -> BacktestResult:
     """Run a full backtest with fee and slippage execution modeling.
 
     This uses the SAME position sizing logic as live trading:
     - calculate_position_size() with ATR stops, regime multipliers, confidence,
       correlation penalties, transaction cost model, gap-risk multiplier, etc.
-    - Fee and slippage from risk model's transaction cost model (not flat %)
+    - Fee and slippage from risk model's transaction cost model (not flat %),
+      scaled by `cost_multiplier` for stress-testing.
 
     If `bars` is provided (real historical OHLCV data), it is used instead of
     synthetic data, and signal["backtest_df"] is populated per-bar so that
@@ -265,6 +291,45 @@ async def run_backtest(
                 "avg_entry_price": entry_price,
                 "side": open_pos["side"],
             }
+
+        # Regime-scaled trailing stop check (RiskManager.check_trailing_stop),
+        # run BEFORE signal generation -- mirrors bot.py's live order exactly
+        # (bot.py checks this first and short-circuits on a hit before ever
+        # calling generate_trading_signal). Previously this backtest loop only
+        # ever exercised strategies.py's separate FIXED-percentage trailing
+        # stop, never the regime-scaled one live trading actually uses, so a
+        # backtest could never validate the P&L contribution of the
+        # regime-scaled version live traders were getting. Fixed 2026-09-20,
+        # see ADVERSARIAL_AUDIT_2026-09-20.md §6.
+        if open_pos is not None:
+            cached_regime_entry = strategy._regime_cache.get(symbol)
+            regime_for_trailing = cached_regime_entry[1].get("regime") if cached_regime_entry else None
+            signed_qty = open_pos["qty"] if open_pos["side"] == "long" else -open_pos["qty"]
+            trailing_action = risk.check_trailing_stop(symbol, current_price, entry_price, signed_qty, regime=regime_for_trailing)
+            if trailing_action == "close":
+                qty = open_pos["qty"]
+                if open_pos["side"] == "long":
+                    gross_pnl = (current_price - entry_price) * qty
+                    pnl_pct = (current_price - entry_price) / entry_price * 100
+                else:
+                    gross_pnl = (entry_price - current_price) * qty
+                    pnl_pct = (entry_price - current_price) / entry_price * 100
+                notional = current_price * qty
+                tx_costs = risk.get_transaction_costs(symbol)
+                round_trip_cost_bps = 2.0 * tx_costs["total_bps"] * cost_multiplier
+                fee = notional * (round_trip_cost_bps / 10000)
+                pnl = gross_pnl - fee
+                result.total_fees_paid += fee
+                equity += Decimal(str(pnl))
+                result.trades.append(BacktestTrade(
+                    symbol=symbol, side=open_pos["side"], entry_price=entry_price,
+                    exit_price=current_price, qty=qty, entry_time=entry_time,
+                    exit_time=ts, pnl=pnl, pnl_pct=pnl_pct, reason="trailing_stop_hit",
+                ))
+                logger.info(f"[BT] CLOSE (regime-scaled trailing stop) {symbol} @ {current_price:.2f} pnl={pnl:.2f} ({pnl_pct:.2f}%)")
+                open_pos = None
+                result.equity_curve.append(float(equity))
+                continue
 
         signal = await strategy.generate_trading_signal(symbol, current_price, position)
 
@@ -345,11 +410,12 @@ async def run_backtest(
             notional = current_price * qty
             tx_costs = risk.get_transaction_costs(symbol)
             total_cost_bps = tx_costs["total_bps"]
-            round_trip_cost_bps = 2.0 * total_cost_bps
+            round_trip_cost_bps = 2.0 * total_cost_bps * cost_multiplier
             cost_fraction = round_trip_cost_bps / 10000
             fee = notional * cost_fraction
             # Slippage is already included in cost_fraction, no double-count
             pnl = gross_pnl - fee
+            result.total_fees_paid += fee
             equity += Decimal(str(pnl))
             result.trades.append(BacktestTrade(
                 symbol=symbol, side=open_pos["side"], entry_price=entry_price,
@@ -377,13 +443,15 @@ async def run_backtest(
         notional = last_price * qty
         tx_costs = risk.get_transaction_costs(symbol)
         total_cost_bps = tx_costs["total_bps"]
-        round_trip_cost_bps = 2.0 * total_cost_bps
+        round_trip_cost_bps = 2.0 * total_cost_bps * cost_multiplier
         cost_fraction = round_trip_cost_bps / 10000
         fee = notional * cost_fraction
         pnl = gross_pnl - fee
+        result.total_fees_paid += fee
         equity += Decimal(str(pnl))
         result.equity_curve[-1] = float(equity)
 
+    result.bars_used = bars
     # Compute metrics
     result.end_equity = float(equity)
     result.total_return_pct = (equity - Decimal(str(start_equity))) / Decimal(str(start_equity)) * 100
@@ -450,9 +518,17 @@ async def run_backtest(
         avg_equity = float(np.mean(eq)) if len(eq) > 0 else float(start_equity)
         result.turnover_annualized = float(len(result.trades) / avg_equity * 252 * np.mean([abs(t.qty * t.entry_price) for t in result.trades]) / avg_equity) if avg_equity > 0 and result.trades else 0.0
 
-        # Cost-adjusted return
-        total_fees = sum(abs(t.qty * t.entry_price) * (result.get('avg_cost_bps', 20) / 10000) for t in result.trades) if hasattr(result, 'get') else 0.0
-        result.cost_adjusted_return_pct = result.total_return_pct - (total_fees / float(start_equity) * 100)
+        # total_return_pct is already net-of-fees (fee is deducted from pnl
+        # before it hits equity, above) -- the previous "cost_adjusted_return_pct"
+        # here was double-subtracting fees from an already-net figure via a
+        # placeholder that (due to a `hasattr(result, 'get')` check that's
+        # always False for a dataclass) evaluated to a hardcoded 0.0 and then
+        # crashed on a Decimal/float TypeError the moment any trade closed --
+        # found + fixed 2026-09-20 (backtest.py had zero test coverage before
+        # this). gross_return_pct is the actually-useful complementary
+        # number: what return would have been at zero transaction cost, using
+        # the real per-trade fees accumulated in total_fees_paid above.
+        result.gross_return_pct = float(result.total_return_pct) + (result.total_fees_paid / float(start_equity) * 100)
 
     # Simple Sharpe (daily returns)
     if len(eq) > 2:

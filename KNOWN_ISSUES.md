@@ -2,17 +2,33 @@
 
 Last updated: 2026-07-26
 
-## Stale replay dataset (data/historical_experiences.jsonl)
+## Stale replay dataset (data/historical_experiences.jsonl) -- UPDATE 2026-09-20
 
-The 2,782-record replay dataset was generated (commit 4fe36ed) using a
-foundation model whose feature_scaler.pkl was fit on the WRONG feature set
-(raw OHLCV prices instead of the 11 institutional features actually used at
-inference time - see commit 2b91681 for the fix). Every tensor_state in that
-dataset was computed with this broken scaler, so the values are corrupted.
+The original corruption (raw-OHLCV scaler, commit 2b91681 fix) is resolved in
+scripts/train_foundation_model.py, which now uses get_active_features().
 
-Action needed: regenerate data/historical_experiences.jsonl by re-running
-scripts/generate_replay_dataset.py before using it for any future fine-tuning
-via scripts/retrain_transformer.py.
+However: the dataset WAS regenerated (commit f30eb2f, 2026-08-16), but that
+same commit introduced scripts/generate_replay_dataset.py's REPLAY_FAST_MODE,
+which defaulted ON at the time. Fast mode fills every record's tensor_state
+with seeded `np.random.RandomState(seed).randn(128)` -- random noise, not
+real feature vectors -- via a monkey-patched transformer_brain. The commit
+message doesn't mention setting REPLAY_FAST_MODE=0, so the currently-committed
+data/historical_experiences.jsonl was very likely generated with noise tensors,
+not the corrected real features.
+
+REPLAY_FAST_MODE's default was flipped to 0 (real model) on 2026-09-20 so this
+can't recur silently. A second scaler-fit-before-split leakage bug was also
+found and fixed the same day in scripts/train_foundation_model.py (StandardScaler
+was fit on the full train+val concatenation before splitting; now fit on train
+only, split per-symbol before concatenation).
+
+Action needed (unchanged, now more urgent): regenerate
+data/historical_experiences.jsonl by re-running
+scripts/generate_replay_dataset.py (now defaults to the real model) before
+using it for any future fine-tuning via scripts/retrain_transformer.py. This
+requires real market data access and was NOT run as part of this fix pass.
+Verify with scan_learning.py that tensor_state values no longer look like
+N(0,1) noise before trusting the regenerated file.
 
 ## Real walk-forward validation is narrow in scope
 

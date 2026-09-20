@@ -3,6 +3,7 @@
 import json
 import logging
 import sys
+import uuid
 from datetime import datetime
 
 import structlog
@@ -90,3 +91,22 @@ def configure_structlog() -> None:
 def get_logger(name: str) -> structlog.BoundLogger:
     """Get a structured logger with the given name."""
     return structlog.get_logger(name)
+
+
+def set_correlation_id(correlation_id: str | None = None) -> str:
+    """Bind a correlation ID into structlog's contextvars so every log line
+    emitted for the rest of this run/request carries it automatically (via
+    the `merge_contextvars` processor already in configure_structlog's
+    pipeline above) without needing to pass it to every logger.info() call.
+
+    Generates a random UUID4 if none is given. Returns the ID that was bound.
+
+    This was previously imported by scripts/retrain_transformer.py but never
+    defined anywhere in this module -- that import has been raising
+    ImportError at module load since it was added, meaning the script could
+    never actually run. Fixed 2026-09-20 while wiring that script's
+    multi-symbol walk-forward validation (ADVERSARIAL_AUDIT_2026-09-20.md §8/§9).
+    """
+    cid = correlation_id or str(uuid.uuid4())
+    structlog.contextvars.bind_contextvars(correlation_id=cid)
+    return cid

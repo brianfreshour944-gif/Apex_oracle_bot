@@ -367,6 +367,16 @@ class TradingBotSettings(BaseSettings):
         ge=10,
         le=300
     )
+    STALE_PRICE_MAX_AGE_SEC: float = Field(
+        default=300.0,
+        description="Max age (seconds) of a fetched bar's own timestamp before "
+                    "alert_stale_price fires. A stale price silently feeding "
+                    "position sizing/stop checks was a missing-alert gap found "
+                    "in the 2026-09-20 audit. 5x the default LOOP_INTERVAL_SEC "
+                    "gives headroom for normal API jitter without missing a "
+                    "genuinely stuck feed.",
+        gt=0,
+    )
     STATUS_PORT: int = Field(
         default=8000,
         description="Port for HTTP status server",
@@ -380,11 +390,41 @@ class TradingBotSettings(BaseSettings):
     )
 
     # --- Position Sizing (Kelly / volatility-adjusted) ---
+    # NOTE (2026-09-20 audit): VOL_LOOKBACK and MAX_VOL_ADJUST below are read
+    # only by scripts/audit_risk_parameters.py and scripts/dump_active_config.py
+    # (bounds-checked/printed), never by any actual sizing logic in risk.py --
+    # calculate_position_size()'s ATR-based stop-distance sizing already makes
+    # position size inversely proportional to volatility, which appears to be
+    # what these two fields were originally meant to control before that ATR
+    # approach was built. Left as-is (not wired into a second, redundant
+    # vol-adjustment path) to avoid double-counting volatility in sizing;
+    # documenting the situation here rather than silently leaving it
+    # unexplained. KELLY_FRACTION below IS now wired in (see
+    # RiskManager.get_kelly_size_cap / KELLY_SIZING_ENABLED), gated off by
+    # default since it needs real trade history to mean anything.
     KELLY_FRACTION: float = Field(
         default=0.25,
         description="Fractional Kelly multiplier applied to raw Kelly size (0=flat, 1=full Kelly)",
         ge=0,
         le=1,
+    )
+    KELLY_SIZING_ENABLED: bool = Field(
+        default=False,
+        description="Apply a fractional-Kelly cap on top of the existing risk-based "
+                    "position size, computed from realized win-rate/payoff-ratio per "
+                    "regime (src.performance_tracker). Only ever TIGHTENS size (never "
+                    "loosens it beyond what risk-based sizing already computed) and only "
+                    "activates once KELLY_MIN_TRADES realized outcomes exist for that "
+                    "regime; before that, a no-op. Default False (shadow/off) since a "
+                    "young system's win-rate/payoff-ratio estimates are themselves noisy "
+                    "-- matches this codebase's convention for every other "
+                    "compute-but-gate-behind-a-flag feature (ADAPTIVE_ML_ENABLED etc).",
+    )
+    KELLY_MIN_TRADES: int = Field(
+        default=30,
+        description="Realized trades required (for a given regime, across all "
+                    "strategies) before the Kelly cap activates.",
+        ge=1,
     )
     VOL_LOOKBACK: int = Field(
         default=20,
@@ -452,11 +492,12 @@ class TradingBotSettings(BaseSettings):
     # realized outcomes. risk.py stays authoritative — this never bypasses the
     # drawdown/daily-loss killswitch, order sizing, or stop-loss logic.
     ADAPTIVE_ML_ENABLED: bool = Field(
-        default=True,
+        default=False,
         description="Let the meta-learner drive the committee decision. "
-                    "Default True = live mode (weights drive decisions after warm-up and validation). "
-                    "When False, runs in paper-only shadow mode (computed, logged, but not acted on). "
-                    "Live-driving is still gated by ADAPTIVE_MIN_TRADES_BEFORE_LIVE (30) and "
+                    "Default False = paper-only shadow mode (weights computed and logged, but "
+                    "never acted on) — matches .env.example and README. Must be explicitly set "
+                    "True to let learned weights drive live decisions, and even then this is "
+                    "gated by ADAPTIVE_MIN_TRADES_BEFORE_LIVE (30) and "
                     "the validation gate (is_regime_validated).",
     )
     ADAPTIVE_STATE_PATH: str = Field(

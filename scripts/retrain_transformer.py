@@ -25,6 +25,7 @@ from collections import Counter
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 from src.committee.transformer_brain import GrokGQA_Transformer, set_ml_predictor_override, reset_ml_predictor
 from src.backtest import run_backtest
+from src.walkforward import run_walkforward_validation
 from src.logging_config import get_logger, set_correlation_id
 
 logger = get_logger("transformer_replay")
@@ -100,7 +101,12 @@ async def run_real_validation(champion_model, challenger_model, scaler, device, 
     """Run both models through a real simulated backtest (via the full 5-brain
     committee) over the same real historical window, and return their results
     for direct comparison. This replaces fake/random validation with an actual
-    measured outcome."""
+    measured outcome.
+
+    NOTE: single-symbol, single-window -- see run_multi_symbol_walkforward_validation
+    below for the broader check actually used to gate promotion as of 2026-09-20.
+    Kept here as a cheap pre-check / for callers that want the old narrow behavior.
+    """
     val_bars = fetch_validation_bars(symbol=symbol, days=days)
     logger.info(f"Fetched {len(val_bars)} real validation bars for {symbol} ({days}d)")
 
@@ -113,6 +119,88 @@ async def run_real_validation(champion_model, challenger_model, scaler, device, 
     reset_ml_predictor()
 
     return champ_result, challenger_result
+
+
+# Symbols for the broader promotion-gate validation below. yfinance tickers
+# (hyphenated), matching the convention already used by
+# scripts/generate_replay_dataset.py's SYMBOLS list.
+WALKFORWARD_VALIDATION_SYMBOLS = ["BTC-USD", "ETH-USD", "SOL-USD"]
+
+
+async def run_multi_symbol_walkforward_validation(
+    champion_model, challenger_model, scaler, device, input_dim,
+    symbols: list[str] = WALKFORWARD_VALIDATION_SYMBOLS,
+    days: int = 180,
+    n_splits: int = 3,
+) -> tuple[dict, dict]:
+    """Broader model-promotion validation: real purged walk-forward
+    (src/walkforward.py's WalkForwardValidator, not a single train/test split)
+    across MULTIPLE symbols and MULTIPLE non-overlapping time windows per
+    symbol, for both champion and challenger.
+
+    Replaces the single-symbol/single-90-day-window check that
+    run_real_validation() above did alone -- KNOWN_ISSUES.md flagged this as
+    too narrow to fully trust ("Consider testing across multiple symbols and
+    time windows before fully trusting promotions"). src/walkforward.py's
+    WalkForwardValidator already existed and was well-built (purge/embargo,
+    anchored windows) but had ZERO callers anywhere in the promotion path
+    before this (ADVERSARIAL_AUDIT_2026-09-20.md §8/§9) -- it's the walk-forward
+    engine actually used here as of 2026-09-20.
+
+    Returns (champion_summary, challenger_summary) dicts with aggregated
+    metrics across all symbol x window combinations, safe even for a single
+    symbol/window pair that fails to produce enough windows (skipped, logged).
+    """
+    def _summarize(all_results: list) -> dict:
+        if not all_results:
+            return {"mean_return_pct": 0.0, "mean_sharpe": 0.0, "total_trades": 0,
+                     "pct_positive_windows": 0.0, "n_windows": 0}
+        returns = [r.total_return_pct for r in all_results]
+        sharpes = [r.sharpe for r in all_results]
+        return {
+            "mean_return_pct": float(np.mean(returns)),
+            "mean_sharpe": float(np.mean(sharpes)),
+            "total_trades": int(sum(r.n_trades for r in all_results)),
+            "pct_positive_windows": float(np.mean([r.total_return_pct > 0 for r in returns]) * 100) if returns else 0.0,
+            "n_windows": len(all_results),
+        }
+
+    champ_windows: list = []
+    challenger_windows: list = []
+
+    for symbol in symbols:
+        try:
+            val_bars = fetch_validation_bars(symbol=symbol, days=days)
+        except Exception as e:
+            logger.warning(f"Skipping {symbol} in walk-forward validation: could not fetch data ({e})")
+            continue
+        if len(val_bars) < 100:
+            logger.warning(f"Skipping {symbol} in walk-forward validation: only {len(val_bars)} bars fetched")
+            continue
+
+        try:
+            set_ml_predictor_override(champion_model, scaler, device, input_dim)
+            champ_wf = await run_walkforward_validation(
+                symbol=symbol, bars=val_bars, n_splits=n_splits, backtest_params={"use_committee": True},
+            )
+            champ_windows.extend(champ_wf.windows)
+        except Exception as e:
+            logger.warning(f"Champion walk-forward validation failed for {symbol} (non-fatal, skipping symbol): {e}")
+        finally:
+            reset_ml_predictor()
+
+        try:
+            set_ml_predictor_override(challenger_model, scaler, device, input_dim)
+            challenger_wf = await run_walkforward_validation(
+                symbol=symbol, bars=val_bars, n_splits=n_splits, backtest_params={"use_committee": True},
+            )
+            challenger_windows.extend(challenger_wf.windows)
+        except Exception as e:
+            logger.warning(f"Challenger walk-forward validation failed for {symbol} (non-fatal, skipping symbol): {e}")
+        finally:
+            reset_ml_predictor()
+
+    return _summarize(champ_windows), _summarize(challenger_windows)
 
 
 def retrain_model() -> int:
@@ -277,17 +365,34 @@ def retrain_model() -> int:
             val_scaler = joblib.load(scaler_path)
 
             try:
-                champ_result, challenger_result = asyncio.run(
-                    run_real_validation(champion_model, challenger_model, val_scaler, device, input_dim)
+                # Broad gate: real purged walk-forward across multiple symbols
+                # and multiple time windows (see run_multi_symbol_walkforward_validation
+                # docstring -- this replaces the single-symbol/90-day-window
+                # check as the actual promotion gate per KNOWN_ISSUES.md).
+                champ_summary, challenger_summary = asyncio.run(
+                    run_multi_symbol_walkforward_validation(champion_model, challenger_model, val_scaler, device, input_dim)
                 )
-                logger.info(f"Real Validation - Champion:   return={champ_result.total_return_pct:.2f}% "
-                            f"sharpe={champ_result.sharpe:.3f} trades={champ_result.n_trades} "
-                            f"win_rate={champ_result.win_rate:.1f}%")
-                logger.info(f"Real Validation - Challenger: return={challenger_result.total_return_pct:.2f}% "
-                            f"sharpe={challenger_result.sharpe:.3f} trades={challenger_result.n_trades} "
-                            f"win_rate={challenger_result.win_rate:.1f}%")
+                logger.info(f"Walk-Forward Validation - Champion:   mean_return={champ_summary['mean_return_pct']:.2f}% "
+                            f"mean_sharpe={champ_summary['mean_sharpe']:.3f} windows={champ_summary['n_windows']} "
+                            f"trades={champ_summary['total_trades']} pct_positive={champ_summary['pct_positive_windows']:.0f}%")
+                logger.info(f"Walk-Forward Validation - Challenger: mean_return={challenger_summary['mean_return_pct']:.2f}% "
+                            f"mean_sharpe={challenger_summary['mean_sharpe']:.3f} windows={challenger_summary['n_windows']} "
+                            f"trades={challenger_summary['total_trades']} pct_positive={challenger_summary['pct_positive_windows']:.0f}%")
 
-                challenger_wins_validation = challenger_result.total_return_pct > champ_result.total_return_pct
+                if champ_summary["n_windows"] == 0 or challenger_summary["n_windows"] == 0:
+                    logger.warning("Walk-forward validation produced zero usable windows for champion or "
+                                    "challenger (data fetch issues?) -- vetoing promotion as a precaution.")
+                    challenger_wins_validation = False
+                else:
+                    # Require the challenger to win on BOTH mean return AND mean
+                    # Sharpe across all windows/symbols, not just one metric --
+                    # a single-metric win is exactly the kind of thin margin
+                    # that curve-fits to one lucky window (see
+                    # ADVERSARIAL_AUDIT_2026-09-20.md §1 on edge verification).
+                    challenger_wins_validation = (
+                        challenger_summary["mean_return_pct"] > champ_summary["mean_return_pct"]
+                        and challenger_summary["mean_sharpe"] > champ_summary["mean_sharpe"]
+                    )
 
                 if challenger_wins_validation:
                     os.makedirs("models", exist_ok=True)
@@ -295,13 +400,15 @@ def retrain_model() -> int:
                     import json
                     with open(config_path, "w") as f:
                         json.dump(best_challenger_arch, f)
-                    logger.info(f"Challenger PASSED real validation (holdout loss AND simulated backtest). "
+                    logger.info(f"Challenger PASSED validation (holdout loss AND multi-symbol walk-forward, "
+                                f"beating champion on both mean return and mean Sharpe). "
                                 f"Promoted. Saved new NAS architecture to {config_path}")
                 else:
-                    logger.info("Challenger beat Champion on holdout loss but FAILED real validation "
-                                "(worse simulated return). Vetoing promotion, keeping current Champion.")
+                    logger.info("Challenger beat Champion on holdout loss but FAILED walk-forward validation "
+                                "(did not beat champion on both mean return and mean Sharpe across all "
+                                "symbols/windows). Vetoing promotion, keeping current Champion.")
             except Exception as e:
-                logger.error("Real validation failed to run", error=str(e), traceback=traceback.format_exc())
+                logger.error("Walk-forward validation failed to run", error=str(e), traceback=traceback.format_exc())
                 logger.info("Vetoing promotion as a precaution (cannot confirm the challenger is actually better).")
         else:
             logger.info("All Challengers FAILED to beat Champion on Loss. Discarding new weights.")

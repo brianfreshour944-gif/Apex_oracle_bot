@@ -83,58 +83,70 @@ def main() -> int:
     logger.info("Initializing Stage 1 Foundation Training...")
     os.makedirs(MODELS_DIR, exist_ok=True)
     
-    # 1. Download and build dataset
-    all_X = []
-    all_y = []
-    
+    # 1. Download and build dataset, splitting each symbol chronologically
+    # 80/20 BEFORE any concatenation or scaling. This both (a) avoids fitting
+    # the scaler on validation-period statistics (leakage fixed 2026-09-20 --
+    # see KNOWN_ISSUES.md / ADVERSARIAL_AUDIT_2026-09-20.md) and (b) makes the
+    # 80/20 split actually respect each symbol's own chronology, instead of
+    # cutting a single index into a multi-symbol concatenation where later
+    # symbols could end up entirely in the validation set.
+    all_X_train, all_y_train = [], []
+    all_X_val, all_y_val = [], []
+
     features_cols = get_active_features()
-    
+
     for sym in SYMBOLS:
         logger.info(f"Downloading {sym}...")
         try:
             ticker = yf.Ticker(sym)
             df = ticker.history(period=f"{DAYS}d", interval="1h")
             if df.empty: continue
-            
+
             df = df.reset_index()
             df = df.rename(columns={"Datetime": "t", "Open": "open", "High": "high", "Low": "low", "Close": "close", "Volume": "volume"})
             raw_close = df["close"].copy()
             df = add_features(df)
             df["close"] = raw_close.values
-            
+
             X, y = extract_sequences(df, features_cols)
-            if len(X) > 0:
-                all_X.append(X)
-                all_y.append(y)
+            if len(X) == 0:
+                continue
+            split_idx = int(0.8 * len(X))
+            all_X_train.append(X[:split_idx])
+            all_y_train.append(y[:split_idx])
+            all_X_val.append(X[split_idx:])
+            all_y_val.append(y[split_idx:])
         except Exception as e:
             logger.error(f"Error processing {sym}: {e}")
-            
-    if not all_X:
+
+    if not all_X_train:
         logger.error("No data extracted. Aborting.")
         return
-        
-    X_full = np.concatenate(all_X, axis=0)
-    y_full = np.concatenate(all_y, axis=0)
-    logger.info(f"Extracted {len(X_full)} total sequences.")
-    
-    # 2. Fit Global Scaler
+
+    X_train_raw = np.concatenate(all_X_train, axis=0)
+    y_train = np.concatenate(all_y_train, axis=0)
+    X_val_raw = np.concatenate(all_X_val, axis=0) if all_X_val and any(len(x) for x in all_X_val) else np.empty((0, *X_train_raw.shape[1:]))
+    y_val = np.concatenate(all_y_val, axis=0) if all_y_val and any(len(y) for y in all_y_val) else np.empty((0,))
+    logger.info(f"Extracted {len(X_train_raw)} train / {len(X_val_raw)} val sequences.")
+
+    # 2. Fit scaler on TRAIN ONLY, then transform both splits with it.
     from sklearn.preprocessing import StandardScaler
-    N, S, F = X_full.shape
-    X_flat = X_full.reshape(-1, F)
-    
+    N_train, S, F = X_train_raw.shape
+
     scaler = StandardScaler()
-    X_flat_scaled = scaler.fit_transform(X_flat)
-    X_scaled = X_flat_scaled.reshape(N, S, F)
-    
+    X_train = scaler.fit_transform(X_train_raw.reshape(-1, F)).reshape(N_train, S, F)
+    if len(X_val_raw) > 0:
+        N_val = X_val_raw.shape[0]
+        X_val = scaler.transform(X_val_raw.reshape(-1, F)).reshape(N_val, S, F)
+    else:
+        X_val = X_val_raw
+
     with open(SCALER_PATH, "wb") as f:
         pickle.dump(scaler, f)
-    logger.info(f"Saved global feature scaler to {SCALER_PATH}")
-    
-    # 3. Chronological Split (80/20) & Class Balancing on Train
-    split_idx = int(0.8 * len(X_scaled))
-    X_train, y_train = X_scaled[:split_idx], y_full[:split_idx]
-    X_val, y_val = X_scaled[split_idx:], y_full[split_idx:]
-    
+    logger.info(f"Saved train-only-fit feature scaler to {SCALER_PATH}")
+
+    # 3. Class Balancing on Train
+
     idx_win = np.where(y_train == 1.0)[0]
     idx_loss = np.where(y_train == 0.0)[0]
     minority_count = min(len(idx_win), len(idx_loss))

@@ -1,6 +1,10 @@
 """Brain 2: Quant Brain.
 
-Evaluates technical quantitative indicators (RSI, ATR, Bollinger, Momentum).
+Pure RSI-threshold evaluator: buy/sell on RSI extremes (<25 / >75, with a
+softer 25-40 / 60-75 band), hold in the 40-60 neutral zone. Despite the
+signal dict's `atr` field being read, it is currently unused by this brain's
+decision logic (previously the docstring here claimed ATR/Bollinger/Momentum
+indicators that were never implemented -- corrected 2026-09-20 audit).
 """
 
 from .models import BrainVote

@@ -4,6 +4,7 @@ import asyncio
 import math
 import threading
 import time
+from collections import deque
 from datetime import UTC, datetime, timedelta
 from typing import Any, Dict, Optional
 
@@ -126,6 +127,20 @@ class RiskManager:
         # naive position-count check simultaneously.
         self._reserved_new_position_symbols: dict[str, datetime] = {}
         self._peak_prices_dirty = False
+
+        # Rolling per-symbol closing-price history, updated once per scan
+        # cycle by bot.py's main loop (same place the stale-price check
+        # reads the fetched bar). Used to compute a REAL cross-asset
+        # correlation matrix for check_correlation_concentration(), which was
+        # previously defined but never called anywhere (the code accumulates
+        # naturally from live prices already being fetched every cycle, so
+        # this adds no extra API calls). Needs _CORR_MIN_POINTS of history
+        # before correlation is considered meaningful; until then the cruder
+        # same-regime-cluster cap in reserve_position_slot is the only
+        # concentration control, same as before this was wired in.
+        self._price_history: dict[str, deque] = {}
+        self._CORR_HISTORY_MAXLEN = 200
+        self._CORR_MIN_POINTS = 20
         
         # Gap-risk circuit breaker state
         self._gap_risk_events: list[dict] = []  # List of recent gap events
@@ -658,9 +673,15 @@ class RiskManager:
 
             # 2. Apply regime-specific adjustments to RISK AMOUNT (not position size),
             # so the effective dollar risk is transparent and matches the intended percentage.
-            if regime == "trending":
+            # NOTE: the live/backtest regime classifier (strategies.py) emits the DT-8
+            # vocabulary ("sideways", "bull", "bear", ...), not the separate RL-6
+            # vocabulary ("mean_reverting", ...) used elsewhere for the RL meta-learner.
+            # "mean_reverting" is kept here too for any RL-6-vocabulary caller, but
+            # "sideways" must also be handled or this branch is unreachable from the
+            # live/backtest path entirely (found in 2026-09-20 audit).
+            if regime in ("trending", "bull", "bear"):
                 risk_amount *= 1.5
-            elif regime == "mean_reverting":
+            elif regime in ("mean_reverting", "sideways"):
                 risk_amount *= 0.8
             elif regime == "high_volatility":
                 risk_amount *= 0.5
@@ -811,6 +832,22 @@ class RiskManager:
             position_size = self._apply_order_book_impact(
                 symbol, position_size, current_price, side=side
             )
+
+            # 8b. Fractional-Kelly cap (optional, gated off by default -- see
+            # KELLY_SIZING_ENABLED docstring in config.py). Only ever TIGHTENS
+            # position_size, never loosens it: this is a final ceiling, not a
+            # replacement for the sizing logic above. KELLY_FRACTION was
+            # previously defined in config but read by nothing (wired in
+            # 2026-09-20, see ADVERSARIAL_AUDIT_2026-09-20.md §5).
+            if getattr(settings, "KELLY_SIZING_ENABLED", False):
+                kelly_cap = self.get_kelly_size_cap(regime, account_equity, current_price)
+                if kelly_cap is not None:
+                    if kelly_cap < position_size:
+                        logger.info(
+                            f"Kelly cap active for {symbol} ({regime}): {position_size:.6f} -> "
+                            f"{kelly_cap:.6f} (fractional Kelly, KELLY_FRACTION={settings.KELLY_FRACTION})"
+                        )
+                    position_size = min(position_size, kelly_cap)
 
             # Guard: NaN propagates silently through np.clip/min/round without raising.
             # If confidence was NaN (e.g. scoring math underflowed) we must reject here
@@ -1205,6 +1242,7 @@ class RiskManager:
         symbol: str,
         open_position_count: int,
         same_regime_open_count: int = 0,
+        current_positions: list[dict] | None = None,
     ) -> tuple[bool, str]:
         """Atomically check and reserve a new-position slot against MAX_OPEN_POSITIONS.
 
@@ -1233,6 +1271,13 @@ class RiskManager:
         currently open positions classified in the same regime as `symbol` --
         see _MAX_SAME_REGIME_FRACTION. Caps how concentrated the portfolio
         can get in one regime cluster, independent of the overall count cap.
+
+        `current_positions` (default None, a no-op), if supplied, additionally
+        runs check_correlation_concentration() against the live-accumulated
+        correlation matrix (see get_live_correlation_matrix) once enough
+        price history exists. This was previously dead code (defined, never
+        called) -- wired in 2026-09-20. A real correlation cap is stricter
+        than the same-regime proxy alone, so both apply independently.
         """
         async with self._exposure_lock:
             now = datetime.now(UTC)
@@ -1259,8 +1304,91 @@ class RiskManager:
                 )
                 return False, "same_regime_cluster_cap_reached"
 
+            if current_positions is not None:
+                corr_matrix, corr_symbols = self.get_live_correlation_matrix()
+                if corr_matrix.size > 0:
+                    allowed, reason = self.check_correlation_concentration(
+                        symbol, current_positions, corr_matrix, corr_symbols
+                    )
+                    if not allowed:
+                        logger.warning(f"Position slot reservation denied for {symbol}: {reason}")
+                        return False, reason
+
             self._reserved_new_position_symbols[symbol] = now
             return True, "ok"
+
+    def get_kelly_size_cap(
+        self, regime: str, account_equity: float, current_price: float
+    ) -> float | None:
+        """Compute a fractional-Kelly position-size ceiling (in units/qty, same
+        as position_size elsewhere) from REALIZED win-rate/payoff-ratio for
+        this regime (src.performance_tracker), scaled by settings.KELLY_FRACTION.
+
+        Unlike the rest of calculate_position_size (which sizes by how many
+        dollars are AT RISK if stopped out), Kelly's own definition sizes by
+        how much CAPITAL/notional to allocate -- so this caps notional
+        exposure (KELLY_FRACTION * kelly_f * account_equity), converted to
+        qty at current_price, matching how MAX_SINGLE_TRADE_USD is applied
+        just above this call site.
+
+        Returns None (no-op for the caller) if fewer than KELLY_MIN_TRADES
+        realized outcomes exist for this regime yet. Returns 0.0 (a real,
+        meaningful cap -- not "no data") if realized edge is non-positive,
+        since Kelly says bet nothing on a negative edge.
+
+        f* = W - (1-W)/R  (standard Kelly fraction; W=win_rate, R=payoff_ratio)
+        """
+        try:
+            from src.performance_tracker import get_performance_tracker
+            stats = get_performance_tracker().get_regime_win_payoff(regime, window_days=30)
+        except Exception as e:
+            logger.debug(f"Kelly cap lookup skipped (non-fatal): {e}")
+            return None
+        if stats is None or stats["n"] < getattr(settings, "KELLY_MIN_TRADES", 30):
+            return None
+        if current_price <= 0:
+            return None
+
+        win_rate = stats["win_rate"]
+        payoff_ratio = stats["payoff_ratio"]
+        kelly_f = win_rate - (1.0 - win_rate) / payoff_ratio
+        kelly_f = max(0.0, kelly_f)  # negative edge -> bet nothing, not negative size
+
+        kelly_notional = settings.KELLY_FRACTION * kelly_f * account_equity
+        return kelly_notional / current_price
+
+    def record_price_for_correlation(self, symbol: str, price: float) -> None:
+        """Append a closing price to the rolling per-symbol history used for
+        real cross-asset correlation (see _price_history above). Call once
+        per symbol per scan cycle; cheap (bounded deque append)."""
+        if price is None or not math.isfinite(price) or price <= 0:
+            return
+        if symbol not in self._price_history:
+            self._price_history[symbol] = deque(maxlen=self._CORR_HISTORY_MAXLEN)
+        self._price_history[symbol].append(price)
+
+    def get_live_correlation_matrix(self) -> tuple[np.ndarray, list[str]]:
+        """Compute a Pearson correlation matrix of log-returns from the
+        accumulated live price history. Returns (empty_array, []) if fewer
+        than 2 symbols have _CORR_MIN_POINTS of history yet (e.g. shortly
+        after a fresh deploy/restart, since this is in-memory only)."""
+        eligible = {s: list(h) for s, h in self._price_history.items() if len(h) >= self._CORR_MIN_POINTS}
+        if len(eligible) < 2:
+            return np.array([]), []
+        min_len = min(len(v) for v in eligible.values())
+        symbols = list(eligible.keys())
+        returns = []
+        for s in symbols:
+            prices = np.array(eligible[s][-min_len:])
+            log_ret = np.diff(np.log(prices))
+            returns.append(log_ret)
+        returns_matrix = np.array(returns)
+        if returns_matrix.shape[1] < 2:
+            return np.array([]), []
+        corr = np.corrcoef(returns_matrix)
+        corr = np.nan_to_num(corr, nan=0.0, posinf=1.0, neginf=-1.0)
+        np.fill_diagonal(corr, 1.0)
+        return corr, symbols
 
     def check_correlation_concentration(
         self,
@@ -1285,20 +1413,31 @@ class RiskManager:
         Returns:
             (allowed: bool, reason: str)
         """
-        if corr_matrix.size == 0 or symbol not in corr_symbols:
+        # Normalize everything to slash-stripped form before comparing --
+        # corr_symbols/symbol may come in "BTC/USD" form while exchange
+        # position dicts use "BTC/USD" too, but this function previously
+        # compared a possibly-slashed `symbol`/`corr_symbols` against a
+        # slash-STRIPPED held_symbols set, so the "already held" and
+        # correlated-position checks below could never match (found while
+        # wiring this in 2026-09-20 -- this function had zero test coverage
+        # and no caller before then).
+        symbol_norm = symbol.replace("/", "")
+        corr_symbols_norm = [s.replace("/", "") for s in corr_symbols]
+
+        if corr_matrix.size == 0 or symbol_norm not in corr_symbols_norm:
             return True, "ok"  # No correlation data, allow
-        
+
         # Get currently held symbols
         held_symbols = {p["symbol"].replace("/", "") for p in current_positions}
-        if symbol in held_symbols:
+        if symbol_norm in held_symbols:
             return True, "ok"  # Already have position, this is a scale-in
-        
-        symbol_idx = corr_symbols.index(symbol)
+
+        symbol_idx = corr_symbols_norm.index(symbol_norm)
         symbol_corrs = corr_matrix[symbol_idx]
-        
+
         # Count how many currently held positions are highly correlated with this symbol
         high_corr_count = 0
-        for i, other_symbol in enumerate(corr_symbols):
+        for i, other_symbol in enumerate(corr_symbols_norm):
             if other_symbol in held_symbols and i != symbol_idx:
                 if symbol_corrs[i] >= corr_threshold:
                     high_corr_count += 1

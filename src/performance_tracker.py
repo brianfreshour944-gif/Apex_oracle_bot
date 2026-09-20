@@ -240,6 +240,44 @@ class PerformanceTracker:
 
         return report
 
+    def get_regime_win_payoff(self, regime: str, window_days: int = 30) -> dict[str, float] | None:
+        """Aggregate realized win-rate/payoff-ratio for a regime across ALL
+        strategies (calculate_position_size only knows the regime, not which
+        strategy_selector.py strategy was active), within the last
+        `window_days`. Returns None if fewer than MIN_TRADES_FOR_STATS trades
+        exist for this regime -- callers should treat None as "not enough
+        data yet" and no-op, not as zero/error.
+
+        Used by RiskManager.get_kelly_size_cap() -- see KELLY_SIZING_ENABLED.
+        """
+        now = datetime.utcnow()
+        cutoff = now - timedelta(days=window_days)
+        returns: list[float] = []
+        pnls: list[float] = []
+        for key, data in self._state.items():
+            try:
+                key_strategy, key_regime = key.split("|", 1)
+            except ValueError:
+                continue
+            if key_regime != regime:
+                continue
+            for t in data.get("trades", []):
+                try:
+                    ts = datetime.fromisoformat(t["timestamp"])
+                    if ts >= cutoff:
+                        returns.append(t["return_pct"] / 100.0)
+                        pnls.append(t["pnl"])
+                except Exception:
+                    continue
+
+        if len(returns) < MIN_TRADES_FOR_STATS:
+            return None
+
+        stats = _compute_extended_stats(returns, pnls)
+        if stats["payoff_ratio"] <= 0 or not np.isfinite(stats["payoff_ratio"]):
+            return None
+        return {"win_rate": stats["win_rate"], "payoff_ratio": stats["payoff_ratio"], "n": stats["n"]}
+
     def log_weekly_report(self) -> None:
         """Log a weekly performance summary with decay alerts."""
         report = self.get_performance_report()

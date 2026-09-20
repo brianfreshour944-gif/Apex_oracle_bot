@@ -33,9 +33,14 @@ def backtest(
     seed: int = typer.Option(7, help="Random seed"),
     regime: str = typer.Option("all", help="Regime to test: all, trending, mean_reverting, volatile"),
     walk_forward: bool = typer.Option(False, "--walk-forward", help="Run walk-forward optimization split"),
+    benchmark: bool = typer.Option(False, "--benchmark", help="Also print buy-and-hold / random-entry comparison"),
+    cost_stress: bool = typer.Option(False, "--cost-stress", help="Also run at 2x/3x transaction costs to check if profitability survives (audit §7)"),
 ) -> None:
     """Run backtest simulation or walk-forward optimization."""
-    from src.backtest import print_backtest_summary, run_backtest, run_walk_forward_optimization
+    from src.backtest import (
+        print_backtest_summary, run_backtest, run_walk_forward_optimization,
+        run_benchmark_comparison, print_benchmark_comparison,
+    )
 
     typer.secho(f"📊 Running Backtest Engine for {symbol} ({bars} bars)...", fg=typer.colors.CYAN, bold=True)
 
@@ -52,6 +57,30 @@ def backtest(
                 regime=reg
             ))
             print_backtest_summary(res)
+
+            if benchmark and res.bars_used is not None and len(res.bars_used) > 0:
+                comparison = asyncio.run(run_benchmark_comparison(res, symbol, res.bars_used, equity))
+                print_benchmark_comparison(comparison)
+
+            if cost_stress:
+                typer.secho(f"\n💸 Cost stress test for {reg} (1x / 2x / 3x transaction costs):", fg=typer.colors.CYAN, bold=True)
+                typer.echo(f"{'Multiplier':<12} {'Return %':>12} {'Sharpe':>10} {'MaxDD %':>10} {'Trades':>8}")
+                for mult in (1.0, 2.0, 3.0):
+                    stress_res = asyncio.run(run_backtest(
+                        symbol=symbol, n_bars=bars, start_equity=equity, seed=seed,
+                        regime=reg, cost_multiplier=mult,
+                    ))
+                    typer.echo(
+                        f"{mult:<12} {float(stress_res.total_return_pct):>12.2f} "
+                        f"{float(stress_res.sharpe):>10.2f} {float(stress_res.max_drawdown_pct):>10.2f} "
+                        f"{stress_res.n_trades:>8}"
+                    )
+                    if mult > 1.0 and float(stress_res.total_return_pct) <= 0:
+                        typer.secho(
+                            f"  ⚠️  Profitability does not survive {mult}x costs -- the edge may be too "
+                            "thin for live trading (audit §7).",
+                            fg=typer.colors.RED,
+                        )
 
 
 @app.command("status")

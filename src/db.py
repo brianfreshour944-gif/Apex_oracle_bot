@@ -585,11 +585,36 @@ def get_open_snapshot(symbol: str) -> dict[str, Any] | None:
                 select(DecisionSnapshot)
                 .where(DecisionSnapshot.symbol == symbol, DecisionSnapshot.status == "open")
                 .order_by(DecisionSnapshot.created_at.desc())
-                .limit(1)
             )
-            row = session.execute(stmt).scalars().first()
-            if row is None:
+            rows = session.execute(stmt).scalars().all()
+            if not rows:
                 return None
+            row = rows[0]
+            if len(rows) > 1:
+                # Invariant violation: the intended pattern folds every
+                # scale-in into the SAME snapshot (update_decision_snapshot_position
+                # above), so there should never be more than one open row per
+                # symbol. If this fires, a race created two open snapshots for
+                # the same symbol, and outcome attribution below is picking
+                # "most recent" as a best-effort guess rather than a verified
+                # match -- exactly the mismatch risk flagged in
+                # ADVERSARIAL_AUDIT_2026-09-20.md §12. Surfaced loudly instead
+                # of silently trusting the guess, since this poisons the
+                # adaptive learner's training signal if wrong.
+                # logger.error (not an async alert) deliberately: this function
+                # is always called via asyncio.to_thread() from bot.py, i.e. it
+                # runs in a worker thread with no running event loop, so
+                # asyncio.create_task() here would silently fail. The
+                # structured [DATA_INTEGRITY] prefix makes this greppable /
+                # alertable from log-shipping infra without needing an
+                # event-loop-safe call from inside a thread.
+                logger.error(
+                    f"[DATA_INTEGRITY] {len(rows)} simultaneous open decision "
+                    f"snapshots found for {symbol} (ids={[r.decision_id for r in rows]}); "
+                    f"using most recent ({row.decision_id}). This should never happen -- "
+                    f"a scale-in race likely created a duplicate snapshot instead of "
+                    f"updating the existing one."
+                )
             # sqlite DateTime columns round-trip offset-naive; a naive
             # timestamp in this column is always UTC. Emit an aware ISO
             # string so consumers subtracting datetime.now(timezone.utc)

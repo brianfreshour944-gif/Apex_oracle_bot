@@ -27,8 +27,18 @@ from src.logging_config import get_logger
 
 # When set, transformer_brain uses a fast synthetic model instead of the
 # real PyTorch inference so the replay dataset can be bootstrapped in
-# minutes rather than hours.  Set REPLAY_FAST_MODE=0 to use the real model.
-FAST_MODE = os.environ.get("REPLAY_FAST_MODE", "1") == "1"
+# minutes rather than hours. The synthetic path fills `tensor_state` with
+# seeded RANDOM NOISE (np.random.RandomState(...).randn(128)), not real
+# feature vectors -- it is a dev/smoke-test convenience only and must never
+# be the default for a dataset that real training
+# (scripts/retrain_transformer.py) will actually consume. Defaults to 0
+# (real model) since 2026-09-20 -- see KNOWN_ISSUES.md and
+# ADVERSARIAL_AUDIT_2026-09-20.md: the previous default=1 is believed to be
+# why the last regeneration of data/historical_experiences.jsonl produced
+# noise tensors instead of real corrected features. Set REPLAY_FAST_MODE=1
+# explicitly only for a quick smoke test of this script, and regenerate
+# again with the real model (default) before using the output for training.
+FAST_MODE = os.environ.get("REPLAY_FAST_MODE", "0") == "1"
 
 if FAST_MODE:
     # Disable all heavy ML during fast replay generation

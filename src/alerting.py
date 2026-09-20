@@ -45,6 +45,11 @@ class AlertCategory(Enum):
     DATA_INTEGRITY = "data_integrity"
     KILLSWITCH = "killswitch"
     SYSTEM = "system"
+    PERFORMANCE_DECAY = "performance_decay"
+    FEATURE_DRIFT = "feature_drift"
+    STALE_PRICE = "stale_price"
+    DUPLICATE_ORDER = "duplicate_order"
+    POSITION_DESYNC = "position_desync"
 
 
 @dataclass
@@ -89,7 +94,19 @@ class AlertingEngine:
             AlertCategory.DATA_INTEGRITY: 300,
             AlertCategory.KILLSWITCH: 0,  # No cooldown for killswitch
             AlertCategory.SYSTEM: 300,
+            AlertCategory.PERFORMANCE_DECAY: 3600,  # slow-moving signal, hourly is plenty
+            AlertCategory.FEATURE_DRIFT: 3600,
+            AlertCategory.STALE_PRICE: 300,
+            AlertCategory.DUPLICATE_ORDER: 0,  # never suppress -- always investigate
+            AlertCategory.POSITION_DESYNC: 300,
         }
+        # run_monitoring_cycle() gates its own (expensive, DB/state-file-backed)
+        # decay and drift checks on top of the per-alert cooldowns above, since
+        # those checks themselves are only worth running periodically, not on
+        # every ~30s monitoring tick.
+        self._last_decay_check: float = 0.0
+        self._last_drift_check: float = 0.0
+        self._slow_check_interval_sec: float = 1800.0  # 30 min
         
         # Escalation thresholds
         self._escalation_thresholds = {
@@ -347,6 +364,96 @@ class AlertingEngine:
         """Alert when a committee brain raises during evaluation."""
         await self.alert_system_health(brain_name, "failed", {"error": error})
 
+    async def alert_performance_decay(self, decay_alert: dict[str, Any]) -> None:
+        """Alert on a strategy/regime performance-decay signal (Sharpe/win-rate/
+        profit-factor dropping below threshold). Source: src.performance_tracker
+        .get_decay_alerts() -- computed since inception but never wired to any
+        consumer until 2026-09-20 (see ADVERSARIAL_AUDIT_2026-09-20.md).
+
+        Alert-only for now: this does NOT pause trading or resize positions.
+        With likely <30 real closed trades at time of writing, Sharpe/win-rate
+        computed on a small sample is noise-prone -- auto-acting on it before
+        the sample size supports the statistic would be worse than not
+        checking at all. Escalate to automatic risk-reduction only once you've
+        watched this fire on real data and trust it isn't a false alarm.
+        """
+        pair = decay_alert.get("pair", "unknown")
+        alert_type = decay_alert.get("type", "decay")
+        val = decay_alert.get("sharpe", decay_alert.get("win_rate", decay_alert.get("profit_factor", 0)))
+        threshold = decay_alert.get("threshold", 0)
+        trades = decay_alert.get("trades", 0)
+        await self.fire(
+            category=AlertCategory.PERFORMANCE_DECAY,
+            severity=AlertSeverity.WARNING,
+            title=f"Performance Decay: {pair}",
+            message=f"{alert_type} for {pair}: {val:.3f} < threshold {threshold:.3f} (n={trades} trades, 30d window)",
+            details=decay_alert,
+            key=f"performance_decay:{pair}:{alert_type}",
+        )
+
+    async def alert_feature_drift(self, drift_alert: dict[str, Any]) -> None:
+        """Alert on feature-distribution drift (PSI/KS vs. a 30d reference
+        window). Source: src.feature_drift_monitor.get_feature_drift_alerts()
+        -- PSI/KS were computed since inception but the report/alert path had
+        zero callers anywhere in the codebase until 2026-09-20 (see
+        ADVERSARIAL_AUDIT_2026-09-20.md). Alert-only -- does not change
+        trading behavior.
+        """
+        feature = drift_alert.get("feature", "unknown")
+        severity_str = drift_alert.get("severity", "low")
+        severity = AlertSeverity.CRITICAL if severity_str == "high" else AlertSeverity.WARNING
+        psi = drift_alert.get("psi", 0.0)
+        ks_pvalue = drift_alert.get("ks_pvalue", 1.0)
+        await self.fire(
+            category=AlertCategory.FEATURE_DRIFT,
+            severity=severity,
+            title=f"Feature Drift: {feature}",
+            message=f"{feature} drift={severity_str} (PSI={psi:.3f}, KS p={ks_pvalue:.4f}, "
+                    f"mean_shift={drift_alert.get('mean_shift', 0):.4f})",
+            details=drift_alert,
+            key=f"feature_drift:{feature}:{severity_str}",
+        )
+
+    async def alert_stale_price(self, symbol: str, age_sec: float, max_age_sec: float) -> None:
+        """Alert when the last fetched bar/quote for a symbol is older than
+        expected -- a stale price silently feeding position sizing / stop
+        checks was flagged as a missing alert in ADVERSARIAL_AUDIT_2026-09-20.md
+        (§16, ranked highest-priority of the missing alerts: hard to notice,
+        can produce a bad fill or a stop that never fires)."""
+        await self.fire(
+            category=AlertCategory.STALE_PRICE,
+            severity=AlertSeverity.WARNING,
+            title=f"Stale Price: {symbol}",
+            message=f"{symbol} last price is {age_sec:.0f}s old (max expected: {max_age_sec:.0f}s)",
+            details={"symbol": symbol, "age_sec": age_sec, "max_age_sec": max_age_sec},
+            key=f"stale_price:{symbol}",
+        )
+
+    async def alert_duplicate_order(self, symbol: str, client_order_id: str, detail: str) -> None:
+        """Alert on a detected duplicate order submission for the same
+        symbol/client_order_id. No cooldown -- always worth a fresh look."""
+        await self.fire(
+            category=AlertCategory.DUPLICATE_ORDER,
+            severity=AlertSeverity.CRITICAL,
+            title=f"Duplicate Order Detected: {symbol}",
+            message=f"{symbol}: {detail} (client_order_id={client_order_id})",
+            details={"symbol": symbol, "client_order_id": client_order_id, "detail": detail},
+            key=f"duplicate_order:{symbol}:{client_order_id}",
+        )
+
+    async def alert_position_desync(self, symbol: str, expected_qty: float, actual_qty: float) -> None:
+        """Alert when a reconciliation pass finds the exchange's reported
+        position for a symbol doesn't match what the bot's internal
+        state/DB expected (ghost snapshot, orphan position, etc.)."""
+        await self.fire(
+            category=AlertCategory.POSITION_DESYNC,
+            severity=AlertSeverity.CRITICAL,
+            title=f"Position Desync: {symbol}",
+            message=f"{symbol}: expected qty={expected_qty}, exchange reports qty={actual_qty}",
+            details={"symbol": symbol, "expected_qty": expected_qty, "actual_qty": actual_qty},
+            key=f"position_desync:{symbol}",
+        )
+
     async def run_monitoring_cycle(self) -> None:
         """Periodic check of exposure and drawdown against risk_manager state.
 
@@ -376,6 +483,30 @@ class AlertingEngine:
             pct_of_max = drawdown_pct / max_drawdown  # both negative -> positive ratio
             if pct_of_max >= 0.5:
                 await self.alert_drawdown_approaching_killswitch(drawdown_pct, max_drawdown, pct_of_max)
+
+        # Performance decay and feature drift are slow-moving signals backed
+        # by a DB query / state-file read respectively -- not worth the cost
+        # on every ~30s tick, so gate them to self._slow_check_interval_sec.
+        # Wired in 2026-09-20 (previously computed, never surfaced -- see
+        # ADVERSARIAL_AUDIT_2026-09-20.md §0/§19).
+        now = time.monotonic()
+        if now - self._last_decay_check >= self._slow_check_interval_sec:
+            self._last_decay_check = now
+            try:
+                from src.performance_tracker import get_decay_alerts
+                for decay_alert in get_decay_alerts():
+                    await self.alert_performance_decay(decay_alert)
+            except Exception as e:
+                logger.debug(f"Performance decay check skipped (non-fatal): {e}")
+
+        if now - self._last_drift_check >= self._slow_check_interval_sec:
+            self._last_drift_check = now
+            try:
+                from src.feature_drift_monitor import get_feature_drift_alerts
+                for drift_alert in get_feature_drift_alerts():
+                    await self.alert_feature_drift(drift_alert)
+            except Exception as e:
+                logger.debug(f"Feature drift check skipped (non-fatal): {e}")
 
     async def check_churn_alert(self, trades_last_hour: int, threshold: int = 20) -> None:
         """Fire a churn alert when trade frequency over the last hour is abnormally high."""

@@ -162,6 +162,12 @@ async def _record_committee_outcome(
                 max_fav_pct = (peak - entry_price) / entry_price * 100.0 if peak > entry_price else 0.0
             else:
                 max_fav_pct = (entry_price - peak) / entry_price * 100.0 if peak < entry_price else 0.0
+        if _state.strategy is not None and hasattr(_state.strategy, '_trailing_troughs') and symbol in _state.strategy._trailing_troughs:
+            trough = _state.strategy._trailing_troughs[symbol]
+            if action == "buy":
+                max_adv_pct = (entry_price - trough) / entry_price * 100.0 if trough < entry_price else 0.0
+            else:
+                max_adv_pct = (trough - entry_price) / entry_price * 100.0 if trough > entry_price else 0.0
 
         await asyncio.to_thread(
             close_decision_snapshot,
@@ -174,12 +180,14 @@ async def _record_committee_outcome(
             max_adverse_pct=max_adv_pct,
         )
 
-        # Clear peak price tracking for this symbol on any position close
-        # to prevent stale peak prices from affecting future positions
+        # Clear peak/trough price tracking for this symbol on any position close
+        # to prevent stale values from affecting future positions
         if _state.risk_manager is not None:
             _state.risk_manager.peak_prices.pop(symbol, None)
         if _state.strategy is not None and hasattr(_state.strategy, '_trailing_peaks'):
             _state.strategy._trailing_peaks.pop(symbol, None)
+        if _state.strategy is not None and hasattr(_state.strategy, '_trailing_troughs'):
+            _state.strategy._trailing_troughs.pop(symbol, None)
 
         # Append to the Transformer's live replay buffer, if this trade's
         # entry captured a tensor state. Matches the exact {"tensor": ...,
@@ -576,6 +584,7 @@ async def flush_crash_recovery_state(force: bool = False) -> None:
         snapshot = {
             "peak_prices": _state.risk_manager.persist_peak_prices() if _state.risk_manager else {},
             "trailing_peaks": dict(getattr(_state.strategy, "_trailing_peaks", {}) or {}) if _state.strategy else {},
+            "trailing_troughs": dict(getattr(_state.strategy, "_trailing_troughs", {}) or {}) if _state.strategy else {},
             "cooldowns": dict(_state.cooldowns),
             "position_adds": dict(_state.position_adds),
             "risk_peak_equity": _state.risk_manager.peak_equity if _state.risk_manager else 0.0,
@@ -653,6 +662,12 @@ async def reconcile_open_snapshots(exchange: AlpacaExchange) -> None:
                 f"decision snapshot (opened before/outside this process). Attempting to "
                 f"close to free position slot."
             )
+            held_pos = next((p for p in positions if p["symbol"].replace("/", "") == held), None)
+            held_qty = float(held_pos.get("qty", 0)) if held_pos else 0.0
+            try:
+                await get_alerting_engine().alert_position_desync(held, expected_qty=0.0, actual_qty=held_qty)
+            except Exception as alert_err:
+                logger.debug(f"Position-desync alert skipped (non-fatal): {alert_err}")
             await _close_orphan_position(exchange, held, positions)
 
     if not open_snaps:
@@ -688,6 +703,10 @@ async def reconcile_open_snapshots(exchange: AlpacaExchange) -> None:
             f"[RECONCILE] Closed ghost snapshot {snap['decision_id']} for {sym} "
             f"(no exchange position; exit_price={exit_price}, pnl={pnl:.2f}, closed={closed})"
         )
+        try:
+            await get_alerting_engine().alert_position_desync(sym, expected_qty=qty, actual_qty=0.0)
+        except Exception as alert_err:
+            logger.debug(f"Position-desync alert skipped (non-fatal): {alert_err}")
 
     # Check for stale open orders from a crashed cycle. If the bot submitted an
     # order to the exchange but crashed before recording the response, the order
@@ -1309,7 +1328,8 @@ async def process_signal_for_symbol(symbol: str, current_price: float, risk_mana
                 if is_new_entry:
                     same_regime_open_count = _count_same_regime_open_positions(symbol, positions or [], strategy)
                     slot_ok, slot_reason = await risk_manager.reserve_position_slot(
-                        symbol, risk_status.get("open_positions", 0), same_regime_open_count=same_regime_open_count
+                        symbol, risk_status.get("open_positions", 0), same_regime_open_count=same_regime_open_count,
+                        current_positions=positions or [],
                     )
                     if not slot_ok:
                         logger.warning(f"[{symbol}] Order vetoed: {slot_reason}")
@@ -1478,9 +1498,11 @@ async def process_signal_for_symbol(symbol: str, current_price: float, risk_mana
                     # Reset position pyramid/scale-in tracking on close
                     _state.position_adds.pop(symbol, None)
                     _crash_state_writer.mark_dirty()
-                    # Clear trailing peaks for this symbol
+                    # Clear trailing peaks/troughs for this symbol
                     if _state.strategy is not None and hasattr(_state.strategy, '_trailing_peaks'):
                         _state.strategy._trailing_peaks.pop(symbol, None)
+                    if _state.strategy is not None and hasattr(_state.strategy, '_trailing_troughs'):
+                        _state.strategy._trailing_troughs.pop(symbol, None)
                     # Audit F-A/F-B: record against the exchange's actual avg
                     # entry / total qty, the real fill price, minus commission.
                     await _record_committee_outcome(
@@ -2160,9 +2182,11 @@ async def run_trading_bot() -> None:
                 # Restore peak_prices
                 if "peak_prices" in recovery:
                     _state.risk_manager.peak_prices.update(recovery["peak_prices"])
-                # Restore trailing peaks on strategy
+                # Restore trailing peaks/troughs on strategy
                 if "trailing_peaks" in recovery and _state.strategy is not None:
                     _state.strategy._trailing_peaks.update(recovery["trailing_peaks"])
+                if "trailing_troughs" in recovery and _state.strategy is not None:
+                    _state.strategy._trailing_troughs.update(recovery["trailing_troughs"])
                 # Restore cooldowns
                 if "cooldowns" in recovery:
                     _state.cooldowns.update(recovery["cooldowns"])
@@ -2469,6 +2493,33 @@ async def run_trading_bot() -> None:
                             continue
 
                         current_price = latest_bar_df["close"][0]
+
+                        # Feed the rolling price history used for real
+                        # cross-asset correlation (RiskManager.reserve_position_slot).
+                        # No extra API calls -- reuses the bar already fetched
+                        # for this cycle's signal processing.
+                        if _state.risk_manager is not None:
+                            _state.risk_manager.record_price_for_correlation(symbol, current_price)
+
+                        # Stale-price check: a bar timestamp far in the past
+                        # (exchange feed stuck, cached data being replayed,
+                        # clock skew) can silently feed position sizing/stop
+                        # checks with an outdated price -- see
+                        # ADVERSARIAL_AUDIT_2026-09-20.md §16, missing-alerts.
+                        # Fire-and-forget so a slow alert path never adds
+                        # latency to the per-symbol dispatch loop.
+                        try:
+                            bar_ts_raw = latest_bar_df["timestamp"][0]
+                            bar_dt = bar_ts_raw if isinstance(bar_ts_raw, datetime) else datetime.fromisoformat(str(bar_ts_raw).replace("Z", "+00:00"))
+                            if bar_dt.tzinfo is None:
+                                bar_dt = bar_dt.replace(tzinfo=UTC)
+                            age_sec = (datetime.now(UTC) - bar_dt).total_seconds()
+                            if age_sec > settings.STALE_PRICE_MAX_AGE_SEC:
+                                asyncio.create_task(
+                                    get_alerting_engine().alert_stale_price(symbol, age_sec, settings.STALE_PRICE_MAX_AGE_SEC)
+                                )
+                        except Exception as stale_check_err:
+                            logger.debug(f"[{symbol}] Stale-price check skipped (non-fatal): {stale_check_err}")
 
                         # Dispatch signal processing to a background task
                         task = asyncio.create_task(

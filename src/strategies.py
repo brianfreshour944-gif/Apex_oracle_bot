@@ -26,6 +26,12 @@ class TradingStrategy:
         self.backtest = backtest
         self._active_strategy: dict[str, str] = {}
         self._trailing_peaks: dict[str, float] = {}
+        # Mirrors _trailing_peaks but tracks the WORST price seen since entry
+        # (min for long, max for short) -- i.e. Max Adverse Excursion (MAE).
+        # Purely observational: never read by any exit/sizing decision, only
+        # by _record_committee_outcome() for max_adverse_pct reporting (was
+        # previously hardcoded to 0.0 -- see ADVERSARIAL_AUDIT_2026-09-20.md).
+        self._trailing_troughs: dict[str, float] = {}
         self._prev_regime: dict[str, str] = {}  # Hysteresis: track previous regime per symbol
         self._hurst_history: dict[str, list[float]] = {}  # Track Hurst velocity for transition detection
         # Cycle-level caches for on-chain and sentiment data so they
@@ -695,6 +701,16 @@ class TradingStrategy:
                     "reason": "stop_loss_hit",
                     "pnl_pct": pnl_pct
                 }
+
+            # MAE tracking (worst price since entry) -- independent of whether
+            # TRAILING_STOP_ENABLED, so adverse excursion is always available
+            # for post-trade analysis even when trailing stops are off.
+            if symbol not in self._trailing_troughs:
+                self._trailing_troughs[symbol] = current_price
+            if side == "long":
+                self._trailing_troughs[symbol] = min(self._trailing_troughs[symbol], current_price)
+            else:
+                self._trailing_troughs[symbol] = max(self._trailing_troughs[symbol], current_price)
 
             # Trailing stop (if enabled)
             if settings.TRAILING_STOP_ENABLED:

@@ -1,8 +1,21 @@
-"""Hierarchical Feature Ablation Framework — improves SHAP-only selection.
+"""Feature Usage Verification for LEGACY_FEATURE_COLS.
 
-Uses correlation clustering + OOS ablation + 3-window stability to decide
-which feature clusters can be removed safely. Only applies to LEGACY features
-(rsi, macd, atr, etc.) — NEVER touches CORE_FEATURE_COLS (model training set).
+Answers, per legacy feature column: is it actually consumed by anything in
+the LIVE trading path outside the ML model's own input (CORE_FEATURE_COLS),
+based on direct code-usage inspection (VERIFIED_LEGACY_USAGE below) rather
+than domain-knowledge speculation? "Not part of the transformer's input" is
+NOT the same claim as "safe to remove" -- see VERIFIED_LEGACY_USAGE's
+docstring for why rsi/atr specifically are load-bearing elsewhere and must
+NOT be removed despite not being in CORE_FEATURE_COLS.
+
+Only applies to LEGACY_FEATURE_COLS — never touches CORE_FEATURE_COLS (the
+model's actual training/inference input).
+
+Does not run a full comparative-retrain ablation study (removing a feature,
+retraining the transformer, and measuring the OOS delta) -- that is a
+materially larger undertaking (real GPU time, a full retrain per candidate)
+that these functions do not attempt. What's here is code-verified, not
+retrain-verified.
 """
 
 import json
@@ -69,101 +82,101 @@ def identify_high_corr_clusters(corr_matrix: np.ndarray, features: list[str], th
     return clusters
 
 
+# VERIFIED usage of each LEGACY_FEATURE_COLS column OUTSIDE feature_engineering.py
+# itself, established by direct code inspection (repo-wide grep, 2026-09-20) --
+# NOT domain-knowledge guesses. This matters because "not part of CORE_FEATURE_COLS
+# (the transformer's input)" is NOT the same claim as "safe to remove" -- a column
+# can be irrelevant to the ML model but still be load-bearing elsewhere.
+#
+# - rsi, atr: LOAD-BEARING, NOT SAFE TO REMOVE. src/strategies.py's
+#   analyze_market_regime() (lines ~210-227) reads bars_df_features['atr']/['rsi']
+#   (the add_features() output, i.e. exactly these legacy columns) as the
+#   PRIMARY source for regime classification and the signal dict's atr/rsi
+#   fields -- which quant_brain.py's RSI-threshold votes, the high-volatility
+#   regime stand-aside check, and strategies.py's own profit-target/stop-loss/
+#   trailing-stop exit logic all consume directly. A separate _calculate_rsi/
+#   _calculate_atr fallback only fires if the feature value is missing/NaN, so
+#   in normal operation these ARE the values driving trading decisions.
+#   The previous version of this file's recommendations called this cluster
+#   "safe to test... without affecting model input" -- true only for the
+#   transformer's input, false for the rest of the system, and dangerously
+#   misleading if acted on literally.
+# - macd: genuinely dead in the live signal path. Repo-wide grep found no
+#   `signal["macd"] = ...` assignment anywhere in strategies.py; the only
+#   reader (committee.py:344, feeding rl_meta.py's PPO observation) always
+#   gets committee.py's own `signal.get("macd", 0.0)` default. Computing it in
+#   add_features() is wasted work, but "ablating" it changes nothing live
+#   since nothing live currently reads a real value for it.
+# - volume_spike, bollinger_width: genuinely unreferenced anywhere outside
+#   feature_engineering.py/feature_ablation.py (repo-wide grep). Dead columns.
+# - funding_rate, open_interest, long_short_ratio, bid_ask_imbalance: this
+#   file's original claim was ACCURATE -- these are populated in strategies.py
+#   from a separate live source (src.onchain_data's deriv_data, not from
+#   add_features()'s legacy columns), so add_features() computing placeholder
+#   versions of them is genuinely redundant with the real values used
+#   elsewhere.
+VERIFIED_LEGACY_USAGE = {
+    "rsi": {"safe_to_remove": False, "reason": "primary source for regime classification, quant_brain RSI votes, and price-based exit logic via strategies.py's analyze_market_regime"},
+    "atr": {"safe_to_remove": False, "reason": "primary source for regime classification (high-volatility stand-aside threshold) and ATR-based stop-distance sizing via strategies.py's analyze_market_regime"},
+    "macd": {"safe_to_remove": True, "reason": "never assigned into the live signal dict anywhere in strategies.py; only reader always falls back to a hardcoded 0.0"},
+    "volume_spike": {"safe_to_remove": True, "reason": "no reader found anywhere outside feature_engineering.py/feature_ablation.py"},
+    "bollinger_width": {"safe_to_remove": True, "reason": "no reader found anywhere outside feature_engineering.py/feature_ablation.py"},
+    "funding_rate": {"safe_to_remove": True, "reason": "live value comes from src.onchain_data's deriv_data instead; this column is an unused placeholder"},
+    "open_interest": {"safe_to_remove": True, "reason": "live value comes from src.onchain_data's deriv_data instead; this column is an unused placeholder"},
+    "long_short_ratio": {"safe_to_remove": True, "reason": "live value comes from src.onchain_data's deriv_data instead; this column is an unused placeholder"},
+    "bid_ask_imbalance": {"safe_to_remove": True, "reason": "live value comes from src.onchain_data's deriv_data instead; this column is an unused placeholder"},
+}
+
+
 def propose_ablation_candidates(
     feature_dfs: dict[str, "pd.DataFrame"],  # noqa: F821
     symbol: str = "BTC/USD",
     lookback: int = 50,
 ) -> list[dict[str, Any]]:
     """
-    Propose feature clusters that could be removed safely.
-    
-    Only proposes LEGACY clusters (never core). Requires:
-    - Correlation > 0.85 within cluster
-    - Stable result across at least 3 evaluation windows
-    - OOS performance drop < MAX_OOS_DROP_PCT
-    
-    Returns recommendations with evidence (correlation, stability, OOS drop).
+    Propose feature clusters that could be removed safely, based on
+    VERIFIED_LEGACY_USAGE above (direct code inspection of actual consumers),
+    not domain-knowledge speculation. Also computes REAL correlations between
+    core and legacy features from the feature_dfs actually passed in, when
+    available (previously this function ignored feature_dfs entirely and
+    returned static text regardless of input -- fixed 2026-09-20, see
+    ADVERSARIAL_AUDIT_2026-09-20.md §0/§11).
+
+    Returns recommendations with evidence (verified usage + real correlation
+    where computable). Genuinely safe-to-remove columns (macd, volume_spike,
+    bollinger_width, and the 4 unused derivatives placeholders) are flagged
+    "safe_removal"; rsi/atr are explicitly flagged "DO NOT REMOVE" since they
+    are load-bearing for live trading logic outside the ML model.
     """
-    # For now, return recommendations based on domain knowledge + correlation
-    # Full OOS requires running walkforward per cluster — expensive
     recommendations = []
-    # 1. Regime-specific ablation (not global)
-    regimes_to_test = ["trending", "mean_reverting", "sideways", "high_volatility", "bear"]
-    for regime in regimes_to_test:
-        recommendations.append({
-            "cluster": f"legacy_retail_regime_{regime}",
-            "features": LEGACY_FEATURE_COLS,
-            "action": "shadow_test_regime_specific",
-            "regime": regime,
-            "reason": f"Test removal of legacy retail features specifically in {regime} regime",
-            "priority": "high",
-            "rationale": ["Regime-specific ablation avoids removing features critical in one regime but useless in another"],
-        })
-    
-    # 2. Shadow vs live comparison (not single backtest)
-    recommendations.append({
-        "cluster": "shadow_vs_live_comparison",
-        "features": LEGACY_FEATURE_COLS,
-        "action": "run_parallel_backtests",
-        "reason": "Run 2 backtests (full vs cluster-removed) same 30d window; compare Sharpe/MaxDD/win_rate",
-        "priority": "high",
-    })
-    
-    # 3. Temporal correlation stability
-    recommendations.append({
-        "cluster": "temporal_correlation_stability",
-        "features": ["parkinson_vol", "garman_klass_vol", "roll_autocorr"],
-        "action": "check_correlation_l2_across_windows",
-        "reason": "Require cluster correlation L2 norm < 0.05 across 30/90/180d windows",
-        "priority": "high",
-    })
-    
-    # 4. Feature reconstruction test
-    recommendations.append({
-        "cluster": "feature_reconstruction",
-        "features": LEGACY_FEATURE_COLS,
-        "action": "test_reconstruction_rate",
-        "reason": "Can remaining 8 core features reconstruct ~95% of original signal? If not, cluster has hidden info",
-        "priority": "medium",
-    })
-    
-    # Original recommendation preserved
-    recommendations.append({
-        "cluster": "legacy_retail",
-        "features": LEGACY_FEATURE_COLS,
-        "action": "shadow_test",
-        "reason": "RSI/MACD/ATR are legacy retail indicators redundant with roll_autocorr/z_return/ATR; correlation with core features > 0.7. Safe to test in shadow via walkforward.",
-        "priority": "high",
-        "rationale": [
-            "RSI correlates with roll_autocorr (mean-reversion signal)",
-            "MACD correlates with z_return + EMA slope",
-            "ATR is redundant with Parkinson/GK vol measures",
-            "All are in LEGACY_FEATURE_COLS — not in CORE_FEATURE_COLS",
-            "Removing reduces compute by ~25% without affecting model input",
-        ],
-        "correlation_estimate": 0.82,
-        "stability": "needs_3_windows",
-        "required_evidence": "Run run_walkforward_optimization() with/without legacy_retail; confirm drop < 1% over 30/90/180d windows.",
-    })
-    
-    # Legacy derivatives
-    recommendations.append({
-        "cluster": "legacy_derivatives",
-        "features": FEATURE_CLUSTERS["legacy_derivatives"],
-        "action": "shadow_test",
-        "reason": "Funding/OI/L-S ratios are structural (not regime-invariant) and not Z-scored; can cause non-stationarity. Already handled separately in strategy cycle.",
-        "priority": "low",
-        "rationale": [
-            "Derivatives data fetched separately (300s TTL)",
-            "Not part of CORE_FEATURE_COLS model input",
-            "Used only for regime analysis (funding_rate in regime_data)",
-            "Can keep without harm; removing not critical",
-        ],
-        "correlation_estimate": 0.45,
-        "stability": "low_risk",
-        "required_evidence": "Not needed for ablation — already isolated.",
-    })
-    
+
+    for feature, usage in VERIFIED_LEGACY_USAGE.items():
+        rec = {
+            "feature": feature,
+            "safe_to_remove": usage["safe_to_remove"],
+            "action": "safe_removal" if usage["safe_to_remove"] else "DO_NOT_REMOVE",
+            "reason": usage["reason"],
+            "priority": "low" if usage["safe_to_remove"] else "n/a (load-bearing)",
+        }
+        # Attach real correlation with each core feature when we have actual
+        # data to compute it from (not required -- verified usage above is
+        # the primary evidence; this is a secondary corroborating signal).
+        for sym, df in (feature_dfs or {}).items():
+            corr_matrix, cols = compute_feature_correlation_matrix(df)
+            if corr_matrix.size == 0 or feature not in cols:
+                continue
+            idx = cols.index(feature)
+            core_corrs = {c: float(corr_matrix[idx][cols.index(c)]) for c in CORE_FEATURE_COLS if c in cols}
+            if core_corrs:
+                best_core_match = max(core_corrs, key=lambda k: abs(core_corrs[k]))
+                rec["measured_correlation"] = {
+                    "symbol": sym,
+                    "most_correlated_core_feature": best_core_match,
+                    "correlation": core_corrs[best_core_match],
+                }
+            break  # one symbol's measurement is enough evidence to attach
+        recommendations.append(rec)
+
     return recommendations
 
 
@@ -173,28 +186,40 @@ def run_ablation_shadow(
     base_result: Any,  # BacktestResult
     chart_interval_days: int = 30,
 ) -> dict[str, Any]:
-    """Run shadow ablation: compare baseline vs cluster-removed over rolling windows."""
-    # Note: Full implementation requires importing run_backtest and running
-    # with a modified feature set. This is a framework — actual OOS requires
-    # the full historical bar dataset.
-    
+    """Report on which LEGACY_FEATURE_COLS columns are actually safe to stop
+    computing, based on verified live-code usage (VERIFIED_LEGACY_USAGE) plus
+    real measured correlation with core features where feature_df is supplied.
+
+    This does NOT run a full comparative retrain/backtest ablation (that
+    would require re-fitting the transformer per candidate removal, which is
+    out of scope for a lightweight shadow report) -- it answers a narrower
+    but directly actionable and CORRECT question: "is this column consumed by
+    anything outside the ML model's input, such that removing it would change
+    live trading behavior?" The previous version of this function answered a
+    different, incorrect question (treated "not fed to the transformer" as
+    equivalent to "safe to remove everywhere"), which is false for rsi/atr --
+    see VERIFIED_LEGACY_USAGE and ADVERSARIAL_AUDIT_2026-09-20.md §11.
+    """
     recommendations = propose_ablation_candidates({symbol: feature_df}, symbol)
-    
+    safe = [r for r in recommendations if r["safe_to_remove"]]
+    unsafe = [r for r in recommendations if not r["safe_to_remove"]]
+
     report = {
         "symbol": symbol,
         "recommendations": recommendations,
-        "methodology": "Hierarchical correlation clustering + OOS ablation + 3-window stability",
-        "principles": [
-            "Only evaluate LEGACY clusters (never CORE_FEATURE_COLS)",
-            "Require correlation > 0.85 within cluster",
-            "Require OOS drop < 1% over 3 windows",
-            "Only promote via walk-forward validation",
-            "Shadow mode only — never live-drop without canary",
-        ],
-        "status": "shadow_ready",
+        "safe_to_remove": [r["feature"] for r in safe],
+        "do_not_remove": [r["feature"] for r in unsafe],
+        "methodology": "Verified live-code usage inspection (not domain-knowledge speculation) "
+                       "+ measured correlation with core features where data is available. "
+                       "Does not include a full comparative-retrain ablation.",
+        "status": "verified",
     }
-    
-    logger.info(f"Feature ablation shadow ready for {symbol}: {len(recommendations)} recommendations")
+
+    logger.info(
+        f"Feature ablation report for {symbol}: {len(safe)} columns safe to stop computing "
+        f"({[r['feature'] for r in safe]}), {len(unsafe)} load-bearing outside the ML model "
+        f"and must NOT be removed ({[r['feature'] for r in unsafe]})"
+    )
     return report
 
 

@@ -71,7 +71,8 @@ The bot features layered risk protection managed dynamically by `src/risk.py`:
 | `ACCOUNT_BASE` | `$10,000` | Account valuation baseline for per-trade risk sizing |
 | `BASE_RISK_PERCENT` | `1.0%` | Standard risk per trade |
 | `MAX_SINGLE_TRADE_USD` | `$2,500` | Absolute hard dollar cap per trade |
-| `MAX_PORTFOLIO_VALUE` | `$500` | Maximum combined open market exposure cap |
+| `MAX_PORTFOLIO_VALUE` | `$500` (fallback only) | Static exposure cap — **only used if `MAX_PORTFOLIO_PCT=0`**. |
+| `MAX_PORTFOLIO_PCT` | `0.5` | Effective exposure cap = `ACCOUNT_BASE * MAX_PORTFOLIO_PCT` (default: $5,000 on a $10k account). Overrides `MAX_PORTFOLIO_VALUE` above whenever > 0. |
 | `MAX_OPEN_POSITIONS` | `3` | Concurrent asset holdings limit |
 | `MAX_DRAWDOWN_STOP` | `-10.0%` | Portfolio peak drawdown killswitch (liquidates all holdings) |
 | `DAILY_LOSS_LIMIT` | `-3.0%` | Daily stop-loss threshold |
@@ -90,7 +91,7 @@ The bot dynamically classifies market state into three distinct operational mode
 2. **Mean-Reverting** ($Hurst < 0.58$):
    * Buys oversold RSI ($<30$) and shorts/sells overbought RSI ($>80$).
    * Uses conservative position sizing ($0.8\times$).
-3. **High Volatility** ($\text{ATR} > 5.0\%$):
+3. **High Volatility** ($\text{ATR} > 12.0\%$):
    * Immediately stands aside to preserve capital during market turbulence.
 
 ---
@@ -136,7 +137,7 @@ execution are left intact.
 | `ADAPTIVE_LEARNING_RATE` | `0.10` | Exponential reward rate for per-brain weight updates. |
 | `ADAPTIVE_MIN_WEIGHT` | `0.02` | Lower clamp for any single brain weight per regime. |
 | `ADAPTIVE_MAX_WEIGHT` | `0.60` | Upper clamp for any single brain weight per regime. |
-| `ADAPTIVE_MIN_TRADES_BEFORE_LIVE` | `50` | Realized outcomes required before weights go live. |
+| `ADAPTIVE_MIN_TRADES_BEFORE_LIVE` | `30` | Realized outcomes required before adaptive-learner weights go live (PPO uses a separate, lower `PPO_MIN_TRADES_BEFORE_LIVE=10`). |
 
 Current brain weights, model version, sample count, and last-update time are
 exported to Prometheus (`bot_adaptive_*`), and a Telegram alert fires when a
@@ -195,8 +196,8 @@ per regime from realized P&L.
 | Brain | Module | Type | Weight | Description |
 | :--- | :--- | :--- | :--- | :--- |
 | **Transformer** | `transformer_brain.py` | PyTorch GQA | 15–40% | Grok GQA v9 model for directional probability. Loaded lazily, runs in background thread. Includes MC-dropout uncertainty estimation and SHAP-style gradient attribution. |
-| **Quant** | `quant_brain.py` | Statistical arb | 15–30% | Mean-reversion signal based on z-score of price relative to Bollinger Bands. |
-| **Momentum** | `momentum_brain.py` | Trend following | 10–30% | Trend-following signal using rolling momentum and MACD. |
+| **Quant** | `quant_brain.py` | RSI threshold | 15–30% | Pure RSI-threshold signal: buy/sell on RSI extremes (<25/>75, softer 25-40/60-75 band), hold 40-60. No Bollinger/ATR/momentum indicators are currently implemented despite the module name. |
+| **Momentum** | `momentum_brain.py` | Regime label | 10–30% | Votes directly off the classified regime label (bull/bear/trending/high_volatility/low_volatility/sideways), not a computed momentum or MACD value. |
 | **Sentinel** | `sentinel_brain.py` | Hard veto | 5–40% | Market regime filter and hard veto for crash/volatility events. Can force "stand_aside" when market stress is detected. |
 | **LLM** | `llm_brain.py` | Qualitative | 5–25% | Rule-assisted qualitative review layer (stub; can be connected to Gemini/Groq/Claude for full reasoning). |
 
