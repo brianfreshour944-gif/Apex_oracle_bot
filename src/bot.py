@@ -1336,6 +1336,46 @@ async def process_signal_for_symbol(symbol: str, current_price: float, risk_mana
                         risk_manager.release_reserved_exposure(approved_notional)
                         return
 
+                # Final exchange-minimum-order-size check for a fresh/added BUY.
+                # risk_manager.calculate_position_size() already applies this floor
+                # to its OWN output, but several multipliers are applied to
+                # position_size AFTER that call returns (uncertainty scaling,
+                # oracle regime multiplier, committee confidence multiplier,
+                # exposure-headroom scaling, scale-in decay) -- any of which can
+                # push an already-floor-clearing size back below the exchange
+                # minimum. Confirmed live 2026-09-21: calculate_position_size
+                # returned a $9.70 ETH size, the committee multiplier (0.62x)
+                # shrank it to $6.02, and Alpaca rejected it every time
+                # (403, "cost basis must be >= minimal amount of order 10").
+                # Scoped to buy only -- a "sell" here always means reducing/
+                # closing an existing position (see the sell-qty-cap above),
+                # where blocking a small sell could trap the account holding
+                # a dust position it can never reduce.
+                if signal["action"] == "buy":
+                    min_order_usd = getattr(settings, "MIN_ORDER_USD", 10.0)
+                    final_notional = current_price * position_size
+                    if 0 < final_notional < min_order_usd:
+                        if final_notional >= min_order_usd * 0.5:
+                            # Close enough that bumping up is a small, bounded
+                            # deviation -- do it rather than waste the trade
+                            # (mirrors calculate_position_size's own bump logic).
+                            bumped_size = round(min_order_usd / current_price, 6)
+                            logger.info(
+                                f"[{symbol}] Post-multiplier size bump to exchange minimum: "
+                                f"${final_notional:.2f} -> ${min_order_usd:.2f} notional "
+                                f"({position_size} -> {bumped_size})"
+                            )
+                            position_size = bumped_size
+                        else:
+                            logger.warning(
+                                f"[{symbol}] Order vetoed: final size after all multipliers "
+                                f"is ${final_notional:.2f} notional, well below the "
+                                f"${min_order_usd:.2f} exchange minimum -- would need to bump "
+                                f">2x to place, too large a deviation."
+                            )
+                            risk_manager.release_reserved_exposure(approved_notional)
+                            return
+
                 # Place order
                 client_order_id = f"{symbol}_{signal['action']}_{position_size}_{int(time.time())}"
                 try:

@@ -859,6 +859,41 @@ class RiskManager:
                 )
                 return 0.0, "error: NaN position size (confidence was NaN)"
 
+            # 9. Exchange minimum order size. Applied LAST (after every other
+            # adjustment above, including MAX_SINGLE_TRADE_USD and the L2
+            # impact reduction) so nothing downstream can shrink a bumped-up
+            # size back below the floor. Alpaca crypto rejects any order
+            # below a $10 cost basis every single time -- risk-based sizing
+            # has no lower bound of its own and will happily compute e.g.
+            # $6-9 notional on a small account or a low-confidence/tight-stop
+            # signal on any account, which the exchange just rejects,
+            # burning the trade for nothing.
+            min_order_usd = getattr(settings, "MIN_ORDER_USD", 10.0)
+            notional = position_size * current_price
+            if 0 < notional < min_order_usd and current_price > 0:
+                min_size = min_order_usd / current_price
+                implied_risk = min_size * stop_distance
+                max_risk_multiple = getattr(settings, "MAX_MIN_ORDER_RISK_MULTIPLE", 3.0)
+                if effective_risk_amount > 0 and implied_risk <= effective_risk_amount * max_risk_multiple:
+                    logger.info(
+                        f"Bumping {symbol} position size to exchange minimum order size: "
+                        f"${notional:.2f} -> ${min_order_usd:.2f} notional "
+                        f"({position_size:.6f} -> {min_size:.6f}), implied risk ${implied_risk:.2f} "
+                        f"vs intended ${effective_risk_amount:.2f}"
+                    )
+                    position_size = round(min_size, 6)
+                else:
+                    logger.warning(
+                        f"Trade rejected for {symbol}: risk-based size (${notional:.2f} notional) is "
+                        f"below the ${min_order_usd:.2f} exchange minimum, and bumping to the minimum "
+                        f"would risk ${implied_risk:.2f} vs an intended ${effective_risk_amount:.2f} "
+                        f"(> {max_risk_multiple}x) -- too large a deviation from the intended risk."
+                    )
+                    return 0.0, (
+                        f"rejected: below exchange minimum order size "
+                        f"(${notional:.2f} < ${min_order_usd:.2f}) and bumping would oversize risk"
+                    )
+
             logger.debug(
                 f"Position sizing {symbol}: risk=${risk_amount:.2f} effective=${effective_risk_amount:.2f} "
                 f"costs={total_cost_bps:.1f}bps round_trip={round_trip_cost_bps:.1f}bps "

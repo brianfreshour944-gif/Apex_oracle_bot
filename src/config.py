@@ -94,7 +94,19 @@ class TradingBotSettings(BaseSettings):
     )
     BASE_RISK_PERCENT: float = Field(
         default=0.01,
-        description="Standard risk percentage per trade (1%)",
+        description="Standard risk percentage per trade (1%). Briefly raised to 10% on "
+                    "2026-09-21 to work around a small paper account ($97) producing "
+                    "trades below Alpaca's $10 exchange minimum -- reverted the same "
+                    "day in favor of the MIN_ORDER_USD floor-bump in "
+                    "calculate_position_size(), which solves the same problem without "
+                    "inflating every trade's risk: it computes the normal risk-based "
+                    "size and only bumps it up to the $10 floor when it's already "
+                    "close, rejecting instead of oversizing when the gap is too large. "
+                    "Raising this to 10% globally was the wrong tool -- since "
+                    "position_size = risk_amount / stop_distance, actual notional is "
+                    "typically 20-50x this percentage (inverse of the stop's % "
+                    "distance), so 10% risk means position sizes that vary wildly by "
+                    "regime and can approach the full account value, not a clean 10%.",
         ge=0,
         le=1
     )
@@ -102,6 +114,30 @@ class TradingBotSettings(BaseSettings):
         default=2500.0,
         description="Hard cap per trade size in USD",
         gt=0
+    )
+    MIN_ORDER_USD: float = Field(
+        default=10.0,
+        description="Exchange minimum order notional (Alpaca crypto rejects orders "
+                    "below this cost basis -- confirmed live via a 403, error code "
+                    "40310000, 'cost basis must be >= minimal amount of order 10'). "
+                    "Risk-based sizing has no lower bound of its own and can compute "
+                    "a notional below this on a small account or in a low-confidence/"
+                    "tight-stop scenario on any account -- the exchange would just "
+                    "reject the order every time. calculate_position_size() bumps up "
+                    "to this floor when doing so doesn't push actual risk too far past "
+                    "what was intended (see MAX_MIN_ORDER_RISK_MULTIPLE), else rejects "
+                    "the trade outright. Added 2026-09-21 after a live incident where "
+                    "every buy order failed this way with the real reason invisible "
+                    "in logs until a separate logging fix surfaced it.",
+        gt=0,
+    )
+    MAX_MIN_ORDER_RISK_MULTIPLE: float = Field(
+        default=3.0,
+        description="When bumping a too-small position up to MIN_ORDER_USD, the trade "
+                    "is only allowed if the resulting dollar risk (qty * stop_distance) "
+                    "is at most this multiple of the originally-intended risk amount. "
+                    "Above that, the trade is rejected instead of silently oversizing.",
+        gt=1.0,
     )
     MAX_PORTFOLIO_VALUE: float = Field(
         default=500.0,
