@@ -397,20 +397,30 @@ def get_session_factory():
     wait=wait_exponential(multiplier=1, min=2, max=10),
     reraise=True
 )
-def init_db() -> None:
+def init_db() -> bool:
     """Initialize database connection with exponential backoff retries.
 
     On first connect (SQLite only), also runs PRAGMA integrity_check to
     detect corruption from an unclean shutdown (OOM kill, power loss).
     If the database is corrupt, it is moved aside so create_all() can
     rebuild a clean schema rather than crash-looping.
+
+    Returns True if corruption was detected and the DB was rebuilt (the
+    caller should fire a critical alert -- a rebuild silently loses every
+    decision snapshot, adaptive-learner sample, and closed-trade record,
+    which previously only produced a single logger.warning with nothing
+    downstream ever alerted. Confirmed as a real gap 2026-09-21
+    cross-checking an external audit against this code: the connection-
+    totally-fails case already alerts at the bot.py call site, but this
+    silent-rebuild-and-continue case did not). False otherwise.
     """
     global _tables_ensured
+    corruption_detected = False
     try:
         # Test the connection
         with get_engine().connect() as conn:
             conn.execute(text("SELECT 1"))
-            
+
             # SQLite integrity check — detect corruption from unclean shutdown
             if get_engine().url.drivername == "sqlite":
                 try:
@@ -419,6 +429,7 @@ def init_db() -> None:
                         logger.warning(f"SQLite integrity check failed: {result[0]}. "
                                        f"Database may be corrupt — moving aside and rebuilding.")
                         _recovery_from_corruption()
+                        corruption_detected = True
                 except SQLAlchemyError as pragma_err:
                     logger.warning(f"Could not run integrity_check: {pragma_err}")
         # Create ORM tables if they do not exist (safe/idempotent).
@@ -433,6 +444,7 @@ def init_db() -> None:
         _ensure_indexes()
 
         logger.info(f"Database connected: {settings.DATABASE_URL}")
+        return corruption_detected
     except SQLAlchemyError as e:
         logger.warning(f"Database connection attempt failed: {e}. Retrying...")
         raise

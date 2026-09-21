@@ -33,6 +33,10 @@ class TradingStrategy:
         # previously hardcoded to 0.0 -- see ADVERSARIAL_AUDIT_2026-09-20.md).
         self._trailing_troughs: dict[str, float] = {}
         self._prev_regime: dict[str, str] = {}  # Hysteresis: track previous regime per symbol
+        # (cleanup_stale_state below addresses these two dicts never having
+        # any periodic sweep -- only the explicit pop() at position-close call
+        # sites in bot.py. Confirmed as a real gap 2026-09-21 cross-checking
+        # an external audit against this code.)
         self._hurst_history: dict[str, list[float]] = {}  # Track Hurst velocity for transition detection
         # Cycle-level caches for on-chain and sentiment data so they
         # are fetched once per cycle instead of once per symbol.
@@ -56,6 +60,36 @@ class TradingStrategy:
     def clear_feature_cache(self) -> None:
         """Clear the feature DataFrame cache."""
         self._feature_dfs.clear()
+
+    def cleanup_stale_state(self, active_symbols: set[str] | None = None) -> dict[str, int]:
+        """Remove _trailing_peaks/_trailing_troughs entries for symbols no
+        longer in the active trading universe. These two dicts have no
+        per-entry timestamp (just symbol -> price), so there's no true TTL
+        sweep possible -- the explicit pop() at each position-close call site
+        in bot.py is still the primary cleanup for a symbol still being
+        traded. This catches the "abandoned symbol" case (removed from
+        SYMBOLS config) that those close-triggered pops can't, matching the
+        same active-symbols-membership pattern already used for
+        BotState._symbol_locks/latest_scan_results. Call periodically (e.g.
+        from bot.py's state_cleanup_loop) -- confirmed as a real gap
+        2026-09-21 cross-checking an external audit against this code.
+        """
+        cleaned = {"trailing_peaks": 0, "trailing_troughs": 0}
+        if active_symbols is None:
+            return cleaned
+        stale_peaks = [k for k in self._trailing_peaks if k not in active_symbols]
+        for k in stale_peaks:
+            del self._trailing_peaks[k]
+        cleaned["trailing_peaks"] = len(stale_peaks)
+
+        stale_troughs = [k for k in self._trailing_troughs if k not in active_symbols]
+        for k in stale_troughs:
+            del self._trailing_troughs[k]
+        cleaned["trailing_troughs"] = len(stale_troughs)
+
+        if any(v > 0 for v in cleaned.values()):
+            logger.debug(f"Cleaned stale strategy state: {cleaned}")
+        return cleaned
 
     def _predict_regime_transition(self, symbol: str, regime_data: dict, hurst_velocity: float) -> float:
         """

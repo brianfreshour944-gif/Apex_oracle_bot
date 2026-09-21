@@ -513,10 +513,23 @@ class BotState:
             del self.cooldowns[k]
         cleaned["cooldowns"] = len(expired_cooldowns)
         
-        # Clean position_adds for symbols that no longer have positions
-        # Note: This is conservative - we only clean if explicitly told
-        # The actual cleanup happens in clear_position_adds() on position close
-        
+        # Clean position_adds entries stale for longer than max_age_seconds
+        # (no new scale-in add in that window strongly implies the position
+        # was closed through a path that didn't clear this entry -- e.g. a
+        # manual close on the exchange, or a reconciliation-driven close --
+        # since the explicit clear_position_adds()-on-close path is the ONLY
+        # other cleanup this dict gets otherwise. Previously unbounded:
+        # confirmed as a real gap 2026-09-21 cross-checking an external audit
+        # against this code -- cooldowns/trade_timestamps already had TTL
+        # cleanup below, position_adds did not.
+        stale_adds = [
+            k for k, v in self.position_adds.items()
+            if now - v.get("last_add_time", 0) > max_age_seconds
+        ]
+        for k in stale_adds:
+            del self.position_adds[k]
+        cleaned["position_adds"] = len(stale_adds)
+
         # Clean symbol locks for symbols not in active trading
         # We keep locks for symbols in SYMBOLS config to avoid recreating
         active_symbols = set(settings.SYMBOLS)
@@ -1177,6 +1190,14 @@ async def process_signal_for_symbol(symbol: str, current_price: float, risk_mana
                     current_equity=risk_status.get("equity"),
                     drawdown_pct=risk_status.get("drawdown_pct"),
                     side=signal["action"],  # "buy" or "sell" for market impact
+                    # Reuse the on-chain data analyze_market_regime already
+                    # fetched (async, thread-offloaded) into signal["features"]
+                    # instead of letting calculate_position_size make its own
+                    # blocking re-fetch(es) -- was happening TWICE internally
+                    # per call. Confirmed via a measured performance audit
+                    # 2026-09-21: ~600-900ms of redundant blocking HTTP per
+                    # trade signal.
+                    deriv_data=signal.get("features"),
                 )
     
                 if sizing_status != "ok":
@@ -2156,8 +2177,25 @@ async def run_trading_bot() -> None:
 
         # Initialize database (handle connection failures gracefully)
         try:
-            init_db()
+            corruption_detected = init_db()
             logger.info("Database connected successfully")
+            if corruption_detected:
+                # init_db() silently rebuilt a corrupt DB -- every decision
+                # snapshot, adaptive-learner sample, and closed-trade record
+                # from before this point is gone. This previously produced
+                # only a logger.warning inside db.py with nothing downstream
+                # ever alerted (distinct from the connection-totally-fails
+                # case below, which already alerted). Confirmed as a real
+                # gap 2026-09-21 cross-checking an external audit.
+                try:
+                    await get_alerting_engine().alert_data_integrity_failure(
+                        "sqlite_corruption_rebuild", 1,
+                        {"impact": "database was corrupt and has been rebuilt empty -- "
+                                   "all decision snapshots, adaptive learner samples, and "
+                                   "closed-trade history prior to this restart are lost"},
+                    )
+                except Exception as alert_e:
+                    logger.error(f"Failed to send DB-corruption alert: {alert_e}")
         except Exception as e:
             logger.warning(f"Database connection failed (will retry later): {e}")
             logger.info("Running in offline mode - some features may be limited")
@@ -2393,6 +2431,13 @@ async def run_trading_bot() -> None:
                         )
                         if any(v > 0 for v in rm_cleaned.values()):
                             logger.info(f"RiskManager cleanup: {rm_cleaned}")
+
+                    # Also clean TradingStrategy state (_trailing_peaks/_trailing_troughs
+                    # for symbols no longer in the active trading universe)
+                    if _state.strategy is not None:
+                        strat_cleaned = _state.strategy.cleanup_stale_state(active_symbols=set(settings.SYMBOLS))
+                        if any(v > 0 for v in strat_cleaned.values()):
+                            logger.info(f"TradingStrategy cleanup: {strat_cleaned}")
                 except Exception as e:
                     logger.error(f"State cleanup error: {e}")
                     await asyncio.sleep(60)
