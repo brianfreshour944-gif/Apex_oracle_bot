@@ -33,6 +33,21 @@ class CircuitBreaker:
         self._opened_at = 0.0
         self._lock = asyncio.Lock()
         self._half_open_successes = 0
+        # True while one HALF_OPEN probe call is in flight. Without this, every
+        # concurrent caller that observes HALF_OPEN treats itself as an
+        # independent probe and fires its own real API call simultaneously
+        # (e.g. bot.py's killswitch monitor calls get_account()+get_positions()
+        # every 5s while the main scan loop concurrently calls get_positions()
+        # + 3x get_latest_bar() every 60s -- up to 6 calls can land at once).
+        # If the outage was itself a rate limit, a burst of several
+        # simultaneous "probes" right at the recovery moment is exactly what
+        # re-triggers it, and a single failing probe immediately reopens the
+        # circuit regardless of how many sibling probes succeeded -- producing
+        # a flap that never fully recovers. Found 2026-09-21 while diagnosing
+        # a live deployment stuck cycling OPEN -> HALF_OPEN -> OPEN for over
+        # 15 minutes with zero trades. Gating to exactly one in-flight probe
+        # makes recovery a single trickle request instead of a burst.
+        self._probe_in_flight = False
 
     @property
     def state(self) -> CircuitState:
@@ -49,13 +64,24 @@ class CircuitBreaker:
             self._maybe_transition()
             if self._state == CircuitState.OPEN:
                 raise RuntimeError(f"Circuit {self.name!r} is OPEN - calls blocked")
-            probe = self._state == CircuitState.HALF_OPEN
+            probe = False
+            if self._state == CircuitState.HALF_OPEN:
+                if self._probe_in_flight:
+                    # Another call already claimed the probe slot -- don't pile
+                    # a second concurrent real API call onto a circuit that's
+                    # still trying to prove it recovered. Block this one exactly
+                    # like OPEN; it'll get a fresh chance next time this circuit
+                    # is called.
+                    raise RuntimeError(f"Circuit {self.name!r} is HALF_OPEN (probe already in flight) - calls blocked")
+                probe = True
+                self._probe_in_flight = True
         try:
             result = await func(*args, **kwargs)
         except Exception:
             async with self._lock:
                 if probe:
                     # Immediate reopening on HALF_OPEN probe failure
+                    self._probe_in_flight = False
                     self._state = CircuitState.OPEN
                     self._opened_at = time.monotonic()
                     self._half_open_successes = 0
@@ -70,6 +96,7 @@ class CircuitBreaker:
             raise
         async with self._lock:
             if probe:
+                self._probe_in_flight = False
                 if self._state == CircuitState.HALF_OPEN:
                     # Success in HALF_OPEN - need consecutive successes to close
                     self._half_open_successes += 1
@@ -88,3 +115,4 @@ class CircuitBreaker:
         self._state = CircuitState.CLOSED
         self._opened_at = 0.0
         self._half_open_successes = 0
+        self._probe_in_flight = False

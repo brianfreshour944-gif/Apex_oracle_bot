@@ -74,8 +74,17 @@ def select_best_strategy(regime: str, features: dict[str, Any] | None = None) ->
     learner = get_strategy_learner()
     weights = learner._clamp_normalize(learner._regime_weights(regime))
     
-    # Extract regime features for cost-aware selection
-    atr_pct = features.get("atr", 0.0) / features.get("close", 1.0) * 100 if features else 1.0
+    # Extract regime features for cost-aware selection.
+    # `features.get("close", 1.0)` looks safe but isn't: the default only
+    # applies when the KEY is missing, not when it's present with value 0.0 --
+    # exactly what analyze_market_regime's insufficient-data fallback returns
+    # (`"close": 0.0`). That produced a real 0.0/0.0 ZeroDivisionError in
+    # production (caught by generate_trading_signal's broad try/except, so it
+    # degraded safely to stand_aside, but the bot silently stopped evaluating
+    # cost-aware strategy selection every time this fired). `or 1.0` handles
+    # both "key missing" and "key present but falsy/zero". Fixed 2026-09-21.
+    close_price = (features.get("close") or 1.0) if features else 1.0
+    atr_pct = features.get("atr", 0.0) / close_price * 100 if features else 1.0
     in_transition = features.get("in_transition", False) if features else False
     hurst_velocity = features.get("hurst_velocity", 0.0) if features else 0.0
     
