@@ -34,6 +34,7 @@
 # main trading loop, and your orchestration was catching/retrying at INFO
 # level without surfacing the traceback where you were looking.
 
+import asyncio
 import json
 import os
 
@@ -420,8 +421,18 @@ async def add_multi_timeframe_features(
                 else:
                     bars_df[col] = 0.0
         
-        # Compute base timeframe features
-        features_df = add_features(bars_df, symbol)
+        # Compute base timeframe features. add_features is pure CPU work (19
+        # rolling-window pandas operations, ~30ms measured on 200 rows) with
+        # no I/O of its own -- but despite this function being `async def`,
+        # it was calling add_features() bare, directly blocking the event
+        # loop for that duration on every regime analysis call instead of
+        # offloading it like every other CPU-bound call in this codebase
+        # does. Measured 2026-09-21: a concurrent asyncio.sleep(0.05) ticker
+        # task's lag tracked the add_features() wall time almost exactly
+        # (~91ms lag during a 141ms bare 5-call window) when NOT offloaded,
+        # confirming this is a real, currently-live event-loop stall, not a
+        # theoretical one.
+        features_df = await asyncio.to_thread(add_features, bars_df, symbol)
         
         # NOTE: multi-timeframe feature fetching is intentionally disabled.
         # The earlier design fetched additional timeframes and joined them in
