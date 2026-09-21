@@ -1180,7 +1180,7 @@ async def process_signal_for_symbol(symbol: str, current_price: float, risk_mana
                 # that produced a 100x-inflated "expected edge", which silently
                 # defeated the min-edge-after-costs rejection gate below.
                 expected_return_pct = max(-0.02, min(0.05, raw_edge))  # cap at -2% to +5% (fraction, e.g. 0.03 = 3%)
-                position_size, sizing_status = await risk_manager.calculate_position_size(
+                position_size, sizing_status = risk_manager.calculate_position_size(
                     symbol,
                     current_price,
                     signal["regime"],
