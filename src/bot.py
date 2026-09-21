@@ -683,9 +683,15 @@ async def reconcile_open_snapshots(exchange: AlpacaExchange) -> None:
                 logger.debug(f"Position-desync alert skipped (non-fatal): {alert_err}")
             await _close_orphan_position(exchange, held, positions)
 
-    if not open_snaps:
-        return
-
+    # NOTE: no early `return` here when open_snaps is empty -- the loop below
+    # is already a no-op on an empty list, and an early return would skip the
+    # stale-open-order check further down too. That's not hypothetical: found
+    # via simulation 2026-09-21 that a crash occurring during/before order
+    # recording (i.e. before save_decision_snapshot() ever ran) leaves ZERO
+    # open snapshots in the DB -- exactly the scenario the stale-order check
+    # exists to catch -- while a real order can still be sitting on the
+    # exchange. An earlier version of this function returned here, silently
+    # disabling that check in precisely the case it was built for.
     for snap in open_snaps:
         sym = snap["symbol"]
         sym_clean = sym.replace("/", "")
