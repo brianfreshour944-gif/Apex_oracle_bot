@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 import datetime
+from datetime import UTC
 from decimal import Decimal
 from typing import Any
 
@@ -181,7 +182,7 @@ async def fetch_real_bars(
                 bars = bars.rename({"timestamp": "t"})
             elif "t" not in bars.columns:
                 # Add a placeholder time column if missing
-                bars = bars.with_columns(pl.lit(datetime.datetime.utcnow().isoformat()).alias("t"))
+                bars = bars.with_columns(pl.lit(datetime.now(UTC).isoformat()).alias("t"))
             logger.info(f"Fetched {len(bars)} real bars for {symbol} from Alpaca")
             return bars
     except Exception as e:

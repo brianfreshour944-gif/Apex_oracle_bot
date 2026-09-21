@@ -1180,7 +1180,7 @@ async def process_signal_for_symbol(symbol: str, current_price: float, risk_mana
                 # that produced a 100x-inflated "expected edge", which silently
                 # defeated the min-edge-after-costs rejection gate below.
                 expected_return_pct = max(-0.02, min(0.05, raw_edge))  # cap at -2% to +5% (fraction, e.g. 0.03 = 3%)
-                position_size, sizing_status = risk_manager.calculate_position_size(
+                position_size, sizing_status = await risk_manager.calculate_position_size(
                     symbol,
                     current_price,
                     signal["regime"],
@@ -1380,7 +1380,7 @@ async def process_signal_for_symbol(symbol: str, current_price: float, risk_mana
                             # Close enough that bumping up is a small, bounded
                             # deviation -- do it rather than waste the trade
                             # (mirrors calculate_position_size's own bump logic).
-                            bumped_size = round(min_order_usd / current_price, 6)
+                            bumped_size = math.ceil(min_order_usd / current_price * 1_000_000) / 1_000_000
                             logger.info(
                                 f"[{symbol}] Post-multiplier size bump to exchange minimum: "
                                 f"${final_notional:.2f} -> ${min_order_usd:.2f} notional "

@@ -77,6 +77,11 @@ class CircuitBreaker:
                 self._probe_in_flight = True
         try:
             result = await func(*args, **kwargs)
+        except asyncio.CancelledError:
+            async with self._lock:
+                if probe:
+                    self._probe_in_flight = False
+            raise
         except Exception:
             async with self._lock:
                 if probe:

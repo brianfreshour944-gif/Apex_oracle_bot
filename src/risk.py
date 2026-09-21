@@ -900,7 +900,7 @@ class RiskManager:
                         f"({position_size:.6f} -> {min_size:.6f}), implied risk ${implied_risk:.2f} "
                         f"vs intended ${effective_risk_amount:.2f}"
                     )
-                    position_size = round(min_size, 6)
+                    position_size = math.ceil(min_size * 1_000_000) / 1_000_000
                 else:
                     logger.warning(
                         f"Trade rejected for {symbol}: risk-based size (${notional:.2f} notional) is "

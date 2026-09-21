@@ -8,7 +8,7 @@ Logs weekly drift reports and alerts when features drift beyond thresholds.
 import json
 import os
 from collections import defaultdict
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, UTC
 from typing import Any
 
 import numpy as np
@@ -176,7 +176,7 @@ class FeatureDriftMonitor:
             timestamp: Timestamp of the observation (defaults to now)
         """
         if timestamp is None:
-            timestamp = datetime.utcnow()
+            timestamp = datetime.now(UTC)
         
         ts_iso = timestamp.isoformat()
         
@@ -230,7 +230,7 @@ class FeatureDriftMonitor:
     def compute_drift_report(self) -> dict[str, Any]:
         """Compute drift metrics for all core features."""
         report = {
-            "generated_at": datetime.utcnow().isoformat(),
+            "generated_at": datetime.now(UTC).isoformat(),
             "features": {},
             "alerts": [],
             "summary": {"low": 0, "medium": 0, "high": 0},
@@ -325,7 +325,7 @@ class FeatureDriftMonitor:
         logger.info("=" * 70)
         
         # Update last report timestamp
-        self._state["last_report"] = datetime.utcnow().isoformat()
+        self._state["last_report"] = datetime.now(UTC).isoformat()
         self._state["alerts"] = report["alerts"]
         self._save_state()
     

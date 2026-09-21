@@ -1,7 +1,7 @@
 """AI Strategy Selector that uses Adaptive Meta-Learning to pick the best strategy."""
 
 import os
-from datetime import datetime
+from datetime import datetime, UTC
 from typing import Any
 
 from src.committee.adaptive_meta import AdaptiveMetaLearner
@@ -192,6 +192,6 @@ def record_strategy_outcome(regime: str, strategy_name: str, action: str, pnl: f
 
     # Also record in performance tracker for decay monitoring
     try:
-        record_trade_outcome(strategy_name, regime, pnl, return_pct, datetime.utcnow())
+        record_trade_outcome(strategy_name, regime, pnl, return_pct, datetime.now(UTC))
     except Exception as e:
         logger.error(f"Failed to record trade outcome in performance tracker: {e}")

@@ -9,7 +9,7 @@ Cost-adjusted returns, Top trade contribution.
 
 import json
 import os
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, UTC
 from typing import Any
 
 import numpy as np
@@ -131,7 +131,7 @@ class PerformanceTracker:
     ) -> None:
         """Record a completed trade for performance tracking."""
         if timestamp is None:
-            timestamp = datetime.utcnow()
+            timestamp = datetime.now(UTC)
 
         key = f"{strategy}|{regime}"
         if key not in self._state:
@@ -166,7 +166,7 @@ class PerformanceTracker:
     def get_performance_report(self) -> dict[str, Any]:
         """Generate performance report with rolling windows for all strategy/regime pairs."""
         report = {
-            "generated_at": datetime.utcnow().isoformat(),
+            "generated_at": datetime.now(UTC).isoformat(),
             "pairs": {},
             "alerts": [],
         }
@@ -192,7 +192,7 @@ class PerformanceTracker:
                 continue
 
             trade_data.sort(key=lambda x: x[0])
-            now = datetime.utcnow()
+            now = datetime.now(UTC)
 
             pair_report = {"total_trades": len(trade_data), "windows": {}}
 
@@ -250,7 +250,7 @@ class PerformanceTracker:
 
         Used by RiskManager.get_kelly_size_cap() -- see KELLY_SIZING_ENABLED.
         """
-        now = datetime.utcnow()
+        now = datetime.now(UTC)
         cutoff = now - timedelta(days=window_days)
         returns: list[float] = []
         pnls: list[float] = []

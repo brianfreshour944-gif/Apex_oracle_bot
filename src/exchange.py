@@ -162,6 +162,8 @@ class AlpacaExchange:
         # the order (found as a missing alert in ADVERSARIAL_AUDIT_2026-09-20.md).
         self._recent_order_submissions: dict[tuple[str, str], list[float]] = {}
         self._duplicate_order_window_sec: float = 10.0
+        # Background task tracking for fire-and-forget alerts
+        self._background_tasks: set[asyncio.Task] = set()
 
     async def load(self) -> None:
         """Initialize the exchange client and verify credentials."""
@@ -603,10 +605,12 @@ class AlpacaExchange:
             )
             try:
                 from src.alerting import get_alerting_engine
-                asyncio.create_task(get_alerting_engine().alert_duplicate_order(
+                task = asyncio.create_task(get_alerting_engine().alert_duplicate_order(
                     symbol, client_order_id or "none",
                     f"{len(recent)} prior {side} submission(s) for {symbol} in last {self._duplicate_order_window_sec:.0f}s",
                 ))
+                self._background_tasks.add(task)
+                task.add_done_callback(self._background_tasks.discard)
             except Exception as alert_err:
                 logger.debug(f"Duplicate-order alert skipped (non-fatal): {alert_err}")
         recent.append(now)

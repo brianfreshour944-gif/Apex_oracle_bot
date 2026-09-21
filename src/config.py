@@ -610,6 +610,18 @@ class TradingBotSettings(BaseSettings):
         default="models/feature_scaler.pkl",
         description="Path to feature scaler"
     )
+    USE_FAST_ENSEMBLE: bool = Field(
+        default=True,
+        description="Enable BatchEnsemble for fast transformer inference (5x speedup vs Deep Ensemble). "
+                    "Uses single forward pass with rank-1 perturbations instead of MC-dropout. "
+                    "Also avoids global model inference lock contention across concurrent symbols."
+    )
+    TRANSFORMER_ENSEMBLE_SIZE: int = Field(
+        default=5,
+        description="Ensemble size for BatchEnsemble / Bayesian Transformer",
+        ge=1,
+        le=10
+    )
 
     # --- Validation ---
     @field_validator("HURST_TREND_UP", "HURST_MEAN_REVERT")
@@ -788,4 +800,6 @@ MAX_POSITION_ADDS = settings.MAX_POSITION_ADDS
 POSITION_ADD_MIN_SECONDS = settings.POSITION_ADD_MIN_SECONDS
 POSITION_ADD_MIN_SCORE_INCREASE = settings.POSITION_ADD_MIN_SCORE_INCREASE
 POSITION_ADD_SIZE_DECAY = settings.POSITION_ADD_SIZE_DECAY
+USE_FAST_ENSEMBLE = settings.USE_FAST_ENSEMBLE
+TRANSFORMER_ENSEMBLE_SIZE = settings.TRANSFORMER_ENSEMBLE_SIZE
 log_config = settings.log_config

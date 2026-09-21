@@ -2,7 +2,7 @@
 
 import asyncio
 from contextlib import asynccontextmanager
-from datetime import datetime
+from datetime import datetime, UTC
 from typing import Any
 
 import uvicorn
@@ -83,7 +83,7 @@ async def health_check(response: Response) -> HealthCheckResponse:
         symbols=settings.SYMBOLS,
         database=db_ok,
         exchange=ex_ok,
-        timestamp=datetime.utcnow().isoformat() + "Z",
+        timestamp=datetime.now(UTC).isoformat().replace("+00:00", "Z"),
     )
 
 
@@ -101,7 +101,7 @@ async def health_check_v1(response: Response) -> HealthCheckResponse:
         symbols=settings.SYMBOLS,
         database=db_ok,
         exchange=ex_ok,
-        timestamp=datetime.utcnow().isoformat() + "Z",
+        timestamp=datetime.now(UTC).isoformat().replace("+00:00", "Z"),
     )
 
 
@@ -119,7 +119,7 @@ async def readiness_check(response: Response) -> HealthCheckResponse:
         symbols=settings.SYMBOLS,
         database=db_ok,
         exchange=ex_ok,
-        timestamp=datetime.utcnow().isoformat() + "Z",
+        timestamp=datetime.now(UTC).isoformat().replace("+00:00", "Z"),
     )
 
 

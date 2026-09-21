@@ -1,0 +1,736 @@
+{
+  "timings": {
+    "exchange_init": {
+      "count": 1,
+      "min_ms": 0.016200006939470768,
+      "max_ms": 0.016200006939470768,
+      "mean_ms": 0.016200006939470768,
+      "median_ms": 0.016200006939470768,
+      "p95_ms": 0.016200006939470768,
+      "p99_ms": 0.016200006939470768
+    },
+    "strategy_init": {
+      "count": 1,
+      "min_ms": 0.005099980626255274,
+      "max_ms": 0.005099980626255274,
+      "mean_ms": 0.005099980626255274,
+      "median_ms": 0.005099980626255274,
+      "p95_ms": 0.005099980626255274,
+      "p99_ms": 0.005099980626255274
+    },
+    "risk_manager_init": {
+      "count": 1,
+      "min_ms": 0.013199984095990658,
+      "max_ms": 0.013199984095990658,
+      "mean_ms": 0.013199984095990658,
+      "median_ms": 0.013199984095990658,
+      "p95_ms": 0.013199984095990658,
+      "p99_ms": 0.013199984095990658
+    },
+    "model_warmup": {
+      "count": 1,
+      "min_ms": 1098.804100009147,
+      "max_ms": 1098.804100009147,
+      "mean_ms": 1098.804100009147,
+      "median_ms": 1098.804100009147,
+      "p95_ms": 1098.804100009147,
+      "p99_ms": 1098.804100009147
+    },
+    "fetch_latest_bars_all_symbols": {
+      "count": 1,
+      "min_ms": 1.645500015001744,
+      "max_ms": 1.645500015001744,
+      "mean_ms": 1.645500015001744,
+      "median_ms": 1.645500015001744,
+      "p95_ms": 1.645500015001744,
+      "p99_ms": 1.645500015001744
+    },
+    "fetch_positions": {
+      "count": 1,
+      "min_ms": 0.3372000064700842,
+      "max_ms": 0.3372000064700842,
+      "mean_ms": 0.3372000064700842,
+      "median_ms": 0.3372000064700842,
+      "p95_ms": 0.3372000064700842,
+      "p99_ms": 0.3372000064700842
+    },
+    "analyze_market_regime": {
+      "count": 3,
+      "min_ms": 67.29440001072362,
+      "max_ms": 2314.134800049942,
+      "mean_ms": 819.1426000169789,
+      "median_ms": 75.99859999027103,
+      "p95_ms": 2314.134800049942,
+      "p99_ms": 2314.134800049942
+    },
+    "add_multi_timeframe_features": {
+      "count": 3,
+      "min_ms": 45.19080003956333,
+      "max_ms": 58.625000005122274,
+      "mean_ms": 50.40650001804655,
+      "median_ms": 47.40370000945404,
+      "p95_ms": 58.625000005122274,
+      "p99_ms": 58.625000005122274
+    },
+    "fetch_derivatives_data": {
+      "count": 3,
+      "min_ms": 36.30829998292029,
+      "max_ms": 37.99410001374781,
+      "mean_ms": 37.076233323508255,
+      "median_ms": 36.92629997385666,
+      "p95_ms": 37.99410001374781,
+      "p99_ms": 37.99410001374781
+    },
+    "extract_sentiment": {
+      "count": 3,
+      "min_ms": 389.4286000286229,
+      "max_ms": 441.8454000260681,
+      "mean_ms": 420.19010001483065,
+      "median_ms": 429.2962999898009,
+      "p95_ms": 441.8454000260681,
+      "p99_ms": 441.8454000260681
+    },
+    "generate_trading_signal": {
+      "count": 3,
+      "min_ms": 0.05689996760338545,
+      "max_ms": 14.740700018592179,
+      "mean_ms": 4.952633326562743,
+      "median_ms": 0.06029999349266291,
+      "p95_ms": 14.740700018592179,
+      "p99_ms": 14.740700018592179
+    },
+    "process_signal_for_symbol_full": {
+      "count": 3,
+      "min_ms": 0.8080999832600355,
+      "max_ms": 52.70649999147281,
+      "mean_ms": 18.127266666851938,
+      "median_ms": 0.8672000258229673,
+      "p95_ms": 52.70649999147281,
+      "p99_ms": 52.70649999147281
+    },
+    "save_decision_snapshot_thread": {
+      "count": 3,
+      "min_ms": 1.8353000050410628,
+      "max_ms": 33.86620001401752,
+      "mean_ms": 12.619200007369122,
+      "median_ms": 2.1561000030487776,
+      "p95_ms": 33.86620001401752,
+      "p99_ms": 33.86620001401752
+    },
+    "save_decision_snapshot": {
+      "count": 3,
+      "min_ms": 1.8441000138409436,
+      "max_ms": 33.879400056321174,
+      "mean_ms": 12.629200025306394,
+      "median_ms": 2.1641000057570636,
+      "p95_ms": 33.879400056321174,
+      "p99_ms": 33.879400056321174
+    },
+    "get_open_snapshot_thread": {
+      "count": 3,
+      "min_ms": 0.9357000235468149,
+      "max_ms": 3.485199995338917,
+      "mean_ms": 1.9096666752981644,
+      "median_ms": 1.3081000070087612,
+      "p95_ms": 3.485199995338917,
+      "p99_ms": 3.485199995338917
+    },
+    "get_open_snapshot": {
+      "count": 3,
+      "min_ms": 0.9403000003658235,
+      "max_ms": 3.497099969536066,
+      "mean_ms": 1.916733318163703,
+      "median_ms": 1.312799984589219,
+      "p95_ms": 3.497099969536066,
+      "p99_ms": 3.497099969536066
+    },
+    "close_decision_snapshot_thread": {
+      "count": 3,
+      "min_ms": 2.4901999859139323,
+      "max_ms": 4.1729999938979745,
+      "mean_ms": 3.4794333235671124,
+      "median_ms": 3.77509999088943,
+      "p95_ms": 4.1729999938979745,
+      "p99_ms": 4.1729999938979745
+    },
+    "close_decision_snapshot": {
+      "count": 3,
+      "min_ms": 2.4973999825306237,
+      "max_ms": 4.182000004220754,
+      "mean_ms": 3.4868999888810017,
+      "median_ms": 3.781299979891628,
+      "p95_ms": 4.182000004220754,
+      "p99_ms": 4.182000004220754
+    },
+    "update_decision_snapshot_position_thread": {
+      "count": 3,
+      "min_ms": 0.7046000100672245,
+      "max_ms": 2.5314000085927546,
+      "mean_ms": 1.521166666255643,
+      "median_ms": 1.3274999801069498,
+      "p95_ms": 2.5314000085927546,
+      "p99_ms": 2.5314000085927546
+    },
+    "update_decision_snapshot_position": {
+      "count": 3,
+      "min_ms": 0.7140999659895897,
+      "max_ms": 2.538300002925098,
+      "mean_ms": 1.5287999995052814,
+      "median_ms": 1.3340000296011567,
+      "p95_ms": 2.538300002925098,
+      "p99_ms": 2.538300002925098
+    },
+    "get_all_open_snapshots_thread": {
+      "count": 1,
+      "min_ms": 2.166499965824187,
+      "max_ms": 2.166499965824187,
+      "mean_ms": 2.166499965824187,
+      "median_ms": 2.166499965824187,
+      "p95_ms": 2.166499965824187,
+      "p99_ms": 2.166499965824187
+    },
+    "get_all_open_snapshots": {
+      "count": 1,
+      "min_ms": 2.172800013795495,
+      "max_ms": 2.172800013795495,
+      "mean_ms": 2.172800013795495,
+      "median_ms": 2.172800013795495,
+      "p95_ms": 2.172800013795495,
+      "p99_ms": 2.172800013795495
+    },
+    "get_closed_decision_snapshots_thread": {
+      "count": 1,
+      "min_ms": 2.6913000037893653,
+      "max_ms": 2.6913000037893653,
+      "mean_ms": 2.6913000037893653,
+      "median_ms": 2.6913000037893653,
+      "p95_ms": 2.6913000037893653,
+      "p99_ms": 2.6913000037893653
+    },
+    "get_closed_decision_snapshots": {
+      "count": 1,
+      "min_ms": 2.6972999912686646,
+      "max_ms": 2.6972999912686646,
+      "mean_ms": 2.6972999912686646,
+      "median_ms": 2.6972999912686646,
+      "p95_ms": 2.6972999912686646,
+      "p99_ms": 2.6972999912686646
+    },
+    "get_account": {
+      "count": 1,
+      "min_ms": 0.36749994615092874,
+      "max_ms": 0.36749994615092874,
+      "mean_ms": 0.36749994615092874,
+      "median_ms": 0.36749994615092874,
+      "p95_ms": 0.36749994615092874,
+      "p99_ms": 0.36749994615092874
+    },
+    "evaluate_candidates_shadow_arena": {
+      "count": 1,
+      "min_ms": 0.09570003021508455,
+      "max_ms": 0.09570003021508455,
+      "mean_ms": 0.09570003021508455,
+      "median_ms": 0.09570003021508455,
+      "p95_ms": 0.09570003021508455,
+      "p99_ms": 0.09570003021508455
+    },
+    "get_positions": {
+      "count": 1,
+      "min_ms": 0.3336999798193574,
+      "max_ms": 0.3336999798193574,
+      "mean_ms": 0.3336999798193574,
+      "median_ms": 0.3336999798193574,
+      "p95_ms": 0.3336999798193574,
+      "p99_ms": 0.3336999798193574
+    },
+    "update_account_status": {
+      "count": 1,
+      "min_ms": 0.31730002956464887,
+      "max_ms": 0.31730002956464887,
+      "mean_ms": 0.31730002956464887,
+      "median_ms": 0.31730002956464887,
+      "p95_ms": 0.31730002956464887,
+      "p99_ms": 0.31730002956464887
+    },
+    "calculate_position_size": {
+      "count": 1,
+      "min_ms": 14.161600032821298,
+      "max_ms": 14.161600032821298,
+      "mean_ms": 14.161600032821298,
+      "median_ms": 14.161600032821298,
+      "p95_ms": 14.161600032821298,
+      "p99_ms": 14.161600032821298
+    },
+    "check_trailing_stop": {
+      "count": 1,
+      "min_ms": 0.041300023440271616,
+      "max_ms": 0.041300023440271616,
+      "mean_ms": 0.041300023440271616,
+      "median_ms": 0.041300023440271616,
+      "p95_ms": 0.041300023440271616,
+      "p99_ms": 0.041300023440271616
+    },
+    "check_and_reserve_exposure": {
+      "count": 1,
+      "min_ms": 0.14379998901858926,
+      "max_ms": 0.14379998901858926,
+      "mean_ms": 0.14379998901858926,
+      "median_ms": 0.14379998901858926,
+      "p95_ms": 0.14379998901858926,
+      "p99_ms": 0.14379998901858926
+    },
+    "reserve_position_slot": {
+      "count": 1,
+      "min_ms": 0.028999987989664078,
+      "max_ms": 0.028999987989664078,
+      "mean_ms": 0.028999987989664078,
+      "median_ms": 0.028999987989664078,
+      "p95_ms": 0.028999987989664078,
+      "p99_ms": 0.028999987989664078
+    },
+    "alerting_run_monitoring_cycle": {
+      "count": 1,
+      "min_ms": 0.0034999684430658817,
+      "max_ms": 0.0034999684430658817,
+      "mean_ms": 0.0034999684430658817,
+      "median_ms": 0.0034999684430658817,
+      "p95_ms": 0.0034999684430658817,
+      "p99_ms": 0.0034999684430658817
+    }
+  },
+  "blocking_events": [
+    {
+      "operation": "exchange_init",
+      "duration_ms": 0.016200006939470768,
+      "timestamp": 1789973283.6181195,
+      "metadata": {}
+    },
+    {
+      "operation": "strategy_init",
+      "duration_ms": 0.005099980626255274,
+      "timestamp": 1789973283.6181195,
+      "metadata": {}
+    },
+    {
+      "operation": "risk_manager_init",
+      "duration_ms": 0.013199984095990658,
+      "timestamp": 1789973283.6181195,
+      "metadata": {}
+    },
+    {
+      "operation": "model_warmup",
+      "duration_ms": 1098.804100009147,
+      "timestamp": 1789973284.729385,
+      "metadata": {}
+    },
+    {
+      "operation": "fetch_latest_bars_all_symbols",
+      "duration_ms": 1.645500015001744,
+      "timestamp": 1789973284.729385,
+      "metadata": {}
+    },
+    {
+      "operation": "fetch_positions",
+      "duration_ms": 0.3372000064700842,
+      "timestamp": 1789973284.731622,
+      "metadata": {}
+    },
+    {
+      "operation": "analyze_market_regime",
+      "duration_ms": 2314.134800049942,
+      "timestamp": 1789973287.0446293,
+      "metadata": {
+        "symbol": "BTC/USD"
+      }
+    },
+    {
+      "operation": "add_multi_timeframe_features",
+      "duration_ms": 58.625000005122274,
+      "timestamp": 1789973287.1038797,
+      "metadata": {
+        "symbol": "BTC/USD"
+      }
+    },
+    {
+      "operation": "fetch_derivatives_data",
+      "duration_ms": 37.99410001374781,
+      "timestamp": 1789973287.142542,
+      "metadata": {
+        "symbol": "BTC/USD"
+      }
+    },
+    {
+      "operation": "extract_sentiment",
+      "duration_ms": 441.8454000260681,
+      "timestamp": 1789973287.583196,
+      "metadata": {
+        "symbol": "BTC/USD"
+      }
+    },
+    {
+      "operation": "generate_trading_signal",
+      "duration_ms": 14.740700018592179,
+      "timestamp": 1789973287.5966325,
+      "metadata": {
+        "symbol": "BTC/USD"
+      }
+    },
+    {
+      "operation": "process_signal_for_symbol_full",
+      "duration_ms": 52.70649999147281,
+      "timestamp": 1789973287.6517508,
+      "metadata": {
+        "symbol": "BTC/USD"
+      }
+    },
+    {
+      "operation": "save_decision_snapshot_thread",
+      "duration_ms": 33.86620001401752,
+      "timestamp": 1789973287.6842544,
+      "metadata": {}
+    },
+    {
+      "operation": "save_decision_snapshot",
+      "duration_ms": 33.879400056321174,
+      "timestamp": 1789973287.6842544,
+      "metadata": {
+        "symbol": "BTC/USD"
+      }
+    },
+    {
+      "operation": "get_open_snapshot_thread",
+      "duration_ms": 3.485199995338917,
+      "timestamp": 1789973287.6877806,
+      "metadata": {}
+    },
+    {
+      "operation": "get_open_snapshot",
+      "duration_ms": 3.497099969536066,
+      "timestamp": 1789973287.6877806,
+      "metadata": {
+        "symbol": "BTC/USD"
+      }
+    },
+    {
+      "operation": "close_decision_snapshot_thread",
+      "duration_ms": 4.1729999938979745,
+      "timestamp": 1789973287.6897845,
+      "metadata": {}
+    },
+    {
+      "operation": "close_decision_snapshot",
+      "duration_ms": 4.182000004220754,
+      "timestamp": 1789973287.6897845,
+      "metadata": {
+        "symbol": "BTC/USD"
+      }
+    },
+    {
+      "operation": "update_decision_snapshot_position_thread",
+      "duration_ms": 1.3274999801069498,
+      "timestamp": 1789973287.6897845,
+      "metadata": {}
+    },
+    {
+      "operation": "update_decision_snapshot_position",
+      "duration_ms": 1.3340000296011567,
+      "timestamp": 1789973287.6897845,
+      "metadata": {
+        "symbol": "BTC/USD"
+      }
+    },
+    {
+      "operation": "analyze_market_regime",
+      "duration_ms": 67.29440001072362,
+      "timestamp": 1789973287.760622,
+      "metadata": {
+        "symbol": "ETH/USD"
+      }
+    },
+    {
+      "operation": "add_multi_timeframe_features",
+      "duration_ms": 47.40370000945404,
+      "timestamp": 1789973287.8096738,
+      "metadata": {
+        "symbol": "ETH/USD"
+      }
+    },
+    {
+      "operation": "fetch_derivatives_data",
+      "duration_ms": 36.30829998292029,
+      "timestamp": 1789973287.8452852,
+      "metadata": {
+        "symbol": "ETH/USD"
+      }
+    },
+    {
+      "operation": "extract_sentiment",
+      "duration_ms": 429.2962999898009,
+      "timestamp": 1789973288.2739923,
+      "metadata": {
+        "symbol": "ETH/USD"
+      }
+    },
+    {
+      "operation": "generate_trading_signal",
+      "duration_ms": 0.06029999349266291,
+      "timestamp": 1789973288.2739923,
+      "metadata": {
+        "symbol": "ETH/USD"
+      }
+    },
+    {
+      "operation": "process_signal_for_symbol_full",
+      "duration_ms": 0.8672000258229673,
+      "timestamp": 1789973288.2759998,
+      "metadata": {
+        "symbol": "ETH/USD"
+      }
+    },
+    {
+      "operation": "save_decision_snapshot_thread",
+      "duration_ms": 2.1561000030487776,
+      "timestamp": 1789973288.2759998,
+      "metadata": {}
+    },
+    {
+      "operation": "save_decision_snapshot",
+      "duration_ms": 2.1641000057570636,
+      "timestamp": 1789973288.2759998,
+      "metadata": {
+        "symbol": "ETH/USD"
+      }
+    },
+    {
+      "operation": "get_open_snapshot_thread",
+      "duration_ms": 1.3081000070087612,
+      "timestamp": 1789973288.2759998,
+      "metadata": {}
+    },
+    {
+      "operation": "get_open_snapshot",
+      "duration_ms": 1.312799984589219,
+      "timestamp": 1789973288.2759998,
+      "metadata": {
+        "symbol": "ETH/USD"
+      }
+    },
+    {
+      "operation": "close_decision_snapshot_thread",
+      "duration_ms": 3.77509999088943,
+      "timestamp": 1789973288.2817264,
+      "metadata": {}
+    },
+    {
+      "operation": "close_decision_snapshot",
+      "duration_ms": 3.781299979891628,
+      "timestamp": 1789973288.2817264,
+      "metadata": {
+        "symbol": "ETH/USD"
+      }
+    },
+    {
+      "operation": "update_decision_snapshot_position_thread",
+      "duration_ms": 0.7046000100672245,
+      "timestamp": 1789973288.2817264,
+      "metadata": {}
+    },
+    {
+      "operation": "update_decision_snapshot_position",
+      "duration_ms": 0.7140999659895897,
+      "timestamp": 1789973288.2817264,
+      "metadata": {
+        "symbol": "ETH/USD"
+      }
+    },
+    {
+      "operation": "analyze_market_regime",
+      "duration_ms": 75.99859999027103,
+      "timestamp": 1789973288.3600957,
+      "metadata": {
+        "symbol": "SOL/USD"
+      }
+    },
+    {
+      "operation": "add_multi_timeframe_features",
+      "duration_ms": 45.19080003956333,
+      "timestamp": 1789973288.4037218,
+      "metadata": {
+        "symbol": "SOL/USD"
+      }
+    },
+    {
+      "operation": "fetch_derivatives_data",
+      "duration_ms": 36.92629997385666,
+      "timestamp": 1789973288.4394703,
+      "metadata": {
+        "symbol": "SOL/USD"
+      }
+    },
+    {
+      "operation": "extract_sentiment",
+      "duration_ms": 389.4286000286229,
+      "timestamp": 1789973288.8177252,
+      "metadata": {
+        "symbol": "SOL/USD"
+      }
+    },
+    {
+      "operation": "generate_trading_signal",
+      "duration_ms": 0.05689996760338545,
+      "timestamp": 1789973288.8177252,
+      "metadata": {
+        "symbol": "SOL/USD"
+      }
+    },
+    {
+      "operation": "process_signal_for_symbol_full",
+      "duration_ms": 0.8080999832600355,
+      "timestamp": 1789973288.8177252,
+      "metadata": {
+        "symbol": "SOL/USD"
+      }
+    },
+    {
+      "operation": "save_decision_snapshot_thread",
+      "duration_ms": 1.8353000050410628,
+      "timestamp": 1789973288.833444,
+      "metadata": {}
+    },
+    {
+      "operation": "save_decision_snapshot",
+      "duration_ms": 1.8441000138409436,
+      "timestamp": 1789973288.833444,
+      "metadata": {
+        "symbol": "SOL/USD"
+      }
+    },
+    {
+      "operation": "get_open_snapshot_thread",
+      "duration_ms": 0.9357000235468149,
+      "timestamp": 1789973288.835453,
+      "metadata": {}
+    },
+    {
+      "operation": "get_open_snapshot",
+      "duration_ms": 0.9403000003658235,
+      "timestamp": 1789973288.835453,
+      "metadata": {
+        "symbol": "SOL/USD"
+      }
+    },
+    {
+      "operation": "close_decision_snapshot_thread",
+      "duration_ms": 2.4901999859139323,
+      "timestamp": 1789973288.837463,
+      "metadata": {}
+    },
+    {
+      "operation": "close_decision_snapshot",
+      "duration_ms": 2.4973999825306237,
+      "timestamp": 1789973288.837463,
+      "metadata": {
+        "symbol": "SOL/USD"
+      }
+    },
+    {
+      "operation": "update_decision_snapshot_position_thread",
+      "duration_ms": 2.5314000085927546,
+      "timestamp": 1789973288.839472,
+      "metadata": {}
+    },
+    {
+      "operation": "update_decision_snapshot_position",
+      "duration_ms": 2.538300002925098,
+      "timestamp": 1789973288.839472,
+      "metadata": {
+        "symbol": "SOL/USD"
+      }
+    },
+    {
+      "operation": "get_all_open_snapshots_thread",
+      "duration_ms": 2.166499965824187,
+      "timestamp": 1789973288.8414786,
+      "metadata": {}
+    },
+    {
+      "operation": "get_all_open_snapshots",
+      "duration_ms": 2.172800013795495,
+      "timestamp": 1789973288.8414786,
+      "metadata": {}
+    },
+    {
+      "operation": "get_closed_decision_snapshots_thread",
+      "duration_ms": 2.6913000037893653,
+      "timestamp": 1789973288.8414786,
+      "metadata": {}
+    },
+    {
+      "operation": "get_closed_decision_snapshots",
+      "duration_ms": 2.6972999912686646,
+      "timestamp": 1789973288.8414786,
+      "metadata": {}
+    },
+    {
+      "operation": "get_account",
+      "duration_ms": 0.36749994615092874,
+      "timestamp": 1789973288.8414786,
+      "metadata": {}
+    },
+    {
+      "operation": "evaluate_candidates_shadow_arena",
+      "duration_ms": 0.09570003021508455,
+      "timestamp": 1789973288.8414786,
+      "metadata": {
+        "symbol": "BTC/USD"
+      }
+    },
+    {
+      "operation": "get_positions",
+      "duration_ms": 0.3336999798193574,
+      "timestamp": 1789973288.8414786,
+      "metadata": {}
+    },
+    {
+      "operation": "update_account_status",
+      "duration_ms": 0.31730002956464887,
+      "timestamp": 1789973288.8414786,
+      "metadata": {}
+    },
+    {
+      "operation": "calculate_position_size",
+      "duration_ms": 14.161600032821298,
+      "timestamp": 1789973288.8577163,
+      "metadata": {}
+    },
+    {
+      "operation": "check_trailing_stop",
+      "duration_ms": 0.041300023440271616,
+      "timestamp": 1789973288.8577163,
+      "metadata": {}
+    },
+    {
+      "operation": "check_and_reserve_exposure",
+      "duration_ms": 0.14379998901858926,
+      "timestamp": 1789973288.8577163,
+      "metadata": {}
+    },
+    {
+      "operation": "reserve_position_slot",
+      "duration_ms": 0.028999987989664078,
+      "timestamp": 1789973288.8577163,
+      "metadata": {}
+    },
+    {
+      "operation": "alerting_run_monitoring_cycle",
+      "duration_ms": 0.0034999684430658817,
+      "timestamp": 1789973288.8577163,
+      "metadata": {}
+    }
+  ],
+  "summary": {
+    "total_operations": 61,
+    "unique_operations": 33,
+    "timestamp": "2026-09-21T06:48:08.857716+00:00"
+  }
+}
