@@ -59,8 +59,26 @@ def _retry_unless_circuit_open(exception: Exception) -> bool:
     get_account/get_bars/get_latest_bar don't need this: they already use
     _retry_on_rate_limit, which only returns True for a 429 APIError, so a
     circuit-open RuntimeError there already stops retrying immediately.
+
+    Also stops retrying a permanent (non-429) 4xx APIError -- e.g. invalid
+    quantity/precision, insufficient buying power, invalid symbol. These are
+    deterministic rejections that will fail identically on every retry, so
+    retrying them up to stop_after_attempt(5) times only burns 2-30s of
+    backoff per attempt for nothing AND -- since every attempt still counts
+    as a failure against the shared 'alpaca_exchange' circuit -- a single
+    bad order can single-handedly trip the circuit and block every OTHER
+    symbol's bars/positions/risk calls too. Found 2026-09-21 diagnosing a
+    live incident where 3 symbols' buy orders failed (root cause hidden --
+    see the submit_err logging fix in create_order) and, via this retry
+    storm, tripped the shared circuit for the whole bot.
     """
-    return not _is_circuit_open_error(exception)
+    if _is_circuit_open_error(exception):
+        return False
+    if isinstance(exception, APIError):
+        status = getattr(exception, "status_code", None)
+        if status is not None and 400 <= status < 500 and status != 429:
+            return False
+    return True
 
 
 def _rate_limit_wait(retry_state: RetryCallState) -> float:
@@ -651,6 +669,21 @@ class AlpacaExchange:
             if client_order_id is not None and not _is_circuit_open_error(submit_err):
                 existing = await self._find_existing_order_by_client_id(client_order_id)
             if existing is None:
+                # Always log the REAL rejection reason here, not just in the
+                # "duplicate found" branch below. Previously this raised
+                # silently -- by the time it reached the caller (after
+                # tenacity's retries and/or the circuit tripping from
+                # repeated failures), the original Alpaca error text (bad
+                # qty/precision, insufficient buying power, invalid symbol,
+                # etc.) was gone, replaced by a generic "Circuit is OPEN" or
+                # RetryError message. Found 2026-09-21 diagnosing a live
+                # incident where this made 3 failed buy orders' actual cause
+                # unrecoverable from the logs.
+                status = getattr(submit_err, "status_code", None) if isinstance(submit_err, APIError) else None
+                logger.error(
+                    f"submit_order REJECTED for {symbol} {side} qty={qty} "
+                    f"(client_order_id={client_order_id!r}, status={status}): {submit_err!r}"
+                )
                 raise
             logger.warning(
                 f"submit_order raised ({submit_err!r}) but an order with "
