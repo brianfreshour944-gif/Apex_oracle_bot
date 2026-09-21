@@ -94,6 +94,76 @@ class TestCircuitBreaker:
         assert circuit_breaker.state == CircuitState.OPEN
 
     @pytest.mark.asyncio
+    async def test_probe_flag_reset_on_cancelled_error(self, circuit_breaker):
+        """A HALF_OPEN probe interrupted by CancelledError must clear
+        _probe_in_flight, or every later call is blocked forever with
+        "probe already in flight" even though no probe is actually running."""
+        circuit_breaker._state = CircuitState.HALF_OPEN
+
+        async def cancelled_func():
+            raise asyncio.CancelledError()
+
+        with pytest.raises(asyncio.CancelledError):
+            await circuit_breaker.call(cancelled_func)
+
+        assert circuit_breaker._probe_in_flight is False
+
+    @pytest.mark.asyncio
+    async def test_probe_flag_reset_on_base_exception(self, circuit_breaker):
+        """Same as above but for KeyboardInterrupt/SystemExit/other
+        BaseException subclasses that aren't Exception or CancelledError --
+        confirmed as a real gap in the CancelledError-only fix (commit
+        e035ab8) 2026-09-21."""
+        circuit_breaker._state = CircuitState.HALF_OPEN
+
+        async def interrupted_func():
+            raise KeyboardInterrupt()
+
+        with pytest.raises(KeyboardInterrupt):
+            await circuit_breaker.call(interrupted_func)
+
+        assert circuit_breaker._probe_in_flight is False
+
+        # A fresh probe attempt must be allowed through afterward, not
+        # blocked by a leaked flag.
+        circuit_breaker._state = CircuitState.HALF_OPEN
+
+        async def success_func():
+            return "recovered"
+
+        result = await circuit_breaker.call(success_func)
+        assert result == "recovered"
+
+    @pytest.mark.asyncio
+    async def test_only_one_concurrent_probe_during_half_open(self, circuit_breaker):
+        """A burst of concurrent callers during HALF_OPEN must result in
+        exactly ONE real underlying call (the probe); the rest are blocked
+        rather than all hitting the (possibly still-recovering) dependency
+        at once. Regression test for the flapping bug this was built to fix
+        (2026-09-21): a burst of simultaneous probes could re-trigger the
+        same rate limit that caused the outage, and a single failing probe
+        immediately reopens the circuit regardless of how many siblings
+        succeeded."""
+        circuit_breaker._state = CircuitState.HALF_OPEN
+        call_count = 0
+
+        async def slow_success():
+            nonlocal call_count
+            call_count += 1
+            await asyncio.sleep(0.05)
+            return "ok"
+
+        results = await asyncio.gather(
+            *[circuit_breaker.call(slow_success) for _ in range(6)],
+            return_exceptions=True,
+        )
+        assert call_count == 1
+        successes = [r for r in results if r == "ok"]
+        blocked = [r for r in results if isinstance(r, RuntimeError)]
+        assert len(successes) == 1
+        assert len(blocked) == 5
+
+    @pytest.mark.asyncio
     async def test_success_resets_failures_in_closed(self, circuit_breaker):
         """Successful calls reset failure count in CLOSED state."""
         async def success_func():

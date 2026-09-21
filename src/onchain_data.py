@@ -157,17 +157,47 @@ async def fetch_derivatives_data(symbol: str) -> dict[str, float]:
     """
     Async version: Fetches Open Interest, Funding Rate, and Long/Short ratio from Binance Futures.
     Alpaca symbols are usually 'BTC/USD', so we convert to 'BTCUSDT' for Binance.
-    
+
     Returns both raw and Z-scored values for regime-invariant analysis.
     """
     base_asset = symbol.split("/")[0] if "/" in symbol else symbol.replace("USD", "")
     binance_symbol = f"{base_asset}USDT"
-    
+
     # Get rolling history for Z-scoring
     history = _get_symbol_history(symbol)
-    
+
     client = await _get_client()
     return await _fetch_single_symbol(client, symbol, binance_symbol, history)
+
+
+async def _fetch_derivatives_data_isolated(symbol: str) -> dict[str, float]:
+    """Same as fetch_derivatives_data(), but uses a short-lived, dedicated
+    httpx.AsyncClient instead of the shared module-level one from
+    _get_client().
+
+    For use only by fetch_derivatives_data_sync()'s ad-hoc asyncio.run()
+    invocations below, which run in a freshly-created event loop distinct
+    from whichever loop the shared client was originally bound to (e.g. the
+    main trading loop, if anything there ever calls fetch_derivatives_data()
+    directly -- strategies.py's analyze_market_regime does exactly that).
+    httpx/httpcore bind internal connection-pool resources to the event loop
+    that was running when the client was first used; reusing that client
+    from a different loop is a real hazard (cross-loop RuntimeError, or in
+    some versions silent misbehavior). Confirmed as a real gap 2026-09-21
+    verifying an external review's claim. Creating and tearing down a
+    dedicated client per call is less connection-pool-efficient than the
+    shared client, but this sync wrapper is already documented as a
+    backward-compatibility path for legacy callers, not the hot path (which
+    should call fetch_derivatives_data()/fetch_derivatives_batch() directly).
+    """
+    base_asset = symbol.split("/")[0] if "/" in symbol else symbol.replace("USD", "")
+    binance_symbol = f"{base_asset}USDT"
+    history = _get_symbol_history(symbol)
+    async with httpx.AsyncClient(
+        timeout=httpx.Timeout(5.0, connect=2.0),
+        limits=httpx.Limits(max_connections=20, max_keepalive_connections=10),
+    ) as client:
+        return await _fetch_single_symbol(client, symbol, binance_symbol, history)
 
 
 async def fetch_derivatives_batch(symbols: list[str]) -> dict[str, dict[str, float]]:
@@ -220,10 +250,20 @@ def fetch_derivatives_data_sync(symbol: str) -> dict[str, float]:
         # We're in an async context - can't use asyncio.run()
         # This is a legacy sync caller in an async context - should use async version instead
         logger.warning("fetch_derivatives_data_sync called from async context; use fetch_derivatives_data() instead")
-        # Create a task and run it synchronously (not ideal but maintains compatibility)
+        # Create a task and run it synchronously (not ideal but maintains compatibility).
+        # Uses the isolated (non-shared-client) variant -- see its docstring
+        # for why: this runs asyncio.run() in a NEW thread with a NEW event
+        # loop, and the shared module-level client from _get_client() may
+        # already be bound to a DIFFERENT loop (e.g. the main trading loop).
         import concurrent.futures
         with concurrent.futures.ThreadPoolExecutor() as executor:
-            future = executor.submit(asyncio.run, fetch_derivatives_data(symbol))
+            future = executor.submit(asyncio.run, _fetch_derivatives_data_isolated(symbol))
             return future.result()
     else:
-        return asyncio.run(fetch_derivatives_data(symbol))
+        # Same cross-loop hazard applies here: this asyncio.run() creates
+        # its own fresh loop even when called from a context with no loop
+        # currently running (e.g. from within asyncio.to_thread(), which is
+        # exactly how _run_fast_ensemble_inference's synchronous
+        # _do_inference reaches this function) -- the shared client could
+        # still be bound to a loop from an earlier, different call.
+        return asyncio.run(_fetch_derivatives_data_isolated(symbol))

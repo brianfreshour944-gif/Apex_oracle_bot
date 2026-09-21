@@ -611,10 +611,22 @@ class TradingBotSettings(BaseSettings):
         description="Path to feature scaler"
     )
     USE_FAST_ENSEMBLE: bool = Field(
-        default=True,
+        default=False,
         description="Enable BatchEnsemble for fast transformer inference (5x speedup vs Deep Ensemble). "
                     "Uses single forward pass with rank-1 perturbations instead of MC-dropout. "
-                    "Also avoids global model inference lock contention across concurrent symbols."
+                    "Default False (reverted 2026-09-21, was briefly introduced as True in the same "
+                    "commit that added this field): this is a brand-new, unvalidated inference path "
+                    "shipped with zero tests, and enabling it has two side effects beyond raw "
+                    "inference: (1) transformer_brain() checks USE_FAST_ENSEMBLE before the "
+                    "ADAPTIVE_ML_ENABLED 'analysis mode' check, so when true it bypasses that gate "
+                    "entirely for the transformer brain's own vote; (2) despite this description's "
+                    "'avoids global model inference lock contention' claim, "
+                    "_run_fast_ensemble_inference's forward pass is ALSO wrapped in the same shared "
+                    "_model_inference_lock as standard mode (transformer_brain.py:357) -- it reduces "
+                    "time held under lock (one batched pass vs. many MC-dropout passes), it does not "
+                    "eliminate the contention. Re-enable only after shadow-verifying against standard "
+                    "mode, per this repo's own convention for unproven components (ADAPTIVE_ML_ENABLED, "
+                    "KELLY_SIZING_ENABLED)."
     )
     TRANSFORMER_ENSEMBLE_SIZE: int = Field(
         default=5,

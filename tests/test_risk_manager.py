@@ -23,6 +23,29 @@ def test_atr_position_sizing():
     assert size > 0.0
 
 
+def test_min_order_bump_clears_exchange_floor_after_rounding():
+    """Regression test: the min-order-size floor-bump must round UP (ceil)
+    to the nearest 1e-6 unit, not round-to-nearest, or the bumped notional
+    can land fractionally BELOW MIN_ORDER_USD and the exchange rejects it
+    again anyway -- defeating the whole point of the bump. Confirmed with
+    price=2672.18: round(10.0/price, 6) -> notional $9.9993 (still rejected);
+    math.ceil(10.0/price*1e6)/1e6 -> notional $10.002 (clears). This exact
+    bug existed in an earlier version of this fix and was corrected
+    2026-09-21 (verified as already-fixed while cross-checking an external
+    review's claims)."""
+    rm = RiskManager(AsyncMock())
+    price = 2672.18  # chosen because round(10.0/price, 6) rounds DOWN below $10 notional
+    size, status = rm.calculate_position_size(
+        "ETH/USD", price, "sideways", atr=62.9368, confidence=0.62,
+        expected_return_pct=0.03, current_equity=97.21, drawdown_pct=0.0,
+    )
+    assert status == "ok"
+    assert size * price >= settings.MIN_ORDER_USD, (
+        f"bumped notional ${size * price:.4f} is below the ${settings.MIN_ORDER_USD} "
+        "exchange minimum -- the exchange would reject this order"
+    )
+
+
 def test_correlation_downscaling():
     """Verify position size is downscaled when portfolio correlation is high."""
     rm = RiskManager(AsyncMock())

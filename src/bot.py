@@ -2600,9 +2600,19 @@ async def run_trading_bot() -> None:
                                 bar_dt = bar_dt.replace(tzinfo=UTC)
                             age_sec = (datetime.now(UTC) - bar_dt).total_seconds()
                             if age_sec > settings.STALE_PRICE_MAX_AGE_SEC:
-                                asyncio.create_task(
+                                # Tracked (not bare fire-and-forget) so the task
+                                # isn't only weakly referenced by the event loop
+                                # -- matches this same function's active_tasks
+                                # pattern used for process_signal_for_symbol
+                                # below, and exchange.py's _background_tasks
+                                # pattern for its own alert tasks. Found
+                                # inconsistent (bare create_task) 2026-09-21
+                                # verifying an external review's claim.
+                                stale_alert_task = asyncio.create_task(
                                     get_alerting_engine().alert_stale_price(symbol, age_sec, settings.STALE_PRICE_MAX_AGE_SEC)
                                 )
+                                active_tasks.add(stale_alert_task)
+                                stale_alert_task.add_done_callback(active_tasks.discard)
                         except Exception as stale_check_err:
                             logger.debug(f"[{symbol}] Stale-price check skipped (non-fatal): {stale_check_err}")
 

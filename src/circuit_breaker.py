@@ -99,6 +99,23 @@ class CircuitBreaker:
                         self._opened_at = time.monotonic()
                         logger.critical(f"Circuit {self.name!r} TRIPPED OPEN")
             raise
+        except BaseException:
+            # Anything that isn't an Exception and isn't asyncio.CancelledError
+            # (both already handled above) -- i.e. KeyboardInterrupt,
+            # SystemExit, GeneratorExit. Without this, a probe interrupted by
+            # one of these could leave _probe_in_flight permanently True,
+            # silently blocking recovery forever for any CircuitBreaker
+            # instance that survives the exception (e.g. a SystemExit caught
+            # upstream rather than actually exiting the process). Low
+            # practical odds -- these exceptions usually correlate with the
+            # whole process terminating, in which case a fresh restart gets
+            # a fresh instance anyway -- but a real, previously-unclosed gap.
+            # Found 2026-09-21 verifying an external review's claim that the
+            # CancelledError-only fix (commit e035ab8) didn't cover this.
+            async with self._lock:
+                if probe:
+                    self._probe_in_flight = False
+            raise
         async with self._lock:
             if probe:
                 self._probe_in_flight = False
