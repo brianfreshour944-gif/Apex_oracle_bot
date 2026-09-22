@@ -16,7 +16,7 @@ from alpaca.data.timeframe import TimeFrame, TimeFrameUnit
 # Import alpaca-py components
 from alpaca.trading.client import TradingClient
 from alpaca.trading.enums import OrderSide, OrderStatus, TimeInForce
-from alpaca.trading.requests import GetOrdersRequest, MarketOrderRequest, LimitOrderRequest, LimitOrderRequest
+from alpaca.trading.requests import GetOrdersRequest, MarketOrderRequest, LimitOrderRequest
 from tenacity import RetryCallState, retry, retry_if_exception, stop_after_attempt, wait_exponential
 
 from src.circuit_breaker import CircuitBreaker
@@ -43,6 +43,48 @@ def _is_circuit_open_error(exception: Exception) -> bool:
     when the circuit is OPEN (message: "Circuit '<name>' is OPEN - calls
     blocked")."""
     return isinstance(exception, RuntimeError) and "is OPEN" in str(exception)
+
+
+# alpaca-py's GetOrdersRequest.status is a QueryOrderStatus enum that only
+# accepts "open", "closed", or "all" -- NOT Alpaca's own order-status values
+# ("new", "filled", "cancelled", "expired", etc., which describe a single
+# order's lifecycle, not a query filter). Every call site in this codebase
+# was written against the order-status vocabulary, so every get_orders(
+# status=...) call with "new"/"filled"/etc. raised a pydantic ValidationError
+# at request-construction time -- before any network call -- which the
+# @retry decorator (not filtering out ValidationError) retried up to 5 times
+# over ~1-2 minutes before giving up, silently swallowed by every caller's
+# broad try/except. This made stale-order reconciliation, the unresolved-
+# order entry veto, and create_order's fill-confirmation fallback complete
+# no-ops. Found via an external correctness audit, reproduced directly
+# against the installed alpaca-py==0.44.0, 2026-09-22.
+_ORDER_STATUS_TO_QUERY_STATUS = {
+    "new": "open",
+    "accepted": "open",
+    "pending_new": "open",
+    "accepted_for_bidding": "open",
+    "partially_filled": "open",
+    "open": "open",
+    "filled": "closed",
+    "cancelled": "closed",
+    "canceled": "closed",
+    "expired": "closed",
+    "rejected": "closed",
+    "done_for_day": "closed",
+    "closed": "closed",
+    "all": "all",
+}
+
+
+# Sentinel placed in AlpacaExchange._order_cache while a create_order() call
+# is between its idempotency check and its real cache write (i.e. the order
+# is being submitted/confirmed). Closes the TOCTOU window a concurrent call
+# with the same client_order_id could otherwise slip through: the check and
+# the write are on opposite sides of several `await`s (submit_order,
+# get_order polling), so without a claim in between, two overlapping calls
+# for the same id could both pass the "not cached yet" check and both
+# submit. Found via an external concurrency audit, 2026-09-22.
+_ORDER_PENDING = object()
 
 
 def _retry_unless_circuit_open(exception: Exception) -> bool:
@@ -449,19 +491,21 @@ class AlpacaExchange:
         limit: int = 500,
     ) -> list[dict[str, Any]]:
         """Fetch order history from Alpaca with optional filters.
-        
+
         Args:
-            status: Filter by order status (e.g., "filled", "cancelled", "expired")
+            status: Filter by order status (e.g., "filled", "cancelled", "expired",
+                or Alpaca's own "open"/"closed"/"all" query filter directly --
+                both vocabularies work, see _ORDER_STATUS_TO_QUERY_STATUS)
             after: ISO format datetime string - only orders after this time
             until: ISO format datetime string - only orders before this time
             limit: Maximum number of orders to return
-            
+
         Returns:
             List of order dictionaries with fill data
         """
         if not self.trading_client:
             await self.load()
-            
+
         # Parse after/until strings to datetime if provided
         after_dt = None
         until_dt = None
@@ -469,9 +513,13 @@ class AlpacaExchange:
             after_dt = datetime.datetime.fromisoformat(after.replace("Z", "+00:00"))
         if until:
             until_dt = datetime.datetime.fromisoformat(until.replace("Z", "+00:00"))
-            
+
+        # Translate to the query-filter vocabulary GetOrdersRequest actually
+        # accepts -- see _ORDER_STATUS_TO_QUERY_STATUS above.
+        query_status = _ORDER_STATUS_TO_QUERY_STATUS.get(status.lower(), status) if status else status
+
         request = GetOrdersRequest(
-            status=status,
+            status=query_status,
             after=after_dt,
             until=until_dt,
             limit=limit,
@@ -581,11 +629,46 @@ class AlpacaExchange:
             if cached is not None:
                 ts, order_info = cached
                 if now - ts < self._order_cache_ttl:
-                    logger.info(
-                        f"Order {client_order_id} already placed (idempotent), "
-                        f"returning cached result"
-                    )
-                    return order_info
+                    if order_info is _ORDER_PENDING:
+                        # A concurrent call already claimed this id and is
+                        # still submitting/confirming it. Wait briefly for
+                        # it to resolve instead of racing a second
+                        # submission past this check. Bounded: if the other
+                        # call never resolves (e.g. it crashed after
+                        # claiming but before writing the real result), fail
+                        # open and submit for real rather than block a
+                        # legitimate trade for the rest of the TTL -- at that
+                        # point Alpaca's own client_order_id uniqueness
+                        # constraint (already relied on by the except-path
+                        # below) is the remaining safety net.
+                        wait_start = time.monotonic()
+                        while time.monotonic() - wait_start < min(confirm_timeout, 10.0):
+                            await asyncio.sleep(0.5)
+                            cached = self._order_cache.get(client_order_id)
+                            if cached is None or cached[1] is not _ORDER_PENDING:
+                                break
+                        if cached is not None and cached[1] is not _ORDER_PENDING:
+                            ts2, order_info2 = cached
+                            if time.time() - ts2 < self._order_cache_ttl:
+                                logger.info(
+                                    f"Order {client_order_id} resolved by a concurrent "
+                                    f"call while waiting, reusing its result"
+                                )
+                                return order_info2
+                        logger.warning(
+                            f"Order {client_order_id} still pending from a concurrent "
+                            f"call after waiting -- proceeding to submit"
+                        )
+                    else:
+                        logger.info(
+                            f"Order {client_order_id} already placed (idempotent), "
+                            f"returning cached result"
+                        )
+                        return order_info
+            # Claim this id immediately, before any `await` below, so a
+            # concurrent call for the same client_order_id sees the pending
+            # marker above instead of independently passing this same check.
+            self._order_cache[client_order_id] = (now, _ORDER_PENDING)
 
         # --- Duplicate-submission detection (distinct symbol+side arriving
         # close together, e.g. from a concurrent-scan-cycle race) ---
@@ -688,6 +771,14 @@ class AlpacaExchange:
                     f"submit_order REJECTED for {symbol} {side} qty={qty} "
                     f"(client_order_id={client_order_id!r}, status={status}): {submit_err!r}"
                 )
+                # Clear the pending claim so a legitimate retry with this
+                # same client_order_id isn't blocked for the rest of the
+                # cache TTL -- this submission never resolved to a real
+                # order, so nothing should be idempotency-cached for it.
+                if client_order_id is not None:
+                    pending = self._order_cache.get(client_order_id)
+                    if pending is not None and pending[1] is _ORDER_PENDING:
+                        del self._order_cache[client_order_id]
                 raise
             logger.warning(
                 f"submit_order raised ({submit_err!r}) but an order with "
@@ -755,9 +846,15 @@ class AlpacaExchange:
         # try looking the order up by client_order_id via get_orders()
         if client_order_id is not None and order_id and "filled_avg_price" not in order_info:
             try:
+                # status="filled" now maps to Alpaca's broader "closed" query
+                # filter (see _ORDER_STATUS_TO_QUERY_STATUS), which also
+                # includes cancelled/expired/rejected orders -- filter to the
+                # actual fill explicitly rather than trusting the query alone,
+                # or a cancelled order with this client_order_id would get
+                # mislabeled "filled" below.
                 recent_orders = await self.get_orders(limit=50, status="filled")
                 for o in recent_orders:
-                    if o.get("client_order_id") == client_order_id:
+                    if o.get("client_order_id") == client_order_id and o.get("status") == "filled":
                         order_info["status"] = "filled"
                         order_info["filled_avg_price"] = float(o.get("filled_avg_price", 0.0) or 0.0)
                         order_info["filled_qty"] = float(o.get("filled_qty", 0.0) or 0.0)

@@ -41,6 +41,13 @@ dependencies = [
 
     "redis==5.2.1",
     "typer==0.15.1",
+    # feature_engineering.py's spearman/kendall correlation path,
+    # bayesian_optimizer.py, and feature_drift_monitor.py's KS test all
+    # import this directly with no fallback for spearman/kendall -- missing
+    # from both manifests until now, so a clean install would raise
+    # ImportError the first time either path is hit. Found via an external
+    # correctness audit, 2026-09-22.
+    "scipy>=1.11.0",
 ]
 
 [project.scripts]

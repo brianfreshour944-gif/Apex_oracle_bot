@@ -21,15 +21,28 @@ BRAINS = ["transformer", "quant", "momentum", "sentinel", "llm"]
 REGIMES = ["trending", "mean_reverting", "volatile", "choppy", "breakout", "default"]
 
 _model = None
+# Separate from `_model` itself: `_model` being None means either "never
+# tried" or "tried and failed", and callers (decision_gate.py's
+# `getattr(rl_learner, "model", None) is not None` readiness check) need
+# None to mean "not loaded" unambiguously. Previously this function cached
+# a failed load as `_model = False` -- `False is not None` is True, so the
+# committee gate reported "PPO model loaded" for a model that was never
+# actually loaded. stable_baselines3 isn't in requirements.txt/pyproject.toml
+# at all, so a load failure via missing import is the default production
+# state, not an edge case. Found via an external correctness audit,
+# reproduced directly (get_ppo_model() -> False, gate -> "PPO model
+# loaded"), 2026-09-22.
+_model_load_attempted = False
 
 def get_ppo_model():
-    global _model
-    if _model is not None:
+    global _model, _model_load_attempted
+    if _model_load_attempted:
         return _model
-        
+    _model_load_attempted = True
+
     models_dir = os.path.join(os.path.dirname(__file__), '..', '..', 'models')
     save_path = os.path.join(models_dir, 'ppo_meta_weights.zip')
-    
+
     if os.path.exists(save_path):
         try:
             from stable_baselines3 import PPO
@@ -37,10 +50,10 @@ def get_ppo_model():
             logger.info("Loaded PPO Meta-Learner weights successfully.")
         except Exception as e:
             logger.error(f"Failed to load PPO model: {e}")
-            _model = False
+            _model = None
     else:
-        _model = False
-        
+        _model = None
+
     return _model
 
 

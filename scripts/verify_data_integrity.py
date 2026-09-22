@@ -101,8 +101,13 @@ def fetch_alpaca_fills(days_back: int) -> list:
         import asyncio
         async def _get_orders():
             return await exchange.get_orders(status="filled", after=after, limit=500)
-        
+
         orders = asyncio.run(_get_orders())
+        # status="filled" maps to Alpaca's broader "closed" query filter
+        # (see exchange.py's _ORDER_STATUS_TO_QUERY_STATUS), which also
+        # returns cancelled/expired/rejected orders -- filter to actual
+        # fills explicitly so this integrity check only compares real fills.
+        orders = [o for o in orders if o.get("status") == "filled"]
         print(f"Fetched {len(orders)} filled orders from Alpaca")
         return orders
     except Exception as e:

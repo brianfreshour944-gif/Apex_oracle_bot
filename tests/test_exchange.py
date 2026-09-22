@@ -8,6 +8,9 @@ was refactored to use the official `alpaca-py` SDK (`self.trading_client`,
 `self.data_client`) with `tenacity` retry decorators instead of a manual
 token-bucket rate limiter. These tests cover the class as it exists today.
 """
+import asyncio
+import threading
+import time
 from unittest.mock import MagicMock
 
 import pytest
@@ -70,6 +73,55 @@ class TestGetAccount:
         assert result["id"] == "acct_123"
         assert result["buying_power"] == pytest.approx(1000.50)
         assert result["equity"] == pytest.approx(5000.00)
+
+
+class TestGetOrdersStatusMapping:
+    """GetOrdersRequest.status is alpaca-py's QueryOrderStatus enum -- only
+    'open'/'closed'/'all', NOT Alpaca's own order-lifecycle status values
+    ('new', 'filled', etc.). Every call site in this codebase was written
+    against the lifecycle vocabulary, so every status="new"/"filled" call
+    raised a pydantic ValidationError at request-construction time (before
+    any network call), retried 5x over ~1-2 minutes by the @retry decorator,
+    then silently swallowed by every caller's broad try/except -- making
+    stale-order reconciliation, the unresolved-order entry veto, and
+    create_order's fill-confirmation fallback complete no-ops. Found via an
+    external correctness audit, reproduced directly against the installed
+    alpaca-py==0.44.0, 2026-09-22.
+    """
+
+    @pytest.mark.asyncio
+    async def test_status_new_does_not_raise_and_maps_to_open(self, exchange):
+        exchange.trading_client = MagicMock()
+        exchange.trading_client.get_orders = MagicMock(return_value=[])
+
+        # Must not raise -- this is the real GetOrdersRequest construction,
+        # not a mocked-away validation step.
+        await exchange.get_orders(status="new", limit=100)
+
+        sent_request = exchange.trading_client.get_orders.call_args[0][0]
+        assert str(sent_request.status.value) == "open"
+
+    @pytest.mark.asyncio
+    async def test_status_filled_does_not_raise_and_maps_to_closed(self, exchange):
+        exchange.trading_client = MagicMock()
+        exchange.trading_client.get_orders = MagicMock(return_value=[])
+
+        await exchange.get_orders(status="filled", limit=100)
+
+        sent_request = exchange.trading_client.get_orders.call_args[0][0]
+        assert str(sent_request.status.value) == "closed"
+
+    @pytest.mark.asyncio
+    async def test_alpaca_native_status_values_still_work(self, exchange):
+        """Callers that already pass "open"/"closed"/"all" directly (the
+        real Alpaca query vocabulary) must keep working unchanged."""
+        exchange.trading_client = MagicMock()
+        exchange.trading_client.get_orders = MagicMock(return_value=[])
+
+        await exchange.get_orders(status="closed", limit=100)
+
+        sent_request = exchange.trading_client.get_orders.call_args[0][0]
+        assert str(sent_request.status.value) == "closed"
 
 
 class TestGetPositions:
@@ -222,4 +274,79 @@ class TestCreateOrderIdempotentRecovery:
         finally:
             exchange.create_order.retry.stop = original_stop
 
-        exchange.trading_client.get_order_by_client_id.assert_not_called()
+
+class TestCreateOrderIdempotencyRace:
+    """The idempotency check (cache read) and the idempotency write happen
+    on opposite sides of several `await`s (submit_order, confirmation
+    polling) -- without a claim in between, two concurrent create_order()
+    calls for the SAME client_order_id could both pass the "not cached yet"
+    check and both submit for real. Found via an external concurrency
+    audit, confirmed and fixed 2026-09-22 with a pending-claim sentinel.
+    """
+
+    @pytest.mark.asyncio
+    async def test_concurrent_calls_with_same_client_order_id_submit_once(self, exchange):
+        """Real concurrency, not a serialized mock: submit_order runs on an
+        actual OS thread (via asyncio.to_thread) with an artificial delay,
+        genuinely widening the TOCTOU window between the two overlapping
+        create_order() calls below."""
+        submit_count = {"n": 0}
+        count_lock = threading.Lock()
+
+        class FakeOrder:
+            def __init__(self, order_id):
+                self.id = order_id
+                self.symbol = "BTC/USD"
+                self.qty = 0.1
+                self.status = "accepted"
+
+        def fake_submit_order(request):
+            with count_lock:
+                submit_count["n"] += 1
+                n = submit_count["n"]
+            time.sleep(0.3)  # widen the race window
+            return FakeOrder(order_id=f"order-{n}")
+
+        exchange.trading_client = MagicMock()
+        exchange.trading_client.submit_order = fake_submit_order
+
+        same_client_order_id = "race-test-id"
+        results = await asyncio.gather(
+            exchange.create_order("BTC/USD", 0.1, "buy", client_order_id=same_client_order_id, confirm=False),
+            exchange.create_order("BTC/USD", 0.1, "buy", client_order_id=same_client_order_id, confirm=False),
+        )
+
+        assert submit_count["n"] == 1, (
+            f"submit_order was called {submit_count['n']} times for the same "
+            f"client_order_id -- the TOCTOU race was not closed"
+        )
+        assert results[0]["id"] == results[1]["id"], "concurrent calls returned different orders"
+
+    @pytest.mark.asyncio
+    async def test_pending_claim_cleared_on_genuine_failure(self, exchange):
+        """A submission that never resolves to a real order (no existing
+        order found on retry) must clear its pending claim -- otherwise a
+        legitimate retry with the same client_order_id would be blocked for
+        the rest of the cache TTL (5 minutes) instead of being allowed to
+        actually try again."""
+        exchange.trading_client = MagicMock()
+        exchange.trading_client.submit_order = MagicMock(side_effect=RuntimeError("connection reset"))
+        # Real Alpaca raises (404) for "not found", it never returns None --
+        # matches _find_existing_order_by_client_id's own except-and-return-
+        # None path.
+        exchange.trading_client.get_order_by_client_id = MagicMock(side_effect=RuntimeError("404 order not found"))
+
+        original_stop = exchange.create_order.retry.stop
+        try:
+            exchange.create_order.retry.stop = stop_after_attempt(1)
+            with pytest.raises(RetryError):
+                await exchange.create_order(
+                    "BTC/USD", 0.1, "buy", confirm=False, client_order_id="cleanup-test-id"
+                )
+        finally:
+            exchange.create_order.retry.stop = original_stop
+
+        assert "cleanup-test-id" not in exchange._order_cache, (
+            "pending claim was left in the cache after a genuine failure -- "
+            "a legitimate retry would be wrongly blocked as 'in flight'"
+        )
