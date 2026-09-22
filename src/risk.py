@@ -1273,7 +1273,7 @@ class RiskManager:
             self._reserved_exposure.append((approved, now))
             return approved, "ok"
 
-    def release_reserved_exposure(self, notional: float) -> None:
+    async def release_reserved_exposure(self, notional: float) -> None:
         """Release a previously-reserved exposure amount back to the pool.
 
         Call this when an order fails, is cancelled, or the reserved amount
@@ -1289,16 +1289,32 @@ class RiskManager:
         is instead left to expire via the 30s TTL prune in
         check_and_reserve_exposure -- the next cycle's fresh
         update_account_status() reflects the real fill once that clears it.
+
+        Wrapped in `_exposure_lock` (the same lock check_and_reserve_exposure
+        holds while mutating this list): mutating `_reserved_exposure`
+        without it was safe today only because neither function contains an
+        `await` while touching the list -- under asyncio's cooperative
+        scheduling, a stretch of code with no yield point can't be
+        interleaved. That safety was fragile by construction: the moment
+        either function gained an internal `await` (e.g. a logging call that
+        awaits something, or an alert), the reasoning would silently stop
+        holding, with no test able to catch it. The lock costs nothing here
+        (pure in-memory list arithmetic) so it's synchronized explicitly
+        rather than relying on that implicit invariant. Found via an
+        external concurrency audit; independently verified safe under
+        current code with a 500-op mixed concurrent reserve/release stress
+        test before applying this hardening, 2026-09-22.
         """
         if notional <= 0:
             return
-        # Remove the most recent matching reservation (LIFO)
-        for i in range(len(self._reserved_exposure) - 1, -1, -1):
-            amt, _ = self._reserved_exposure[i]
-            if abs(amt - notional) < 0.01:
-                del self._reserved_exposure[i]
-                logger.debug(f"Released reserved exposure: ${notional:.2f}")
-                return
+        async with self._exposure_lock:
+            # Remove the most recent matching reservation (LIFO)
+            for i in range(len(self._reserved_exposure) - 1, -1, -1):
+                amt, _ = self._reserved_exposure[i]
+                if abs(amt - notional) < 0.01:
+                    del self._reserved_exposure[i]
+                    logger.debug(f"Released reserved exposure: ${notional:.2f}")
+                    return
         # Fallback: remove the largest reservation
         if self._reserved_exposure:
             idx = max(range(len(self._reserved_exposure)), key=lambda i: self._reserved_exposure[i][0])
@@ -1349,10 +1365,26 @@ class RiskManager:
         """
         async with self._exposure_lock:
             now = datetime.now(UTC)
-            # Prune stale reservations (30s TTL, matching _reserved_exposure)
+            # TTL: previously 30s, matching _reserved_exposure -- but that TTL
+            # governs a DIFFERENT thing (exposure dollars, which get
+            # re-derived from the next update_account_status() regardless of
+            # this reservation's fate). This slot reservation instead needs to
+            # outlive create_order() actually resolving, which can legitimately
+            # take much longer than 30s: exchange.create_order() retries up to
+            # 5 times (tenacity, ~2-30s backoff between attempts) and its
+            # internal fill-confirmation poll alone can run up to
+            # confirm_timeout=10s PER attempt before falling through to a
+            # slower fallback lookup -- a worst case in the tens of seconds,
+            # comfortably capable of exceeding 30s. If the slot expires while
+            # the order is still genuinely in flight, a concurrently-evaluated
+            # sibling cycle could reserve and open a SECOND position for the
+            # same symbol. Raised to 120s for real margin over that worst
+            # case. Found via an external financial-correctness/concurrency
+            # audit, confirmed by reading exchange.py's retry/confirm timing,
+            # 2026-09-22.
             self._reserved_new_position_symbols = {
                 s: t for s, t in self._reserved_new_position_symbols.items()
-                if (now - t).total_seconds() < 30
+                if (now - t).total_seconds() < 120
             }
             if symbol in self._reserved_new_position_symbols:
                 return False, "position_slot_already_reserved"

@@ -891,13 +891,25 @@ async def process_signal_for_symbol(symbol: str, current_price: float, risk_mana
                     # first-entry values wrong), use the real fill price (not
                     # the signal-time price), and subtract the commission.
                     trail_fill = order_result.get("filled_avg_price", 0.0)
+                    trail_commission = order_result.get("commission", 0.0)
+                    # Record fill costs for the dynamic transaction cost model --
+                    # trailing-stop exits previously didn't feed this at all (no
+                    # slippage/fee recording of any kind), despite being the
+                    # exit path most likely to slip (fires in fast-moving
+                    # markets). Symmetric to the buy-path recording. Found via
+                    # an external financial-correctness audit, confirmed by
+                    # reading the code, 2026-09-22.
+                    if trail_fill > 0 and qty_abs > 0:
+                        slippage_bps = abs(trail_fill - current_price) / current_price * 10000
+                        fee_bps = (trail_commission / (trail_fill * qty_abs)) * 10000 if trail_fill * qty_abs > 0 else 0
+                        risk_manager.record_fill_costs(symbol, fee_bps, slippage_bps)
                     await _record_committee_outcome(
                         symbol,
                         trail_fill if trail_fill > 0 else current_price,
                         exit_reason="trailing_stop",
                         entry_price=avg_entry_price,
                         qty=qty_abs,
-                        commission=order_result.get("commission", 0.0),
+                        commission=trail_commission,
                     )
                     return  # Skip standard signals
     
@@ -1260,6 +1272,30 @@ async def process_signal_for_symbol(symbol: str, current_price: float, risk_mana
                 position_size = round(position_size, 6)
                 logger.info(f"📊 Applied Committee Sizing Multiplier ({committee_mult:.2f}x based on score {committee_result.score:.2f}) → Final Qty: {position_size}")
 
+                # Re-apply the MAX_SINGLE_TRADE_USD hard cap after the multipliers
+                # above (uncertainty scaling, oracle regime multiplier, committee
+                # confidence multiplier). calculate_position_size() already
+                # enforces this cap on ITS OWN output (risk.py:844), but nothing
+                # re-checked it after these three multipliers could push size back
+                # over -- committee_mult alone can reach 1.75x
+                # (calculate_confidence_size_multiplier's documented max).
+                # Verified live 2026-09-22: a position sized to exactly the
+                # $2,500 cap by calculate_position_size became $4,375 (75% over
+                # cap, $175 vs the intended $100 dollar-risk budget) after a
+                # 1.75x committee multiplier, with no re-check anywhere before
+                # create_order. Found via an external financial-correctness
+                # audit, independently reproduced with the exact same numbers.
+                if signal["action"] == "buy":
+                    _pre_cap_recheck_qty = position_size
+                    max_qty_at_cap = settings.MAX_SINGLE_TRADE_USD / current_price
+                    if position_size > max_qty_at_cap:
+                        position_size = round(max_qty_at_cap, 6)
+                        logger.warning(
+                            f"[{symbol}] Post-multiplier size exceeded MAX_SINGLE_TRADE_USD "
+                            f"(${_pre_cap_recheck_qty * current_price:.2f} > ${settings.MAX_SINGLE_TRADE_USD:.2f}) "
+                            f"-- re-capped {_pre_cap_recheck_qty} -> {position_size}"
+                        )
+
                 # Fix #1: Cap sell qty to available position (prevents 403 insufficient balance loop)
                 if signal["action"] == "sell":
                     sell_pos = None
@@ -1306,7 +1342,7 @@ async def process_signal_for_symbol(symbol: str, current_price: float, risk_mana
                     logger.info(f"[{symbol}] Position size reduced to fit exposure headroom: {position_size} (was {original_size}, ${approved_notional:.2f} of ${notional:.2f} requested)")
                     if position_size <= 0:
                         logger.warning(f"[{symbol}] Order vetoed: scaled position size rounded to zero")
-                        risk_manager.release_reserved_exposure(approved_notional)
+                        await risk_manager.release_reserved_exposure(approved_notional)
                         return
                 
                 # Position pyramid/scale-in gates: prevent unlimited re-buying
@@ -1326,20 +1362,20 @@ async def process_signal_for_symbol(symbol: str, current_price: float, risk_mana
                         # Gate 1: Max adds cap
                         if add_info["count"] >= MAX_POSITION_ADDS:
                             logger.info(f"[{symbol}] Scale-in vetoed: max adds ({MAX_POSITION_ADDS}) reached (current: {add_info['count']})")
-                            risk_manager.release_reserved_exposure(approved_notional)
+                            await risk_manager.release_reserved_exposure(approved_notional)
                             return
                             
                         # Gate 2: Minimum time since last add
                         if now - add_info["last_add_time"] < POSITION_ADD_MIN_SECONDS:
                             logger.info(f"[{symbol}] Scale-in vetoed: minimum time between adds not met ({now - add_info['last_add_time']:.0f}s < {POSITION_ADD_MIN_SECONDS}s)")
-                            risk_manager.release_reserved_exposure(approved_notional)
+                            await risk_manager.release_reserved_exposure(approved_notional)
                             return
                             
                         # Gate 3: Minimum score improvement
                         committee_score = committee_result.score
                         if committee_score - add_info["last_add_score"] < POSITION_ADD_MIN_SCORE_INCREASE:
                             logger.info(f"[{symbol}] Scale-in vetoed: insufficient score improvement ({committee_score:.3f} - {add_info['last_add_score']:.3f} < {POSITION_ADD_MIN_SCORE_INCREASE})")
-                            risk_manager.release_reserved_exposure(approved_notional)
+                            await risk_manager.release_reserved_exposure(approved_notional)
                             return
                             
                         # All gates passed - apply size decay
@@ -1373,7 +1409,7 @@ async def process_signal_for_symbol(symbol: str, current_price: float, risk_mana
                     )
                     if not slot_ok:
                         logger.warning(f"[{symbol}] Order vetoed: {slot_reason}")
-                        risk_manager.release_reserved_exposure(approved_notional)
+                        await risk_manager.release_reserved_exposure(approved_notional)
                         return
 
                 # Final exchange-minimum-order-size check for a fresh/added BUY.
@@ -1400,6 +1436,55 @@ async def process_signal_for_symbol(symbol: str, current_price: float, risk_mana
                             # deviation -- do it rather than waste the trade
                             # (mirrors calculate_position_size's own bump logic).
                             bumped_size = math.ceil(min_order_usd / current_price * 1_000_000) / 1_000_000
+                            bumped_notional = bumped_size * current_price
+                            # The bump increases notional beyond what
+                            # check_and_reserve_exposure already approved above
+                            # -- reserve the delta too, or the order can exceed
+                            # its own exposure reservation. Found via an
+                            # external financial-correctness audit, confirmed
+                            # by reading the code, 2026-09-22: this bump was
+                            # previously unconditional, with no re-reservation.
+                            extra_needed = bumped_notional - approved_notional
+                            if extra_needed > 0:
+                                # Reuse the same current_exposure risk_status
+                                # already fetched above (line ~1137) -- no
+                                # await happens between that fetch and here,
+                                # so it isn't stale, and reusing it avoids
+                                # another redundant get_account()/get_positions()
+                                # round trip. reserved_total (which DOES
+                                # reflect the reservation from the first
+                                # check_and_reserve_exposure call above) is
+                                # re-read fresh inside the lock regardless.
+                                # Found verifying an external concurrency
+                                # audit's "redundant get_account() calls"
+                                # claim, 2026-09-22.
+                                extra_approved, extra_reason = await risk_manager.check_and_reserve_exposure(
+                                    extra_needed, current_exposure=risk_status.get("current_exposure")
+                                )
+                                if extra_approved < extra_needed:
+                                    if extra_approved > 0:
+                                        await risk_manager.release_reserved_exposure(extra_approved)
+                                    logger.warning(
+                                        f"[{symbol}] Order vetoed: bumping to exchange minimum needs "
+                                        f"${extra_needed:.2f} more exposure headroom than already reserved "
+                                        f"(${approved_notional:.2f}), but only ${extra_approved:.2f} was "
+                                        f"available ({extra_reason})."
+                                    )
+                                    await risk_manager.release_reserved_exposure(approved_notional)
+                                    # This veto (and the two others in this
+                                    # min-order-bump block) fire AFTER
+                                    # reserve_position_slot() above, so a slot
+                                    # reservation exists here too for a fresh
+                                    # entry -- releasing only the exposure
+                                    # reservation leaked it, needlessly
+                                    # blocking sibling symbols for up to the
+                                    # slot TTL. Found via an external
+                                    # financial-correctness audit, confirmed
+                                    # by reading the code, 2026-09-22.
+                                    if is_new_entry:
+                                        risk_manager.release_position_slot(symbol)
+                                    return
+                                approved_notional += extra_approved
                             logger.info(
                                 f"[{symbol}] Post-multiplier size bump to exchange minimum: "
                                 f"${final_notional:.2f} -> ${min_order_usd:.2f} notional "
@@ -1413,7 +1498,9 @@ async def process_signal_for_symbol(symbol: str, current_price: float, risk_mana
                                 f"${min_order_usd:.2f} exchange minimum -- would need to bump "
                                 f">2x to place, too large a deviation."
                             )
-                            risk_manager.release_reserved_exposure(approved_notional)
+                            await risk_manager.release_reserved_exposure(approved_notional)
+                            if is_new_entry:
+                                risk_manager.release_position_slot(symbol)
                             return
 
                 # Place order
@@ -1429,7 +1516,7 @@ async def process_signal_for_symbol(symbol: str, current_price: float, risk_mana
                 except Exception as order_e:
                     # Release reserved exposure on order failure so the
                     # headroom isn't permanently leaked.
-                    risk_manager.release_reserved_exposure(approved_notional)
+                    await risk_manager.release_reserved_exposure(approved_notional)
                     if is_new_entry:
                         risk_manager.release_position_slot(symbol)
                     logger.error(f"[{symbol}] Order placement failed: {_describe_exception(order_e)}")
@@ -1570,7 +1657,18 @@ async def process_signal_for_symbol(symbol: str, current_price: float, risk_mana
                         logger.info(f"[FILL] {symbol} close: filled=${filled_price:.2f} commission=${commission:.4f}")
                     if commission > 0:
                         logger.info(f"[FEE] {symbol} close: commission=${commission:.4f}")
-                    
+
+                    # Record fill costs for the dynamic transaction cost model --
+                    # previously only the entry/buy path did this, so the model
+                    # only ever learned from entry-leg fills and never from exits
+                    # (which slip worst, since stop-loss exits fire in fast
+                    # markets). Symmetric to the buy-path recording above. Found
+                    # via an external financial-correctness audit, confirmed by
+                    # reading the code, 2026-09-22.
+                    if filled_price * qty > 0:
+                        fee_bps = (commission / (filled_price * qty)) * 10000
+                        risk_manager.record_fill_costs(symbol, fee_bps, slippage_bps)
+
                     logger.info(f"[TRADE] Position closed: {symbol} (was {qty}) - reason: {signal.get('reason', 'unknown')}")
                     logger.debug(f"[TRADE] Close order result: {order_result}")
                     await send_telegram_alert(f"✅ <b>Position Closed</b>\nSymbol: {symbol}\nReason: {signal.get('reason', 'unknown')}")
