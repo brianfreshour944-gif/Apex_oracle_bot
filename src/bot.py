@@ -715,7 +715,33 @@ async def reconcile_open_snapshots(exchange: AlpacaExchange) -> None:
     Fully fail-safe: any error is logged and skipped.
     """
     from src.db import get_all_open_snapshots, close_decision_snapshot
-    open_snaps = await asyncio.to_thread(get_all_open_snapshots)
+    try:
+        open_snaps = await asyncio.to_thread(get_all_open_snapshots)
+    except Exception as e:
+        # Same fail-safe treatment as a positions-fetch failure (CR-12) --
+        # without knowing what's locally recorded as open, this function
+        # can't tell a genuine orphan from a crash-gap position, or a
+        # genuine ghost from a real one. get_all_open_snapshots() used to
+        # swallow this and return [], making a DB read failure
+        # indistinguishable from "genuinely nothing is open" -- reconcile
+        # silently skipped both the ghost-close and orphan-check passes
+        # with no signal anything was wrong. Found via an external
+        # crash-recovery audit, 2026-09-22.
+        logger.critical(f"[RECONCILE] Could not read open snapshots from the DB ({e}). "
+                        f"Blocking new entries until a reconciliation retry succeeds.")
+        _state.reconciliation_incomplete = True
+        try:
+            await get_alerting_engine().alert_system_health(
+                "startup_reconciliation", "down", {"error": str(e), "stage": "get_all_open_snapshots"}
+            )
+        except Exception as alert_err:
+            logger.debug(f"Reconciliation-failure alert skipped (non-fatal): {alert_err}")
+        if not _state._reconciliation_retry_active:
+            _state._reconciliation_retry_active = True
+            task = asyncio.create_task(_retry_reconciliation_until_success(exchange))
+            _state._background_tasks.add(task)
+            task.add_done_callback(_state._background_tasks.discard)
+        return
 
     positions_fetch_failed = False
     try:
@@ -971,6 +997,58 @@ async def _retry_reconciliation_until_success(exchange: AlpacaExchange) -> None:
                 logger.warning(f"[RECONCILE] Retry attempt failed (non-fatal, will retry again): {e}")
     finally:
         _state._reconciliation_retry_active = False
+
+
+def _prune_stale_restored_state(held_symbols: set[str]) -> tuple[list[str], list[str]]:
+    """Drop restored peak_prices/_trailing_peaks/_trailing_troughs/
+    position_adds entries for symbols that AREN'T in `held_symbols` (CR-C1).
+
+    The crash-recovery state restore applies the persisted file's peaks
+    unconditionally, with no cross-check against real positions. If a
+    position was closed while the bot was down (manually, or via some other
+    out-of-band path) but the symbol is re-entered later at a different
+    price, check_trailing_stop() keys purely on symbol -- it can't tell
+    "this is a stale peak from the last trade" from "this is this trade's
+    own peak", so the OLD peak silently governs the NEW position. Concrete
+    failure traced through the actual trailing-stop math: old peak 120 from
+    a closed trade, new entry at 105, price ticks to 116 (a normal, healthy
+    move for the NEW position, nowhere near ITS OWN stop) -- but drawdown-
+    from-the-STALE-peak is (120-116)/120 = 3.3%, which can exceed the
+    trigger distance and close a fresh position within minutes of opening
+    it. position_adds has the same hazard (a stale scale-in count/timer
+    from the old trade wrongly gating the new one's own scale-ins).
+
+    cooldowns is deliberately NOT pruned here -- it exists specifically to
+    block re-entry into a symbol that is NOT currently held, so
+    intersecting it with held_symbols would erase every cooldown on every
+    restart.
+
+    Returns (dropped_peak_symbols, dropped_position_adds_symbols).
+
+    Found via an external crash-recovery audit, confirmed by tracing
+    check_trailing_stop's actual peak-comparison logic, 2026-09-22.
+    """
+    stale_peaks = []
+    if _state.risk_manager is not None:
+        stale_peaks = [s for s in _state.risk_manager.peak_prices if s.replace("/", "") not in held_symbols]
+        for s in stale_peaks:
+            del _state.risk_manager.peak_prices[s]
+    if _state.strategy is not None:
+        for attr in ("_trailing_peaks", "_trailing_troughs"):
+            d = getattr(_state.strategy, attr, None)
+            if d:
+                for s in [s for s in d if s.replace("/", "") not in held_symbols]:
+                    del d[s]
+    stale_adds = [s for s in _state.position_adds if s.replace("/", "") not in held_symbols]
+    for s in stale_adds:
+        del _state.position_adds[s]
+    if stale_peaks or stale_adds:
+        logger.warning(
+            f"Dropped restored peak/trailing/position_adds entries for symbols "
+            f"not currently held (stale from a previous, since-closed trade): "
+            f"peaks={stale_peaks}, position_adds={stale_adds}"
+        )
+    return stale_peaks, stale_adds
 
 
 def get_banned_symbols():
@@ -2679,6 +2757,13 @@ async def run_trading_bot() -> None:
             await reconcile_open_snapshots(_state.ex)
         except Exception as rec_e:
             logger.warning(f"Startup snapshot reconciliation failed (non-fatal): {rec_e}")
+
+        try:
+            held_positions = await _state.ex.get_positions()
+            held_symbols = {p["symbol"].replace("/", "") for p in held_positions} if held_positions else set()
+            _prune_stale_restored_state(held_symbols)
+        except Exception as prune_err:
+            logger.warning(f"Could not prune stale restored peaks (non-fatal): {prune_err}")
 
         # Initialize AlertingEngine -- reuse the process-wide singleton that
         # src/committee/committee.py already uses for brain-failure alerts, so

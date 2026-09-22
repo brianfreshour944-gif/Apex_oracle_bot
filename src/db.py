@@ -472,7 +472,7 @@ def init_db() -> bool:
     totally-fails case already alerts at the bot.py call site, but this
     silent-rebuild-and-continue case did not). False otherwise.
     """
-    global _tables_ensured
+    global _tables_ensured, _engine
     corruption_detected = False
     db_url = settings.DATABASE_URL
     is_sqlite = db_url.startswith("sqlite:///")
@@ -539,6 +539,38 @@ def init_db() -> bool:
         logger.info(f"Database connected: {settings.DATABASE_URL}")
         return corruption_detected
     except SQLAlchemyError as e:
+        # F1: a corrupt -wal/-shm sidecar (valid main file) fails HERE with
+        # "disk I/O error", not via the raw pre-probe above -- reproduced
+        # that a plain, unpooled `sqlite3.connect(path); SELECT 1` does NOT
+        # hit this error the way SQLAlchemy's own connection (which runs
+        # PRAGMA journal_mode=WAL/synchronous=NORMAL on every new physical
+        # connection via the "connect" pool event) does, so the pre-probe
+        # can't catch this shape and it previously retried 5x then gave up
+        # permanently with nothing ever clearing the poisoned WAL (reproduced
+        # 3/3 runs). Only remove the WAL/SHM siblings, never the main file --
+        # a corrupt WAL is by definition never-checkpointed data, so this
+        # can't lose anything that was actually committed. If it doesn't
+        # help, fall through to the normal retry (and eventually the raw
+        # pre-probe's own corruption path on the next init_db() call, since
+        # _engine gets reset to None below on this path too). Found via an
+        # external crash-recovery audit, root-caused and fixed 2026-09-22.
+        if is_sqlite and "disk i/o error" in str(e).lower():
+            raw_path = db_url[len("sqlite:///"):]
+            if raw_path and raw_path != ":memory:":
+                if _engine is not None:
+                    try:
+                        _engine.dispose()
+                    except Exception:
+                        pass
+                    _engine = None
+                if _try_clear_wal_sidecars(raw_path):
+                    logger.warning(
+                        "Cleared a corrupt WAL/SHM sidecar after a disk I/O "
+                        "error; main file untouched. Retrying."
+                    )
+                else:
+                    logger.warning(f"Database connection attempt failed: {e}. Retrying...")
+                raise
         logger.warning(f"Database connection attempt failed: {e}. Retrying...")
         raise
 
@@ -551,6 +583,53 @@ _SQLITE_CORRUPTION_SIGNATURES = (
 )
 
 
+def _try_clear_wal_sidecars(db_path: str) -> bool:
+    """Remove ONLY the -wal/-shm sidecar files, never the main .db file, and
+    confirm a fresh connection now succeeds.
+
+    A corrupt WAL is by definition data that was never checkpointed into
+    the main file -- deleting it can only lose whatever was in-flight at
+    the crash, never anything that was actually committed. This is the
+    surgical alternative to _recovery_from_corruption() (which moves the
+    main file aside too) for the specific case where the main file is
+    perfectly healthy and only its WAL/SHM siblings are the problem. See
+    _probe_sqlite_file's disk-I/O-error branch.
+
+    Bounded retry on the removal itself: on Windows, the connection that
+    just failed with the disk I/O error can leave its OS file handle open
+    on the -wal file for a short window even after engine.dispose() --
+    reproduced directly (WinError 32 "used by another process" on every
+    immediate attempt, but the file becomes removable moments later once
+    the OS finishes releasing the handle). POSIX unlink() doesn't have this
+    problem at all (a file can be removed while still open elsewhere), so
+    this only matters on Windows -- the retry is cheap insurance either way.
+    """
+    import sqlite3
+    for suffix in ("-wal", "-shm"):
+        target = db_path + suffix
+        for attempt in range(5):
+            try:
+                os.remove(target)
+                logger.info(f"Removed SQLite sidecar file: {target}")
+                break
+            except FileNotFoundError:
+                break
+            except OSError as e:
+                if attempt == 4:
+                    logger.warning(f"Could not remove {target} after 5 attempts: {e}")
+                else:
+                    time.sleep(0.3)
+    try:
+        conn = sqlite3.connect(db_path, timeout=1.0)
+        try:
+            conn.execute("SELECT 1")
+        finally:
+            conn.close()
+        return True
+    except Exception:
+        return False
+
+
 def _probe_sqlite_file(db_path: str) -> str | None:
     """Raw, unpooled connectivity/corruption probe using stdlib sqlite3
     directly -- deliberately NOT going through the SQLAlchemy engine/pool
@@ -560,11 +639,15 @@ def _probe_sqlite_file(db_path: str) -> str | None:
     this function's caller needs to do). Opens and closes in a plain
     try/finally so the handle is released deterministically either way.
 
-    Returns a description of the corruption if detected, else None.
-    Conservative by design: any error whose text doesn't match SQLite's own
-    corruption signatures is treated as "not clearly corruption" (e.g. a
-    locked file, a permissions issue) so a transient problem can't trigger
-    a destructive rebuild.
+    Returns a description of the corruption if detected (main file needs
+    the full move-aside-and-rebuild), else None -- which also covers the
+    case where a corrupt WAL/SHM sidecar was found and already cleared
+    in-place below, since at that point the file genuinely is usable and
+    calling the destructive full recovery on top would discard an intact
+    main file for no reason. Conservative by design otherwise: any error
+    whose text doesn't match a known corruption signature is treated as
+    "not clearly corruption" (e.g. a locked file, a permissions issue) so a
+    transient problem can't trigger a destructive rebuild.
     """
     import sqlite3
     try:
@@ -576,6 +659,26 @@ def _probe_sqlite_file(db_path: str) -> str | None:
         return None
     except sqlite3.DatabaseError as e:
         msg = str(e).lower()
+        if "disk i/o error" in msg:
+            # SQLite needs to read/replay the WAL on ANY connection to a
+            # WAL-mode database, even a plain SELECT 1 -- a corrupt -wal/-shm
+            # sidecar with an otherwise-healthy main file fails with exactly
+            # this error, not the header-corruption signatures below, and
+            # previously fell through to an unrecoverable retry-then-crash-
+            # loop (reproduced 3/3 runs: init_db() retried 5x then gave up
+            # permanently, with nothing ever clearing the poisoned WAL).
+            # Found via an external crash-recovery audit, root-caused and
+            # fixed 2026-09-22.
+            logger.warning(
+                f"SQLite connection failed with a disk I/O error (likely a "
+                f"corrupt WAL/SHM sidecar, not main-file corruption): {e}. "
+                f"Removing WAL/SHM siblings and retrying."
+            )
+            if _try_clear_wal_sidecars(db_path):
+                logger.info("WAL/SHM sidecar removal recovered the database; main file untouched.")
+                return None
+            logger.warning("WAL/SHM sidecar removal did not fix it -- falling back to full corruption recovery.")
+            return str(e)
         if any(sig in msg for sig in _SQLITE_CORRUPTION_SIGNATURES):
             return str(e)
         return None
@@ -848,8 +951,16 @@ def get_all_open_snapshots() -> List[Dict[str, Any]]:
                 for row in rows
             ]
     except Exception as e:
-        logger.warning(f"get_all_open_snapshots failed (non-fatal): {e}")
-        return []
+        # Deliberately re-raised, not swallowed to []: this is the ONLY
+        # caller (bot.reconcile_open_snapshots), which needs to tell "no
+        # open snapshots" apart from "couldn't read the DB to find out".
+        # Silently returning [] here made a DB error indistinguishable from
+        # a genuinely empty result -- reconciliation would proceed as if
+        # nothing were open, skipping the ghost-close and orphan-check
+        # passes without ever surfacing that anything went wrong. Found via
+        # an external crash-recovery audit, 2026-09-22.
+        logger.warning(f"get_all_open_snapshots failed: {e}")
+        raise
 
 
 def close_decision_snapshot(
