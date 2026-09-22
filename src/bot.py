@@ -134,15 +134,28 @@ async def _record_committee_outcome(
 
         if action == "buy":
             realized_pnl = (exit_price - entry_price) * qty
-            return_pct = (exit_price - entry_price) / entry_price * 100.0
         else:  # sell / short
             realized_pnl = (entry_price - exit_price) * qty
-            return_pct = (entry_price - exit_price) / entry_price * 100.0
 
         # Fees are real money: subtract the round-trip commission from the
         # recorded PnL so near-zero trades don't get inflated win labels
         # (audit finding F-B).
         realized_pnl -= abs(float(commission))
+
+        # return_pct must be computed from the NET (post-commission) PnL, not
+        # the gross price delta -- otherwise a trade that's a real loser after
+        # fees (e.g. a $10 gross move eaten by a $15 commission, net -$5) can
+        # report a POSITIVE return_pct, since the commission subtraction above
+        # never touches it. This field feeds performance_tracker.py's
+        # Sharpe/win-rate/decay-alert computations, strategy_selector.py's
+        # adaptive-learner reward signal, AND track_record_status.py's
+        # "positive expectancy" foundation-freeze gate -- all three would
+        # silently see inflated, fee-blind performance without this fix.
+        # Matches the net-pnl/notional convention already used correctly in
+        # reconcile_open_snapshots() elsewhere in this file. Found via the
+        # 2026-09-21 financial-correctness audit.
+        notional = entry_price * qty
+        return_pct = (realized_pnl / notional * 100.0) if notional > 0 else 0.0
 
         holding_sec = 0.0
         created = snap.get("created_at")
