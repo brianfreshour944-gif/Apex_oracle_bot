@@ -1315,11 +1315,16 @@ class RiskManager:
                     del self._reserved_exposure[i]
                     logger.debug(f"Released reserved exposure: ${notional:.2f}")
                     return
-        # Fallback: remove the largest reservation
-        if self._reserved_exposure:
-            idx = max(range(len(self._reserved_exposure)), key=lambda i: self._reserved_exposure[i][0])
-            del self._reserved_exposure[idx]
-            logger.debug(f"Released largest reserved exposure: ${notional:.2f}")
+            # Fallback: remove the largest reservation. Moved inside the lock
+            # -- this used to run after the `async with` block above had
+            # already exited, so a no-match case mutated _reserved_exposure
+            # completely unlocked, defeating the 2026-09-22 hardening that
+            # put the LIFO-match path under the lock two paragraphs above.
+            # Found via an external concurrency audit, 2026-09-22.
+            if self._reserved_exposure:
+                idx = max(range(len(self._reserved_exposure)), key=lambda i: self._reserved_exposure[i][0])
+                del self._reserved_exposure[idx]
+                logger.debug(f"Released largest reserved exposure: ${notional:.2f}")
 
     async def reserve_position_slot(
         self,
@@ -1547,9 +1552,19 @@ class RiskManager:
         
         return True, "ok"
 
-    def release_position_slot(self, symbol: str) -> None:
-        """Release a previously-reserved new-position slot."""
-        self._reserved_new_position_symbols.pop(symbol, None)
+    async def release_position_slot(self, symbol: str) -> None:
+        """Release a previously-reserved new-position slot.
+
+        Wrapped in `_exposure_lock` (the same lock reserve_position_slot()
+        holds while mutating this dict) for consistency with the same
+        hardening applied to release_reserved_exposure() -- safe today only
+        because neither function contains an `await` while touching
+        `_reserved_new_position_symbols`, which is the same fragile-by-
+        construction pattern. Found via an external concurrency audit,
+        2026-09-22.
+        """
+        async with self._exposure_lock:
+            self._reserved_new_position_symbols.pop(symbol, None)
 
     async def reduce_exposure_to_cap(self) -> dict[str, Any]:
         """Close positions, worst unrealized P&L first, until exposure is
@@ -1585,7 +1600,11 @@ class RiskManager:
                 # re-entry doesn't inherit a leftover peak from this closed
                 # position (same reasoning as _record_committee_outcome's
                 # cleanup for normal closes -- this path bypasses that).
-                self.peak_prices.pop(symbol, None)
+                # Locked for consistency with the other peak_prices writers
+                # (check_trailing_stop etc.) -- found unlocked via an
+                # external concurrency audit, 2026-09-22.
+                with self._peak_prices_lock:
+                    self.peak_prices.pop(symbol, None)
                 self._reserved_new_position_symbols.pop(symbol, None)
                 # Audit: close the open decision snapshot too -- this path
                 # bypasses _record_committee_outcome, so the snapshot would
@@ -1632,7 +1651,9 @@ class RiskManager:
                 # re-entry doesn't inherit a leftover peak from this closed
                 # position (same reasoning as _record_committee_outcome's
                 # cleanup for normal closes -- this path bypasses that).
-                self.peak_prices.pop(symbol, None)
+                # Locked for consistency, per the same audit finding as above.
+                with self._peak_prices_lock:
+                    self.peak_prices.pop(symbol, None)
                 self._reserved_new_position_symbols.pop(symbol, None)
                 liq_fill = order_result.get("filled_avg_price", 0.0)
                 await self._close_open_snapshot(symbol, liq_fill if liq_fill > 0 else 0.0,
@@ -1672,10 +1693,13 @@ class RiskManager:
         }
         
         # Clean peak_prices for symbols not in active trading or very old
-        # We can't easily track age, so we clean symbols not in active_symbols
-        stale_peaks = [k for k in self.peak_prices.keys() if k not in active_symbols]
-        for k in stale_peaks:
-            del self.peak_prices[k]
+        # We can't easily track age, so we clean symbols not in active_symbols.
+        # Locked for consistency with the other peak_prices readers/writers --
+        # found unlocked via an external concurrency audit, 2026-09-22.
+        with self._peak_prices_lock:
+            stale_peaks = [k for k in self.peak_prices.keys() if k not in active_symbols]
+            for k in stale_peaks:
+                del self.peak_prices[k]
         cleaned["peak_prices"] = len(stale_peaks)
         
         # Clean realized_tx_costs for symbols not in active trading

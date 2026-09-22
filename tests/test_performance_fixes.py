@@ -86,6 +86,13 @@ class TestPeakPriceCleanup:
 
         rm = Mock()
         rm.peak_prices = {"BTCUSD": 52000.0}
+        # Real lock, not a Mock: bot.py now wraps this pop in
+        # risk_manager._peak_prices_lock (a threading.Lock in the real
+        # RiskManager) for consistency with its other peak_prices writers,
+        # per an external concurrency audit, 2026-09-22. A plain Mock()
+        # attribute doesn't support the `with` protocol.
+        import threading as _threading
+        rm._peak_prices_lock = _threading.Lock()
         original = bot_mod._state.risk_manager
         bot_mod._state.risk_manager = rm
 

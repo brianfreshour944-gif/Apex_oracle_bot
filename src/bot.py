@@ -4,6 +4,7 @@ import logging
 import math
 import os as _os
 import sys
+import threading
 import time
 from datetime import UTC, datetime
 from typing import Any, Dict
@@ -194,9 +195,12 @@ async def _record_committee_outcome(
         )
 
         # Clear peak/trough price tracking for this symbol on any position close
-        # to prevent stale values from affecting future positions
+        # to prevent stale values from affecting future positions. Locked for
+        # consistency with the other peak_prices readers/writers in risk.py --
+        # found unlocked via an external concurrency audit, 2026-09-22.
         if _state.risk_manager is not None:
-            _state.risk_manager.peak_prices.pop(symbol, None)
+            with _state.risk_manager._peak_prices_lock:
+                _state.risk_manager.peak_prices.pop(symbol, None)
         if _state.strategy is not None and hasattr(_state.strategy, '_trailing_peaks'):
             _state.strategy._trailing_peaks.pop(symbol, None)
         if _state.strategy is not None and hasattr(_state.strategy, '_trailing_troughs'):
@@ -412,8 +416,19 @@ class BotState:
         self._transformer_online_lr_min: float = 1e-6
         self._transformer_online_warmup_steps: int = 100
         self._transformer_online_total_steps: int = 10000
-        self._transformer_online_lock: asyncio.Lock = asyncio.Lock()
-        
+        # threading.Lock, not asyncio.Lock: _online_transformer_step() (bot.py,
+        # inside the online-learning gradient-step closure) runs via
+        # asyncio.to_thread on a real OS thread, and uses plain sync `with`
+        # around this lock, not `async with`. asyncio.Lock doesn't support the
+        # sync context-manager protocol at all -- `with asyncio.Lock():` raises
+        # `TypeError: 'Lock' object does not support the context manager
+        # protocol` immediately, every call, which was silently swallowed by
+        # the broad `except Exception` around the whole gradient step. Online
+        # transformer learning has been a complete no-op, not merely
+        # under-synchronized. Found via an external concurrency audit,
+        # confirmed by reproducing the TypeError directly, 2026-09-22.
+        self._transformer_online_lock: threading.Lock = threading.Lock()
+
         # Alerting metrics
         self.trade_timestamps: list[float] = []
         self.exchange_failure_count: int = 0
@@ -510,7 +525,7 @@ class BotState:
         self._transformer_online_lr_min = 1e-6
         self._transformer_online_warmup_steps = 100
         self._transformer_online_total_steps = 10000
-        self._transformer_online_lock = asyncio.Lock()
+        self._transformer_online_lock = threading.Lock()
 
     def cleanup_stale_state(self, max_age_seconds: float = 3600) -> Dict[str, int]:
         """Clean up stale state entries to prevent memory leaks.
@@ -1020,10 +1035,32 @@ async def process_signal_for_symbol(symbol: str, current_price: float, risk_mana
                     )
                     return
                 # Fall through: an existing position may still need to exit.
-            # Use pre-fetched positions from the main cycle if available,
-            # otherwise fetch fresh (fallback for direct calls).
             if positions is None:
+                # Fallback for direct calls with no pre-fetched positions.
                 positions = await ex.get_positions()
+            else:
+                # Authoritative refresh, same reasoning as the later one
+                # before buy-sizing (bot.py, "AUTHORITATIVE POSITION REFRESH"
+                # below): the `positions` snapshot passed from the main loop
+                # is a cycle-start snapshot shared by every concurrently-
+                # evaluated symbol. The trailing-stop check right below reads
+                # avg_entry_price/qty from it -- if this symbol's own
+                # position changed since cycle start (a fill or manual
+                # close), the stop decision uses stale entry price/qty,
+                # possibly closing the wrong quantity or missing a stop that
+                # should have fired. The buy path already re-fetches for its
+                # own sizing/exposure math further down; the trailing-stop
+                # check ran on the older snapshot every time before this.
+                # Found via an external concurrency audit, confirmed by
+                # tracing that no refresh existed between here and the
+                # trailing-stop check below, 2026-09-22.
+                try:
+                    positions = await ex.get_positions()
+                except Exception as pos_refresh_err:
+                    logger.debug(
+                        f"[{symbol}] Pre-trailing-stop position refresh failed: "
+                        f"{_describe_exception(pos_refresh_err)} — using cycle-start snapshot"
+                    )
             position_dict = {p["symbol"].replace("/", ""): p for p in positions}
             current_position = position_dict.get(symbol.replace("/", ""))
 
@@ -1709,7 +1746,7 @@ async def process_signal_for_symbol(symbol: str, current_price: float, risk_mana
                                     # financial-correctness audit, confirmed
                                     # by reading the code, 2026-09-22.
                                     if is_new_entry:
-                                        risk_manager.release_position_slot(symbol)
+                                        await risk_manager.release_position_slot(symbol)
                                     return
                                 approved_notional += extra_approved
                             logger.info(
@@ -1727,7 +1764,7 @@ async def process_signal_for_symbol(symbol: str, current_price: float, risk_mana
                             )
                             await risk_manager.release_reserved_exposure(approved_notional)
                             if is_new_entry:
-                                risk_manager.release_position_slot(symbol)
+                                await risk_manager.release_position_slot(symbol)
                             return
 
                 # Place order
@@ -1745,7 +1782,7 @@ async def process_signal_for_symbol(symbol: str, current_price: float, risk_mana
                     # headroom isn't permanently leaked.
                     await risk_manager.release_reserved_exposure(approved_notional)
                     if is_new_entry:
-                        risk_manager.release_position_slot(symbol)
+                        await risk_manager.release_position_slot(symbol)
                     logger.error(f"[{symbol}] Order placement failed: {_describe_exception(order_e)}")
                     raise
                 await asyncio.to_thread(

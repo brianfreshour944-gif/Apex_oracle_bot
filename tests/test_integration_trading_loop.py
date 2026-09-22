@@ -84,7 +84,11 @@ class TestFullTradingLoop:
         rm.calculate_position_size = MagicMock(return_value=(0.1, "ok"))
         rm.check_and_reserve_exposure = AsyncMock(return_value=(1000.0, "ok"))
         rm.reserve_position_slot = AsyncMock(return_value=(True, "ok"))
-        rm.release_position_slot = MagicMock()
+        # async in the real RiskManager as of 2026-09-22 (wrapped in
+        # _exposure_lock for consistency with release_reserved_exposure,
+        # per an external concurrency audit) -- must be AsyncMock or bot.py's
+        # `await risk_manager.release_position_slot(...)` raises TypeError.
+        rm.release_position_slot = AsyncMock()
         rm.peak_prices = {}
         rm.record_fill_costs = MagicMock()
         return rm
