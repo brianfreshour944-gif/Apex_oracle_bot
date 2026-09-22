@@ -252,6 +252,47 @@ def save_order_record(
         logger.warning(f"save_order_record failed (non-fatal): {e}")
         return False
 
+
+def get_recent_order_records(symbol_clean: str, max_age_sec: float = 3600.0) -> List[Dict[str, Any]]:
+    """Most-recent-first order-ledger records for a symbol within max_age_sec.
+
+    `symbol_clean` matches the slash-stripped form exchange positions use
+    (e.g. "BTCUSD"), so this also matches records saved with either form by
+    stripping the stored symbol the same way. Used by startup reconciliation
+    to distinguish a genuine crash-gap fill from a true orphan/ghost (CR-1)
+    and to recover the real fill price instead of estimating from the
+    current bar (CR-6).
+    """
+    try:
+        _ensure_tables()
+        cutoff = datetime.datetime.now(datetime.UTC) - datetime.timedelta(seconds=max_age_sec)
+        with get_db_session() as session:
+            stmt = (
+                select(OrderRecord)
+                .where(OrderRecord.submitted_at >= cutoff)
+                .order_by(OrderRecord.submitted_at.desc())
+                .limit(50)
+            )
+            rows = session.execute(stmt).scalars().all()
+            return [
+                {
+                    "order_id": r.order_id,
+                    "decision_id": r.decision_id,
+                    "symbol": r.symbol,
+                    "side": r.side,
+                    "qty": r.qty,
+                    "filled_qty": r.filled_qty,
+                    "filled_avg_price": r.filled_avg_price,
+                    "status": r.status,
+                    "submitted_at": r.submitted_at,
+                }
+                for r in rows
+                if r.symbol.replace("/", "") == symbol_clean
+            ]
+    except Exception as e:
+        logger.warning(f"get_recent_order_records failed (non-fatal): {e}")
+        return []
+
 # Engine will be created lazily when first needed
 _engine = None
 # Tracks whether Base.metadata.create_all() has already run for the current
@@ -304,6 +345,23 @@ def _recovery_from_corruption() -> None:
     db_path = db_url[len("sqlite:///"):]
     if not db_path or db_path == ":memory:":
         return
+
+    # CR-7/CR-10: dispose the cached engine BEFORE attempting the rename, not
+    # after. On Windows, the connection pool keeps its OS-level file handle
+    # open even once the `with engine.connect()` block that triggered this
+    # recovery has exited -- renaming (or even deleting) the file while that
+    # handle is still open fails with WinError 32 ("used by another
+    # process"), silently defeating the whole recovery path. Reproduced
+    # 2026-09-21: the rename below failed every time until disposal moved
+    # here, ahead of it.
+    global _engine, _tables_ensured
+    if _engine is not None:
+        try:
+            _engine.dispose()
+        except Exception as e:
+            logger.debug(f"Engine dispose during corruption recovery failed (non-fatal): {e}")
+        _engine = None
+    _tables_ensured = False
 
     suffixes = [db_path, db_path + "-shm", db_path + "-wal", db_path + "-journal"]
     backup_dir = os.path.join(os.path.dirname(db_path), "corrupt_backups")
@@ -416,13 +474,46 @@ def init_db() -> bool:
     """
     global _tables_ensured
     corruption_detected = False
+    db_url = settings.DATABASE_URL
+    is_sqlite = db_url.startswith("sqlite:///")
+
+    # CR-7: probe with a raw, short-lived stdlib sqlite3 connection BEFORE
+    # the SQLAlchemy engine ever touches the file, while it's still None
+    # (first call only -- get_engine() below would otherwise create and pool
+    # a connection). Fully corrupt files (bad header / not a SQLite file at
+    # all -- the realistic shape of hard-kill corruption) fail even a plain
+    # `SELECT 1`, before ever reaching the integrity_check further down, so
+    # the graceful rebuild path was only reachable for "soft" corruption
+    # (valid header, damaged internal b-tree structure). Tried catching this
+    # via the SQLAlchemy connection instead first (dispose the pooled engine,
+    # then rename) -- reproduced on Windows that the pooled connection's OS
+    # file handle survives engine.dispose() + gc.collect() when the failure
+    # happens inside the WAL-mode "connect" pool event, permanently failing
+    # the rename with WinError 32 on every retry. A raw stdlib connection
+    # opened and closed outside any pool has no such entanglement. Found via
+    # an external crash-recovery audit, root-caused and fixed 2026-09-21/22.
+    if is_sqlite and _engine is None:
+        raw_path = db_url[len("sqlite:///"):]
+        if raw_path and raw_path != ":memory:" and os.path.exists(raw_path):
+            corruption_msg = _probe_sqlite_file(raw_path)
+            if corruption_msg:
+                logger.warning(
+                    f"SQLite file failed a raw pre-connect probe (header-level "
+                    f"corruption): {corruption_msg}. Moving aside and rebuilding."
+                )
+                _recovery_from_corruption()
+                corruption_detected = True
+
     try:
-        # Test the connection
         with get_engine().connect() as conn:
             conn.execute(text("SELECT 1"))
 
-            # SQLite integrity check — detect corruption from unclean shutdown
-            if get_engine().url.drivername == "sqlite":
+            # SQLite integrity check — detect corruption from unclean shutdown.
+            # Also the fallback for corruption introduced after the engine
+            # already exists (rarer in practice than the fresh-startup case
+            # the pre-probe above covers, and shares the same pooled-
+            # connection Windows-lock risk if it ever has to recover here).
+            if is_sqlite:
                 try:
                     result = conn.execute(text("PRAGMA integrity_check")).fetchone()
                     if result and result[0] != "ok":
@@ -432,7 +523,9 @@ def init_db() -> bool:
                         corruption_detected = True
                 except SQLAlchemyError as pragma_err:
                     logger.warning(f"Could not run integrity_check: {pragma_err}")
-        # Create ORM tables if they do not exist (safe/idempotent).
+
+        # Create ORM tables if they do not exist (safe/idempotent). Reopens
+        # against a fresh engine if recovery just ran above.
         Base.metadata.create_all(get_engine())
         _tables_ensured = True
 
@@ -448,6 +541,46 @@ def init_db() -> bool:
     except SQLAlchemyError as e:
         logger.warning(f"Database connection attempt failed: {e}. Retrying...")
         raise
+
+
+_SQLITE_CORRUPTION_SIGNATURES = (
+    "file is not a database",
+    "database disk image is malformed",
+    "database is corrupt",
+    "not a database",
+)
+
+
+def _probe_sqlite_file(db_path: str) -> str | None:
+    """Raw, unpooled connectivity/corruption probe using stdlib sqlite3
+    directly -- deliberately NOT going through the SQLAlchemy engine/pool
+    (see init_db()'s CR-7 comment for why: a pooled connection that fails
+    during the WAL-mode "connect" event can leak its OS file handle on
+    Windows even after engine.dispose(), permanently blocking the rename
+    this function's caller needs to do). Opens and closes in a plain
+    try/finally so the handle is released deterministically either way.
+
+    Returns a description of the corruption if detected, else None.
+    Conservative by design: any error whose text doesn't match SQLite's own
+    corruption signatures is treated as "not clearly corruption" (e.g. a
+    locked file, a permissions issue) so a transient problem can't trigger
+    a destructive rebuild.
+    """
+    import sqlite3
+    try:
+        conn = sqlite3.connect(db_path, timeout=1.0)
+        try:
+            conn.execute("SELECT 1")
+        finally:
+            conn.close()
+        return None
+    except sqlite3.DatabaseError as e:
+        msg = str(e).lower()
+        if any(sig in msg for sig in _SQLITE_CORRUPTION_SIGNATURES):
+            return str(e)
+        return None
+    except Exception:
+        return None
 
 
 def get_db_session() -> Session:

@@ -391,6 +391,16 @@ class BotState:
         self._symbol_locks: dict[str, asyncio.Lock] = {}
         self._background_tasks: set[asyncio.Task] = set()
         self._shutdown_requested: bool = False
+        # CR-12: set when startup/retry reconciliation couldn't fetch positions
+        # at all -- blocks new entries (existing positions still exit/manage)
+        # until a retry succeeds, rather than trading on an unknown state.
+        self.reconciliation_incomplete: bool = False
+        self._reconciliation_retry_active: bool = False
+        # CR-2: symbols with a stale/unresolved order still open on the
+        # exchange from before a crash (or still resolving normally) -- new
+        # entries for these are blocked until the order fills or cancels.
+        # Refreshed every main-loop cycle, not just at startup.
+        self.symbols_with_unresolved_orders: set[str] = set()
         self._regime_flag_cache: dict[str, Any] = {}
         self._regime_flag_cache_mtime: float = -1.0
         self._banned_symbols_cache: set = set()
@@ -625,6 +635,30 @@ async def flush_crash_recovery_state(force: bool = False) -> None:
         logger.debug(f"Crash-recovery state flush skipped (non-fatal): {e}")
 
 
+async def crash_state_flush_heartbeat_loop() -> None:
+    """Background heartbeat that actually delivers on PersistentBotState's
+    documented "bounds the worst-case loss to flush_interval seconds"
+    promise (CR-5b).
+
+    Before this, flush_crash_recovery_state() was only ever called once per
+    main-loop cycle (LOOP_INTERVAL_SEC, default 60s) -- so a peak/cooldown/
+    position-add update that happens mid-cycle (trailing peaks in particular
+    update on every price tick, with no mark_dirty() hook at all, by design)
+    wasn't persisted until the cycle boundary. A hard kill in that window
+    lost up to ~60s of state, not the 5s _crash_state_writer.flush_interval
+    implies. Reproduced via simulation (peak 120->130, hard kill before the
+    next flush, restored=120) verifying an external crash-recovery audit,
+    confirmed by tracing flush_crash_recovery_state()'s only caller being
+    the once-per-cycle main loop, 2026-09-22.
+    """
+    while not _state._shutdown_requested:
+        await asyncio.sleep(_crash_state_writer.flush_interval)
+        try:
+            await flush_crash_recovery_state()
+        except Exception as e:
+            logger.debug(f"Crash-state flush heartbeat tick failed (non-fatal): {e}")
+
+
 async def _close_orphan_position(exchange: AlpacaExchange, symbol_clean: str, positions: list[dict[str, Any]]) -> None:
     """Close an exchange position the bot has no DB snapshot for.
 
@@ -668,96 +702,260 @@ async def reconcile_open_snapshots(exchange: AlpacaExchange) -> None:
     from src.db import get_all_open_snapshots, close_decision_snapshot
     open_snaps = await asyncio.to_thread(get_all_open_snapshots)
 
+    positions_fetch_failed = False
     try:
         positions = await exchange.get_positions()
+        _state.reconciliation_incomplete = False
     except Exception as e:
-        logger.warning(f"Snapshot reconciliation skipped: could not fetch positions: {e}")
-        if not open_snaps:
-            return
+        # Fail-safe UNKNOWN state, not flat. Substituting positions=[] here
+        # used to fall through into the ghost-close loop below with an empty
+        # held_symbols set, which matches nothing -- every open snapshot got
+        # closed as a "ghost" while the exchange might still hold every one
+        # of those positions for real. Confirmed via simulation 2026-09-21
+        # verifying an external crash-recovery audit: 1 open snapshot -> 0
+        # after a single fetch failure. Skip the position-vs-snapshot
+        # reconciliation entirely and leave snapshots untouched. The
+        # stale-order check further down is independent of get_positions()
+        # and still runs.
+        logger.critical(
+            f"[RECONCILE] Position-vs-snapshot reconciliation ABORTED: could not fetch "
+            f"positions ({e}). Leaving all {len(open_snaps)} open snapshot(s) untouched "
+            f"rather than treating an unknown exchange state as flat. Blocking new "
+            f"entries until a reconciliation retry succeeds."
+        )
+        positions_fetch_failed = True
         positions = []
+        _state.reconciliation_incomplete = True
+        try:
+            await get_alerting_engine().alert_system_health(
+                "startup_reconciliation", "down", {"error": str(e), "open_snapshots": len(open_snaps)}
+            )
+        except Exception as alert_err:
+            logger.debug(f"Reconciliation-failure alert skipped (non-fatal): {alert_err}")
+        # Guarded so a retry attempt's own failure (which re-enters this same
+        # except block) can't spawn a second, nested retry loop on top of the
+        # one already running.
+        if not _state._reconciliation_retry_active:
+            _state._reconciliation_retry_active = True
+            task = asyncio.create_task(_retry_reconciliation_until_success(exchange))
+            _state._background_tasks.add(task)
+            task.add_done_callback(_state._background_tasks.discard)
 
     held_symbols = {p["symbol"].replace("/", "") for p in positions} if positions else set()
 
-    # Inverse check: exchange positions the bot has no snapshot for.
-    # This handles crash-gap orphan positions that block the position slot limit.
-    snap_symbols = {s["symbol"].replace("/", "") for s in open_snaps} if open_snaps else set()
-    for held in sorted(held_symbols):
-        if held not in snap_symbols:
-            logger.critical(
-                f"[RECONCILE] Exchange reports an open position in {held} with no open "
-                f"decision snapshot (opened before/outside this process). Attempting to "
-                f"close to free position slot."
+    if positions_fetch_failed:
+        # Can't tell a genuine ghost from a real position we just can't see --
+        # skip both position-comparison passes below entirely.
+        pass
+    else:
+        # Inverse check: exchange positions the bot has no snapshot for.
+        # This handles crash-gap orphan positions that block the position slot limit.
+        snap_symbols = {s["symbol"].replace("/", "") for s in open_snaps} if open_snaps else set()
+        for held in sorted(held_symbols):
+            if held not in snap_symbols:
+                held_pos = next((p for p in positions if p["symbol"].replace("/", "") == held), None)
+                held_qty = float(held_pos.get("qty", 0)) if held_pos else 0.0
+                # CR-1: before liquidating, check the order ledger for a
+                # recent order on this symbol -- a fill that landed but
+                # crashed before save_decision_snapshot() completed looks
+                # identical to a genuinely pre-existing/manual position from
+                # here. Re-attach a snapshot instead of force-closing a
+                # position the bot itself just opened. Found via an external
+                # crash-recovery audit, confirmed by reproduction, 2026-09-22.
+                recent_order = await asyncio.to_thread(_find_recent_order_for_symbol, held)
+                if recent_order is not None:
+                    logger.warning(
+                        f"[RECONCILE] Exchange position in {held} (qty={held_qty}) has no "
+                        f"snapshot, but order ledger shows a recent {recent_order['side']} "
+                        f"order {recent_order['order_id']} for this symbol -- re-attaching "
+                        f"a snapshot instead of closing (crash-gap fill, not a true orphan)."
+                    )
+                    await asyncio.to_thread(
+                        _reattach_snapshot_from_order, recent_order, held_qty
+                    )
+                    continue
+                logger.critical(
+                    f"[RECONCILE] Exchange reports an open position in {held} with no open "
+                    f"decision snapshot and no recent order record (opened before/outside "
+                    f"this process). Attempting to close to free position slot."
+                )
+                try:
+                    await get_alerting_engine().alert_position_desync(held, expected_qty=0.0, actual_qty=held_qty)
+                except Exception as alert_err:
+                    logger.debug(f"Position-desync alert skipped (non-fatal): {alert_err}")
+                await _close_orphan_position(exchange, held, positions)
+
+        # NOTE: no early `return` here when open_snaps is empty -- the loop below
+        # is already a no-op on an empty list, and an early return would skip the
+        # stale-open-order check further down too. That's not hypothetical: found
+        # via simulation 2026-09-21 that a crash occurring during/before order
+        # recording (i.e. before save_decision_snapshot() ever ran) leaves ZERO
+        # open snapshots in the DB -- exactly the scenario the stale-order check
+        # exists to catch -- while a real order can still be sitting on the
+        # exchange. An earlier version of this function returned here, silently
+        # disabling that check in precisely the case it was built for.
+        for snap in open_snaps:
+            sym = snap["symbol"]
+            sym_clean = sym.replace("/", "")
+            if sym_clean in held_symbols:
+                continue  # genuinely open position -> snapshot is correct
+            exit_price = 0.0
+            exit_price_source = "estimated_last_bar"
+            # CR-6: prefer the actual fill price from the order ledger over
+            # the last bar -- the last bar is the CURRENT price at
+            # reconciliation time, not the price the position was actually
+            # closed at, so it silently mislabels the adaptive learner's
+            # training sample. Found via an external crash-recovery audit,
+            # confirmed by reproduction (estimated $16 pnl vs true $100 pnl
+            # in the audit's own scenario), 2026-09-22.
+            recent_order = await asyncio.to_thread(_find_recent_order_for_symbol, sym_clean)
+            if recent_order is not None and recent_order.get("filled_avg_price", 0.0) > 0:
+                exit_price = float(recent_order["filled_avg_price"])
+                exit_price_source = "actual_fill"
+            else:
+                try:
+                    bars = await exchange.get_latest_bar(sym)
+                    if not bars.is_empty():
+                        exit_price = float(bars["close"][0])
+                except Exception as e:
+                    logger.debug(f"[RECONCILE] No price available for {sym}: {e}")
+            entry_price = float(snap.get("entry_price", 0.0))
+            qty = float(snap.get("qty", 0.0))
+            action = snap.get("final_action", "buy")
+            if exit_price > 0 and entry_price > 0 and qty != 0:
+                pnl = (exit_price - entry_price) * qty if action == "buy" else (entry_price - exit_price) * qty
+            else:
+                pnl = 0.0
+            closed = await asyncio.to_thread(
+                close_decision_snapshot,
+                snap["decision_id"],
+                realized_pnl=pnl,
+                return_pct=(pnl / (entry_price * qty) * 100.0) if (entry_price > 0 and qty != 0 and pnl is not None) else 0.0,
+                exit_reason=f"reconciled_after_restart:{exit_price_source}",
             )
-            held_pos = next((p for p in positions if p["symbol"].replace("/", "") == held), None)
-            held_qty = float(held_pos.get("qty", 0)) if held_pos else 0.0
+            logger.warning(
+                f"[RECONCILE] Closed ghost snapshot {snap['decision_id']} for {sym} "
+                f"(no exchange position; exit_price={exit_price} [{exit_price_source}], "
+                f"pnl={pnl:.2f}, closed={closed})"
+            )
             try:
-                await get_alerting_engine().alert_position_desync(held, expected_qty=0.0, actual_qty=held_qty)
+                await get_alerting_engine().alert_position_desync(sym, expected_qty=qty, actual_qty=0.0)
             except Exception as alert_err:
                 logger.debug(f"Position-desync alert skipped (non-fatal): {alert_err}")
-            await _close_orphan_position(exchange, held, positions)
-
-    # NOTE: no early `return` here when open_snaps is empty -- the loop below
-    # is already a no-op on an empty list, and an early return would skip the
-    # stale-open-order check further down too. That's not hypothetical: found
-    # via simulation 2026-09-21 that a crash occurring during/before order
-    # recording (i.e. before save_decision_snapshot() ever ran) leaves ZERO
-    # open snapshots in the DB -- exactly the scenario the stale-order check
-    # exists to catch -- while a real order can still be sitting on the
-    # exchange. An earlier version of this function returned here, silently
-    # disabling that check in precisely the case it was built for.
-    for snap in open_snaps:
-        sym = snap["symbol"]
-        sym_clean = sym.replace("/", "")
-        if sym_clean in held_symbols:
-            continue  # genuinely open position -> snapshot is correct
-        exit_price = 0.0
-        try:
-            bars = await exchange.get_latest_bar(sym)
-            if not bars.is_empty():
-                exit_price = float(bars["close"][0])
-        except Exception as e:
-            logger.debug(f"[RECONCILE] No price available for {sym}: {e}")
-        entry_price = float(snap.get("entry_price", 0.0))
-        qty = float(snap.get("qty", 0.0))
-        action = snap.get("final_action", "buy")
-        if exit_price > 0 and entry_price > 0 and qty != 0:
-            pnl = (exit_price - entry_price) * qty if action == "buy" else (entry_price - exit_price) * qty
-        else:
-            pnl = 0.0
-        closed = await asyncio.to_thread(
-            close_decision_snapshot,
-            snap["decision_id"],
-            realized_pnl=pnl,
-            return_pct=(pnl / (entry_price * qty) * 100.0) if (entry_price > 0 and qty != 0 and pnl is not None) else 0.0,
-            exit_reason="reconciled_after_restart",
-        )
-        logger.warning(
-            f"[RECONCILE] Closed ghost snapshot {snap['decision_id']} for {sym} "
-            f"(no exchange position; exit_price={exit_price}, pnl={pnl:.2f}, closed={closed})"
-        )
-        try:
-            await get_alerting_engine().alert_position_desync(sym, expected_qty=qty, actual_qty=0.0)
-        except Exception as alert_err:
-            logger.debug(f"Position-desync alert skipped (non-fatal): {alert_err}")
 
     # Check for stale open orders from a crashed cycle. If the bot submitted an
     # order to the exchange but crashed before recording the response, the order
     # may still be open on the exchange. We cannot cancel it safely (partial
     # fills would leave the bot with an untracked position), so we log a warning
-    # so the operator can review.
+    # so the operator can review -- and, critically, block new entries for that
+    # symbol until it resolves (fills or gets cancelled). Without this, a fresh
+    # signal for the same symbol re-fetches positions (still empty while the
+    # stale order is unfilled), finds no snapshot, and submits a SECOND buy --
+    # 2x intended exposure from one signal. Found via an external crash-recovery
+    # audit, confirmed by reproduction, 2026-09-22. _state.symbols_with_unresolved_orders
+    # is refreshed every cycle in the main loop (not just at startup), so a
+    # symbol unblocks itself once the order actually resolves.
     try:
         open_orders = await exchange.get_orders(status="new", limit=100)
         if open_orders:
+            unresolved = set()
             for order in open_orders:
                 o_sym = order.get("symbol", "?").replace("/", "")
+                unresolved.add(o_sym)
                 logger.warning(
                     f"[RECONCILE] Stale open order {order.get('id', '?')} for {o_sym} "
                     f"(status={order.get('status')}, qty={order.get('qty')}, "
                     f"filled_qty={order.get('filled_qty')}) — submitted before crash. "
-                    f"Manual review recommended: may cause position size to exceed intended exposure."
+                    f"Blocking new entries for {o_sym} until this order resolves."
                 )
+            _state.symbols_with_unresolved_orders |= unresolved
     except Exception as e:
         logger.debug(f"[RECONCILE] Could not fetch open orders (non-fatal): {e}")
+
+
+def _persist_order_record(order_result: dict, symbol: str, side: str, client_order_id: str | None, decision_id: str | None = None) -> None:
+    """Fire-and-forget write to the order ledger (CR-3). save_order_record()
+    was defined but had zero callers -- after a crash, the bot had no local
+    record of order ids/client_order_ids/fills to reconcile against, only
+    whatever it could re-derive from exchange positions. Also feeds CR-1
+    (re-attaching a crash-gap fill instead of liquidating it as an orphan)
+    and CR-6 (using the real fill price instead of estimating from a bar).
+    Found via an external crash-recovery audit, confirmed by AST scan
+    showing zero call sites outside db.py, 2026-09-22.
+    """
+    from src.db import save_order_record
+    try:
+        save_order_record(
+            order_id=str(order_result.get("id", client_order_id or "unknown")),
+            decision_id=decision_id,
+            symbol=symbol,
+            side=side,
+            qty=float(order_result.get("qty", 0.0) or 0.0),
+            filled_qty=float(order_result.get("filled_qty", 0.0) or 0.0),
+            filled_avg_price=float(order_result.get("filled_avg_price", 0.0) or 0.0),
+            commission=float(order_result.get("commission", 0.0) or 0.0),
+            status=str(order_result.get("status", "unknown")),
+            client_order_id=client_order_id,
+        )
+    except Exception as e:
+        logger.debug(f"Order-ledger write failed for {symbol} (non-fatal): {e}")
+
+
+def _find_recent_order_for_symbol(symbol_clean: str, max_age_sec: float = 3600.0) -> dict | None:
+    """Look up the most recent order-ledger record for a symbol (CR-1/CR-6).
+
+    Used by reconcile_open_snapshots() to tell a genuine crash-gap fill (the
+    bot's own order landed but the process died before save_decision_snapshot()
+    ran) apart from a truly pre-existing/manually-opened position, and to
+    recover the real fill price for a ghost-close instead of estimating from
+    the current bar. Bounded to the last hour so a stale ledger entry from
+    long ago can't misattribute an unrelated position.
+    """
+    from src.db import get_recent_order_records
+    try:
+        candidates = get_recent_order_records(symbol_clean, max_age_sec=max_age_sec)
+        return candidates[0] if candidates else None
+    except Exception as e:
+        logger.debug(f"[RECONCILE] Order-ledger lookup failed for {symbol_clean} (non-fatal): {e}")
+        return None
+
+
+def _reattach_snapshot_from_order(order: dict, actual_qty: float) -> None:
+    """Recreate a decision snapshot from an order-ledger record (CR-1) so a
+    crash-gap position (fill landed, save_decision_snapshot() never ran)
+    stays tracked by the adaptive meta-learner instead of being force-closed.
+    """
+    from src.db import save_decision_snapshot
+    try:
+        save_decision_snapshot(
+            decision_id=order.get("decision_id") or f"reattached_{order['order_id']}",
+            symbol=order["symbol"],
+            regime="unknown",
+            final_action=order.get("side", "buy"),
+            confidence=0.0,
+            size_multiplier=1.0,
+            entry_price=float(order.get("filled_avg_price", 0.0)),
+            qty=actual_qty,
+            brain_votes={},
+        )
+    except Exception as e:
+        logger.warning(f"[RECONCILE] Could not re-attach snapshot for {order.get('symbol')}: {e}")
+
+
+async def _retry_reconciliation_until_success(exchange: AlpacaExchange) -> None:
+    """Keep retrying startup reconciliation after a positions-fetch failure
+    (CR-12) until it succeeds, instead of leaving `_state.reconciliation_incomplete`
+    (which blocks new entries) stuck True for the rest of the process lifetime.
+    """
+    try:
+        while _state.reconciliation_incomplete and not _state._shutdown_requested:
+            await asyncio.sleep(settings.KILLSWITCH_CHECK_INTERVAL_SEC)
+            try:
+                await reconcile_open_snapshots(exchange)
+            except Exception as e:
+                logger.warning(f"[RECONCILE] Retry attempt failed (non-fatal, will retry again): {e}")
+    finally:
+        _state._reconciliation_retry_active = False
 
 
 def get_banned_symbols():
@@ -880,6 +1078,7 @@ async def process_signal_for_symbol(symbol: str, current_price: float, risk_mana
                         client_order_id=client_order_id,
                         bypass_circuit_breaker=True,
                     )
+                    await asyncio.to_thread(_persist_order_record, order_result, symbol, side, client_order_id)
                     logger.info(f"Trailing Stop Executed: {symbol}")
                     await send_telegram_alert(f"🔔 <b>Trailing Stop Triggered</b>\nSymbol: {symbol}\nClosed {qty} @ ${current_price:.2f}")
                     _state.cooldowns[symbol] = time.time() + settings.COOLDOWN_SECONDS_BUY
@@ -1108,6 +1307,34 @@ async def process_signal_for_symbol(symbol: str, current_price: float, risk_mana
                     dashboard.append("Risk........... VETO")
                     dashboard.append("FINAL.......... NO TRADE")
                     dashboard.append("Reason......... Symbol Banned")
+                    dashboard.append("==============================")
+                    print("\n".join(dashboard), flush=True)
+                    return
+
+                # ─── RECONCILIATION-INCOMPLETE CHECK (CR-12) ───
+                # Startup/retry reconciliation couldn't fetch positions, so we
+                # genuinely don't know what's open on the exchange right now.
+                # Blanket-block new entries until a retry succeeds rather than
+                # trading on an unknown state.
+                if _state.reconciliation_incomplete:
+                    dashboard.append("Risk........... VETO")
+                    dashboard.append("FINAL.......... NO TRADE")
+                    dashboard.append("Reason......... Reconciliation Incomplete")
+                    dashboard.append("==============================")
+                    print("\n".join(dashboard), flush=True)
+                    return
+
+                # ─── UNRESOLVED ORDER CHECK (CR-2) ───
+                # A stale/still-open order for this symbol exists on the
+                # exchange (from before a crash, or still resolving normally).
+                # Entering now risks a second buy for the same signal / 2x
+                # intended exposure once the first order also fills. Found via
+                # an external crash-recovery audit, confirmed by reproduction,
+                # 2026-09-22.
+                if symbol.replace("/", "") in _state.symbols_with_unresolved_orders:
+                    dashboard.append("Risk........... VETO")
+                    dashboard.append("FINAL.......... NO TRADE")
+                    dashboard.append("Reason......... Unresolved Order Pending")
                     dashboard.append("==============================")
                     print("\n".join(dashboard), flush=True)
                     return
@@ -1521,6 +1748,10 @@ async def process_signal_for_symbol(symbol: str, current_price: float, risk_mana
                         risk_manager.release_position_slot(symbol)
                     logger.error(f"[{symbol}] Order placement failed: {_describe_exception(order_e)}")
                     raise
+                await asyncio.to_thread(
+                    _persist_order_record, order_result, symbol, signal["action"], client_order_id,
+                    decision_id=committee_result.decision_id,
+                )
 
 # Deliberately NOT releasing either reservation here on success --
                 # reproduced with real asyncio race tests that releasing
@@ -1645,7 +1876,8 @@ async def process_signal_for_symbol(symbol: str, current_price: float, risk_mana
                     client_order_id=client_order_id,
                     bypass_circuit_breaker=True,
                 )
-    
+                await asyncio.to_thread(_persist_order_record, order_result, symbol, side, client_order_id)
+
                 filled_price = order_result.get("filled_avg_price", 0.0)
                 commission = order_result.get("commission", 0.0)
                 if filled_price > 0:
@@ -2465,6 +2697,14 @@ async def run_trading_bot() -> None:
         heartbeat_task.add_done_callback(_on_task_done)
         logger.info("Scan heartbeat monitor started")
 
+        # Start crash-state flush heartbeat (CR-5b) -- bounds worst-case
+        # crash-recovery state loss to flush_interval (5s) instead of the
+        # main loop's full LOOP_INTERVAL_SEC (default 60s).
+        crash_flush_task = asyncio.create_task(crash_state_flush_heartbeat_loop(), name="crash_state_flush")
+        active_tasks.add(crash_flush_task)
+        crash_flush_task.add_done_callback(_on_task_done)
+        logger.info("Crash-state flush heartbeat started")
+
         # Start periodic analyzer
         analyzer_task = asyncio.create_task(run_periodic_analyzer(), name="analyzer")
         active_tasks.add(analyzer_task)
@@ -2684,6 +2924,19 @@ async def run_trading_bot() -> None:
                 except Exception as pos_e:
                     logger.error(f"[MAIN_LOOP] Error fetching positions: {_describe_exception(pos_e)}")
                     positions = []
+
+                # Refresh unresolved-order tracking once per cycle too (CR-2)
+                # so a symbol blocked by a stale/pending order unblocks itself
+                # as soon as that order actually resolves, instead of staying
+                # blocked for the rest of the process lifetime after the one
+                # startup check.
+                try:
+                    open_orders = await _state.ex.get_orders(status="new", limit=100)
+                    _state.symbols_with_unresolved_orders = {
+                        o.get("symbol", "?").replace("/", "") for o in open_orders
+                    }
+                except Exception as ord_e:
+                    logger.debug(f"[MAIN_LOOP] Error fetching open orders (non-fatal): {ord_e}")
 
                 for symbol, bar_result in zip(settings.SYMBOLS, bar_results):
                     try:
