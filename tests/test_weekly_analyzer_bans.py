@@ -89,3 +89,9 @@ def test_ban_entries_without_a_symbol_are_ignored():
 def test_learned_threshold_clamp_stays_below_the_veto_floor():
     """A persisted threshold must remain reachable by real committee scores."""
     assert 0 < weekly_analyzer.MAX_LEARNED_SCORE_THRESHOLD <= 0.55
+
+
+def test_live_replay_buffer_exists_for_daily_learning():
+    """The bot must learn from daily trades; live replay buffer is required."""
+    import os
+    assert os.path.exists("data/live_experiences.jsonl"), "live_experiences.jsonl missing — daily trade learning broken"
