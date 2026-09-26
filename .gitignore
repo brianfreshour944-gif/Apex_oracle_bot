@@ -71,6 +71,13 @@ data/
 # IDEs
 .idea/
 
+# OpenCode project-local runtime dependencies
+.opencode/node_modules/
+.opencode/package.json
+.opencode/package-lock.json
+.opencode/bun.lock
+.opencode/.gitignore
+
 # Trained model artifacts (generated, not source)
 models/*.pth
 models/*.pkl

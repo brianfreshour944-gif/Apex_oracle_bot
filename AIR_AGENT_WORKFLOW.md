@@ -45,10 +45,10 @@ its own controls or through a custom command. Use `/apex` for reliable switching
 The manager automatically invokes these subagents in sequence:
 
 ```text
-apex-auditor-nexagi
-  -> apex-finding-verifier
-  -> apex-confirmed-fixer
-  -> apex-change-verifier
+apex-auditor-nexagi (GLM 5.3 Flash)
+  -> apex-finding-verifier (Solar Pro 4)
+  -> apex-confirmed-fixer (Laguna S 2.1)
+  -> apex-change-verifier (Space Bunny)
   -> apex-manager final report
   -> Human review
 ```
@@ -63,7 +63,8 @@ When Air starts OpenCode in this repository, OpenCode loads:
 - `AGENTS.md` — safety contract, structured findings, verification/fix/verdict formats.
 - `OPENCODE_AGENT_WORKFLOW.md` — full OpenCode procedure and permission model.
 - `opencode.json` — project permissions and instruction loading.
-- `.opencode/agents/*.md` — manager, auditors, verifiers, and fixer definitions.
+- `.opencode/agents/*.md` — manager, auditor, verifiers, and fixer definitions.
+  Note: `apex-auditor-nexagi` is a legacy agent name; it now runs GLM 5.3 Flash.
 - `.agents/skills/*/SKILL.md` — reusable role procedures.
 
 ## Air-specific notes

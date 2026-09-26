@@ -5,7 +5,7 @@ model: openrouter/poolside/laguna-s-2.1
 temperature: 0.1
 permission:
   edit:
-    "*": ask
+    "*": allow
     ".env": deny
     ".env.*": deny
     "src/exchange.py": ask
@@ -23,15 +23,26 @@ permission:
     "*": deny
     apex-fix-confirmed: allow
   bash:
-    "*": ask
+    "*": allow
+    "git commit": deny
     "git commit *": deny
+    "git push": deny
     "git push *": deny
+    "git add": deny
+    "git add *": deny
     "git reset --hard *": deny
     "git clean *": deny
+    "git checkout *": deny
+    "git restore *": deny
+    "git rebase *": deny
     "docker compose down -v*": deny
     "docker volume rm *": deny
+    "rm -rf *": deny
+    "rm -r *": deny
+    "del *": deny
     "curl *": deny
     "wget *": deny
+    "*.env*": deny
   webfetch: deny
   websearch: deny
 ---

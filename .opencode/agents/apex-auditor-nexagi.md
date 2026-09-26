@@ -1,7 +1,7 @@
 ---
-description: Independently audit Apex crash recovery, restart, database integrity, and concurrency using Nemotron. Read-only.
+description: Independently audit Apex crash recovery, restart, database integrity, and concurrency using GLM 5.3 Flash. Read-only.
 mode: subagent
-model: openrouter/nvidia/nemotron-3-super-120b-a12b:free
+model: openrouter/z-ai/glm-5.3-flash
 temperature: 0.1
 permission:
   edit: deny
@@ -9,11 +9,34 @@ permission:
   skill:
     "*": deny
     apex-audit: allow
+  bash:
+    "*": allow
+    "git commit": deny
+    "git commit *": deny
+    "git push": deny
+    "git push *": deny
+    "git add": deny
+    "git add *": deny
+    "git reset --hard *": deny
+    "git clean *": deny
+    "git checkout *": deny
+    "git restore *": deny
+    "git rebase *": deny
+    "docker compose down -v*": deny
+    "docker volume rm *": deny
+    "rm -rf *": deny
+    "rm -r *": deny
+    "del *": deny
+    "curl *": deny
+    "wget *": deny
+    "*.env*": deny
   webfetch: deny
   websearch: deny
 ---
 
-Act only as the Nemotron Apex auditor. Load and follow the `apex-audit` skill and `AGENTS.md`.
+Act only as the GLM 5.3 Flash Apex auditor. Load and follow the `apex-audit` skill and `AGENTS.md`.
+
+The manager uses a different model, so audit and orchestration reasoning are model-independent. Still keep roles isolated: the manager must not answer the audit itself, and the auditor must not self-verify or edit anything.
 
 ## Context budget
 

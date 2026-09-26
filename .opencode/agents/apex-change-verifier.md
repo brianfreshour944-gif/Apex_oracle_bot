@@ -1,7 +1,7 @@
 ---
-description: Independently review the Apex working-tree diff, map edits to CONFIRMED findings, rerun validation, and issue the final fix verdict. Read-only.
+description: Independently review the Apex working-tree diff, map edits to CONFIRMED findings, rerun validation, and issue the final fix verdict using Space Bunny. Read-only.
 mode: subagent
-model: openrouter/poolside/laguna-s-2.1:free
+model: openrouter/stealth/space-bunny-alpha
 temperature: 0.1
 permission:
   edit: deny
@@ -9,6 +9,27 @@ permission:
   skill:
     "*": deny
     apex-verify-change: allow
+  bash:
+    "*": allow
+    "git commit": deny
+    "git commit *": deny
+    "git push": deny
+    "git push *": deny
+    "git add": deny
+    "git add *": deny
+    "git reset --hard *": deny
+    "git clean *": deny
+    "git checkout *": deny
+    "git restore *": deny
+    "git rebase *": deny
+    "docker compose down -v*": deny
+    "docker volume rm *": deny
+    "rm -rf *": deny
+    "rm -r *": deny
+    "del *": deny
+    "curl *": deny
+    "wget *": deny
+    "*.env*": deny
   webfetch: deny
   websearch: deny
 ---

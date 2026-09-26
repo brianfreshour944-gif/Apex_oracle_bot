@@ -5,10 +5,10 @@ instruction, and skill systems with a fail-closed, CrewAI-like sequence:
 
 ```text
 apex-manager (Space Bunny: thinker/final voice)
-  -> apex-auditor-nexagi (Nex)
-  -> apex-finding-verifier (Laguna)
-  -> apex-confirmed-fixer (Ling)
-  -> apex-change-verifier (Laguna)
+  -> apex-auditor-nexagi (GLM 5.3 Flash)
+  -> apex-finding-verifier (Solar Pro 4)
+  -> apex-confirmed-fixer (Laguna S 2.1)
+  -> apex-change-verifier (Space Bunny)
   -> apex-manager final report
   -> Human review
 ```
@@ -19,21 +19,26 @@ apex-manager (Space Bunny: thinker/final voice)
 - `opencode.json` loads this guide and blocks dangerous Git, volume-delete, and direct
   network commands.
 - `.opencode/agents/apex-manager.md` defines the Space Bunny primary orchestrator/final voice.
-- `.opencode/agents/apex-auditor-nexagi.md` defines the read-only Nex auditor.
-- `.opencode/agents/apex-finding-verifier.md` defines Laguna independent reproduction/verdicts.
-- `.opencode/agents/apex-confirmed-fixer.md` defines Ling minimal confirmed-finding fixes.
-- `.opencode/agents/apex-change-verifier.md` defines Laguna's final read-only diff review.
+- `.opencode/agents/apex-auditor-nexagi.md` defines the read-only GLM 5.3 Flash auditor.
+- `.opencode/agents/apex-finding-verifier.md` defines Solar Pro 4 reproduction/verdicts.
+- `.opencode/agents/apex-confirmed-fixer.md` defines Laguna S 2.1 minimal confirmed-finding fixes.
+- `.opencode/agents/apex-change-verifier.md` defines Space Bunny's final read-only diff review.
 - `.agents/skills/*/SKILL.md` contains reusable role instructions loaded on demand.
 
-The finding verifier is temporarily using Qwen instead of Laguna to avoid the Laguna upstream rate limit. The auditor is temporarily using Nemotron because the Nex endpoint had no available provider route. Laguna remains the change verifier.
+All critical roles now run on paid models, because the previous free-tier assignments
+repeatedly failed with upstream rate limits and provider overloads.
 
 | Role | Model |
 | --- | --- |
 | Manager, thinker, final voice | `openrouter/stealth/space-bunny-alpha` |
-| Auditor | `openrouter/nvidia/nemotron-3-super-120b-a12b:free` |
-| Finding verifier | `openrouter/qwen/qwen3.8-27b:free` |
-| Confirmed fixer | `openrouter/inclusionai/ling-3.0-flash-sante:free` |
-| Change verifier | `openrouter/poolside/laguna-s-2.1:free` |
+| Auditor | `openrouter/z-ai/glm-5.3-flash` |
+| Finding verifier | `openrouter/upstage/solar-pro4` |
+| Confirmed fixer | `openrouter/poolside/laguna-s-2.1` |
+| Change verifier | `openrouter/stealth/space-bunny-alpha` |
+
+The manager and the change verifier deliberately share Space Bunny for reliability. The
+auditor, verifier, and fixer use different models, so the audit and verification gates
+remain model-independent. Every model in this table passed a live smoke test.
 
 The obsolete `apex-auditor-glm` file is not in the manager's allowed task list and is not part
 of the active workflow.
@@ -113,7 +118,7 @@ sessions manually.
 
 ## Safety gates
 
-- The Nex audit is independent of the Laguna verifier; neither can edit or authorize a fix.
+- The GLM audit is independent of the Solar Pro 4 verifier; neither can edit or authorize a fix.
 - The finding verifier must reproduce each claim before assigning a verdict.
 - A fixer may act only on explicit `CONFIRMED` findings with fresh evidence.
 - `PLAUSIBLE` findings remain human decisions and are never silently fixed.
