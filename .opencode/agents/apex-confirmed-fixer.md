@@ -1,7 +1,7 @@
 ---
-description: Fix only independently CONFIRMED Apex findings with minimal changes, regression tests, full validation, and no commit or push.
+description: Fix only independently CONFIRMED Apex findings with minimal changes, regression tests, full validation, and no commit or push, using Laguna S 2.1.
 mode: subagent
-model: openrouter/inclusionai/ling-3.0-flash-sante:free
+model: openrouter/poolside/laguna-s-2.1
 temperature: 0.1
 permission:
   edit:
