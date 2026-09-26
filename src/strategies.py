@@ -11,6 +11,7 @@ from src.config import settings
 from src.exchange import AlpacaExchange
 from src.feature_engineering import add_multi_timeframe_features
 from src.logging_config import get_logger
+import asyncio
 
 logger = get_logger(__name__)
 
