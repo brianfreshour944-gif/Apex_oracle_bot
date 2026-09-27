@@ -14,10 +14,10 @@ import time
 from unittest.mock import MagicMock
 
 import pytest
-from tenacity import stop_after_attempt, RetryError
+from alpaca.data.timeframe import TimeFrameUnit
+from tenacity import RetryError, stop_after_attempt
 
 from src.exchange import AlpacaExchange
-from alpaca.data.timeframe import TimeFrameUnit
 
 
 @pytest.fixture

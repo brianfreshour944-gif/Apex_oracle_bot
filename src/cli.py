@@ -38,8 +38,11 @@ def backtest(
 ) -> None:
     """Run backtest simulation or walk-forward optimization."""
     from src.backtest import (
-        print_backtest_summary, run_backtest, run_walk_forward_optimization,
-        run_benchmark_comparison, print_benchmark_comparison,
+        print_backtest_summary,
+        print_benchmark_comparison,
+        run_backtest,
+        run_benchmark_comparison,
+        run_walk_forward_optimization,
     )
 
     typer.secho(f"📊 Running Backtest Engine for {symbol} ({bars} bars)...", fg=typer.colors.CYAN, bold=True)

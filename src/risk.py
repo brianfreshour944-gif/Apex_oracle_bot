@@ -6,7 +6,7 @@ import threading
 import time
 from collections import deque
 from datetime import UTC, datetime, timedelta
-from typing import Any, Dict, Optional
+from typing import Any
 
 import numpy as np
 
@@ -59,7 +59,7 @@ def apply_uncertainty_scaling(
     - transition_risk_pct (0-100): P(regime transition) from the strategy
       layer. Conviction multiplier = 1 - risk/100, floored at 0.5 so extreme
       transition risk halves the size instead of zeroing it.
-    - position_scale (0-1): confidence × transition multiplier produced by
+    - position_scale (0-1): confidence x transition multiplier produced by
       strategies.analyze_market_regime. Acts as a hard cap on the
       pre-uncertainty size (floored at 0.25x) so a low-confidence signal can
       never be sized at full risk. confidence is NOT double-counted here as a
@@ -247,7 +247,7 @@ class RiskManager:
             return float(settings.ACCOUNT_BASE) * float(pct)
         return float(settings.MAX_PORTFOLIO_VALUE)
 
-    def record_fill_costs(self, symbol: str, fee_bps: float, slippage_bps: float, spread_bps: float = None) -> None:
+    def record_fill_costs(self, symbol: str, fee_bps: float, slippage_bps: float, spread_bps: float | None = None) -> None:
         """Record realized transaction costs for dynamic model updates.
         
         Called after each order fill to update the dynamic cost model.
@@ -1172,7 +1172,6 @@ class RiskManager:
         is_long = float(qty) > 0
         
         if is_long:
-            unrealized_pct = (avg_entry_price - avg_entry_price) / avg_entry_price  # placeholder
             # We need to check if activation is reached based on current peak
             with self._peak_prices_lock:
                 if symbol in self.peak_prices:
@@ -1673,7 +1672,7 @@ class RiskManager:
                 "error": str(e)
             }
 
-    def cleanup_stale_state(self, max_age_seconds: float = 3600, active_symbols: Optional[list] = None) -> Dict[str, int]:
+    def cleanup_stale_state(self, max_age_seconds: float = 3600, active_symbols: list | None = None) -> dict[str, int]:
         """Clean up stale state entries to prevent memory leaks.
         
         Args:

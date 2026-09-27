@@ -16,7 +16,7 @@ from alpaca.data.timeframe import TimeFrame, TimeFrameUnit
 # Import alpaca-py components
 from alpaca.trading.client import TradingClient
 from alpaca.trading.enums import OrderSide, OrderStatus, TimeInForce
-from alpaca.trading.requests import GetOrdersRequest, MarketOrderRequest, LimitOrderRequest
+from alpaca.trading.requests import GetOrdersRequest, LimitOrderRequest, MarketOrderRequest
 from tenacity import RetryCallState, retry, retry_if_exception, stop_after_attempt, wait_exponential
 
 from src.circuit_breaker import CircuitBreaker
@@ -421,7 +421,7 @@ class AlpacaExchange:
         count = 0
         keys_to_delete = []
         for key in self._bars_cache:
-            key_symbol, key_timeframe, key_limit = key
+            key_symbol, key_timeframe, _key_limit = key
             if symbol is not None and key_symbol != symbol:
                 continue
             if timeframe is not None and key_timeframe != timeframe:

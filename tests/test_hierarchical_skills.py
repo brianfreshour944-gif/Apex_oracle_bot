@@ -2,9 +2,8 @@
 
 import os
 import sys
-import numpy as np
+
 import torch
-import torch.nn.functional as F
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
@@ -15,7 +14,7 @@ os.environ.setdefault("ALPACA_SECRET_KEY", "test")
 # ── 1. SkillEncoder Tests ────────────────────────────────────────────
 def test_skill_encoder_forward():
     """Test SkillEncoder forward pass shapes."""
-    from src.committee.hierarchical_skills import SkillEncoder, NUM_SKILLS, SKILL_EMBED_DIM
+    from src.committee.hierarchical_skills import NUM_SKILLS, SKILL_EMBED_DIM, SkillEncoder
     
     encoder = SkillEncoder(state_dim=64, num_skills=NUM_SKILLS, skill_embed_dim=SKILL_EMBED_DIM)
     
@@ -42,7 +41,7 @@ def test_skill_encoder_forward():
 
 def test_skill_encoder_sample():
     """Test skill sampling from categorical distribution."""
-    from src.committee.hierarchical_skills import SkillEncoder, NUM_SKILLS
+    from src.committee.hierarchical_skills import NUM_SKILLS, SkillEncoder
     
     encoder = SkillEncoder(state_dim=64, num_skills=NUM_SKILLS)
     encoder.eval()
@@ -96,9 +95,8 @@ def test_executor_sequence():
     executor = SkillLSTMExecutor(state_dim=64, skill_embed_dim=64, hidden_dim=128, num_layers=2)
     
     state = torch.randn(2, 5, 64)  # batch=2, seq=5
-    skill = torch.randn(2, 5, 64)
     
-    out, hidden = executor(state, torch.randn(2, 5, 64))
+    out, _hidden = executor(state, torch.randn(2, 5, 64))
     
     assert out['size_delta'].shape == (2, 5)
     assert out['price_offset_bps'].shape == (2, 5)
@@ -113,11 +111,11 @@ def test_executor_hidden_state_persistence():
     executor.reset_hidden(1, torch.device('cpu'))
     
     # First step
-    out1, hidden1 = executor(torch.randn(1, 64), torch.randn(1, 64))
+    _out1, hidden1 = executor(torch.randn(1, 64), torch.randn(1, 64))
     h1, c1 = executor.get_hidden()
     
     # Second step with same hidden
-    out2, hidden2 = executor(torch.randn(1, 64), torch.randn(1, 64), hidden1)
+    _out2, _hidden2 = executor(torch.randn(1, 64), torch.randn(1, 64), hidden1)
     h2, c2 = executor.get_hidden()
     
     # Hidden state should have changed
@@ -144,7 +142,7 @@ def test_termination_head():
 # ── 4. SkillCritic Tests ─────────────────────────────────────────────
 def test_skill_critic():
     """Test skill critic Q-value outputs."""
-    from src.committee.hierarchical_skills import SkillCritic, NUM_SKILLS
+    from src.committee.hierarchical_skills import SkillCritic
     
     critic = SkillCritic(state_dim=64, num_skills=4)
     
@@ -205,7 +203,7 @@ def test_hierarchical_skills_step():
 # ── 6. OptionsCriticTrainer ──────────────────────────────────────────
 def test_options_critic_trainer():
     """Test OptionsCriticTrainer loss computations."""
-    from src.committee.hierarchical_skills import HierarchicalSkills, SkillConfig, OptionsCriticTrainer
+    from src.committee.hierarchical_skills import HierarchicalSkills, OptionsCriticTrainer, SkillConfig
     
     config = SkillConfig(num_skills=4, skill_embed_dim=64, executor_hidden=128)
     model = HierarchicalSkills(state_dim=64, config=config)
@@ -237,9 +235,10 @@ def test_options_critic_trainer():
 # ── 7. Configuration Tests ──────────────────────────────────────────
 def test_skill_config_serialization():
     """Test SkillConfig save/load."""
-    from src.committee.hierarchical_skills import SkillConfig
-    import tempfile
     import os
+    import tempfile
+
+    from src.committee.hierarchical_skills import SkillConfig
     
     config = SkillConfig(num_skills=4, skill_embed_dim=64, executor_hidden=128)
     

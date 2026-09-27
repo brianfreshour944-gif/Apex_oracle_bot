@@ -5,37 +5,33 @@ with concurrent symbol processing.
 """
 
 import asyncio
-import time
 import os
 import sys
-import json
-from datetime import UTC, datetime
-from typing import Dict, List, Any
+import time
 from collections import defaultdict
+from datetime import UTC, datetime
 
 # Add src to path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
 
 # Import key modules
-from src.config import settings
-from src.exchange import AlpacaExchange
-from src.strategies import TradingStrategy
-from src.risk import RiskManager
 from src.bot import _state, process_signal_for_symbol
 from src.committee.transformer_brain import get_ml_predictor
-from src.db import init_db
-from src.shadow_arena import evaluate_candidates
+from src.config import settings
+from src.exchange import AlpacaExchange
+from src.risk import RiskManager
+from src.strategies import TradingStrategy
 
 # Timing storage
-timings: Dict[str, List[float]] = defaultdict(list)
+timings: dict[str, list[float]] = defaultdict(list)
 
 
-def record_timing(operation: str, duration: float, metadata: Dict = None):
+def record_timing(operation: str, duration: float, metadata: dict | None = None):
     timings[operation].append(duration)
 
 
 class Timer:
-    def __init__(self, operation: str, metadata: Dict = None):
+    def __init__(self, operation: str, metadata: dict | None = None):
         self.operation = operation
         self.metadata = metadata or {}
         self.start = 0.0
@@ -49,7 +45,7 @@ class Timer:
         record_timing(self.operation, duration, self.metadata)
 
 
-def format_stats(measurements: List[float]) -> Dict:
+def format_stats(measurements: list[float]) -> dict:
     if not measurements:
         return {"count": 0}
     sorted_ms = sorted([m * 1000 for m in measurements])
@@ -117,9 +113,9 @@ async def run_concurrent_test():
     
     class MockDataClient:
         def get_crypto_bars(self, request):
+            from datetime import UTC, datetime
             from types import SimpleNamespace
-            import numpy as np
-            from datetime import datetime, UTC
+
             
             n = request.limit if request.limit else 100
             dates = [datetime.now(UTC) for _ in range(n)]
@@ -148,8 +144,8 @@ async def run_concurrent_test():
             return bars_obj
         
         def get_crypto_latest_bar(self, request):
+            from datetime import UTC, datetime
             from types import SimpleNamespace
-            from datetime import datetime, UTC
             symbol = request.symbol_or_symbols if isinstance(request.symbol_or_symbols, str) else request.symbol_or_symbols[0]
             base_price = {"BTC/USD": 50050.0, "ETH/USD": 3000.0, "SOL/USD": 100.0}.get(symbol, 50050.0)
             return {
@@ -192,7 +188,7 @@ async def run_concurrent_test():
         
         # Process symbols concurrently (as real main loop does)
         tasks = []
-        for symbol, bar_result in zip(settings.SYMBOLS, bar_results):
+        for symbol, bar_result in zip(settings.SYMBOLS, bar_results, strict=False):
             if isinstance(bar_result, Exception):
                 continue
             latest_bar_df = bar_result
@@ -230,7 +226,7 @@ async def run_concurrent_test():
         positions = await ex.get_positions()
         
         tasks = []
-        for symbol, bar_result in zip(settings.SYMBOLS, bar_results):
+        for symbol, bar_result in zip(settings.SYMBOLS, bar_results, strict=False):
             if isinstance(bar_result, Exception):
                 continue
             latest_bar_df = bar_result

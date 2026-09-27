@@ -5,48 +5,47 @@ Measures actual blocking durations in a trading cycle using timers.
 """
 
 import asyncio
-import time
+import json
 import os
 import sys
-import json
-from datetime import UTC, datetime
-from typing import Dict, List, Any
-from contextlib import asynccontextmanager
+import time
 from collections import defaultdict
+from datetime import UTC, datetime
 from types import SimpleNamespace
-import polars as pl
-import numpy as np
+from typing import Any
 
 # Add src to path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
 
 # Import key modules
-from src.config import settings
-from src.exchange import AlpacaExchange
-from src.strategies import TradingStrategy
-from src.risk import RiskManager
 from src.bot import _state, process_signal_for_symbol
-from src.committee.transformer_brain import get_ml_predictor, _model_inference_lock
-from src.onchain_data import fetch_derivatives_data
+from src.committee.transformer_brain import get_ml_predictor
+from src.config import settings
 from src.db import (
-    init_db, get_open_snapshot, close_decision_snapshot,
-    save_decision_snapshot, update_decision_snapshot_position,
-    get_all_open_snapshots, get_closed_decision_snapshots
+    close_decision_snapshot,
+    get_all_open_snapshots,
+    get_closed_decision_snapshots,
+    get_open_snapshot,
+    save_decision_snapshot,
+    update_decision_snapshot_position,
 )
+from src.exchange import AlpacaExchange
 from src.feature_engineering import add_multi_timeframe_features
-from src.onchain_data import fetch_derivatives_data_sync
+from src.onchain_data import fetch_derivatives_data
+from src.risk import RiskManager
 from src.sentiment_analyzer import extract_sentiment
 from src.shadow_arena import evaluate_candidates
+from src.strategies import TradingStrategy
 
 # Timing storage
-timings: Dict[str, List[float]] = defaultdict(list)
-blocking_events: List[Dict[str, Any]] = []
+timings: dict[str, list[float]] = defaultdict(list)
+blocking_events: list[dict[str, Any]] = []
 
 # Track what's running
 measurement_active = True
 
 
-def record_timing(operation: str, duration: float, metadata: Dict = None):
+def record_timing(operation: str, duration: float, metadata: dict | None = None):
     """Record a timing measurement."""
     timings[operation].append(duration)
     blocking_events.append({
@@ -57,7 +56,7 @@ def record_timing(operation: str, duration: float, metadata: Dict = None):
     })
 
 
-def format_stats(measurements: List[float]) -> Dict:
+def format_stats(measurements: list[float]) -> dict:
     """Format timing statistics."""
     if not measurements:
         return {"count": 0}
@@ -76,7 +75,7 @@ def format_stats(measurements: List[float]) -> Dict:
 
 class Timer:
     """Context manager for timing operations."""
-    def __init__(self, operation: str, metadata: Dict = None):
+    def __init__(self, operation: str, metadata: dict | None = None):
         self.operation = operation
         self.metadata = metadata or {}
         self.start = 0.0
@@ -90,7 +89,7 @@ class Timer:
         record_timing(self.operation, duration, self.metadata)
 
 
-async def measure_async(operation: str, coro, metadata: Dict = None):
+async def measure_async(operation: str, coro, metadata: dict | None = None):
     """Measure an async operation."""
     start = time.perf_counter()
     try:
@@ -101,7 +100,7 @@ async def measure_async(operation: str, coro, metadata: Dict = None):
         record_timing(operation, duration, metadata)
 
 
-async def measure_to_thread(operation: str, func, *args, metadata: Dict = None, **kwargs):
+async def measure_to_thread(operation: str, func, *args, metadata: dict | None = None, **kwargs):
     """Measure asyncio.to_thread operation."""
     start = time.perf_counter()
     try:
@@ -131,7 +130,6 @@ async def run_measured_cycle():
     # Create mock objects for exchange methods
     class MockTradingClient:
         def get_account(self):
-            from types import SimpleNamespace
             return SimpleNamespace(
                 id="test", status="ACTIVE", currency="USD",
                 buying_power=10000.0, equity=10000.0, portfolio_value=10000.0,
@@ -140,7 +138,6 @@ async def run_measured_cycle():
         def get_all_positions(self):
             return []
         def submit_order(self, request):
-            from types import SimpleNamespace
             return SimpleNamespace(
                 id="test_order_123", symbol=request.symbol, qty=request.qty,
                 status=SimpleNamespace(value="filled"),
@@ -149,7 +146,6 @@ async def run_measured_cycle():
                 client_order_id=request.client_order_id
             )
         def get_order_by_id(self, order_id):
-            from types import SimpleNamespace
             return SimpleNamespace(
                 id=order_id, symbol="BTC/USD", qty=0.1,
                 filled_qty=0.1, status=SimpleNamespace(value="filled"),
@@ -159,7 +155,6 @@ async def run_measured_cycle():
                 client_order_id="test_client_123"
             )
         def get_order_by_client_id(self, client_order_id):
-            from types import SimpleNamespace
             return SimpleNamespace(
                 id="test_order_123", symbol="BTC/USD", qty=0.1,
                 status=SimpleNamespace(value="filled"),
@@ -170,10 +165,7 @@ async def run_measured_cycle():
     
     class MockDataClient:
         def get_crypto_bars(self, request):
-            from types import SimpleNamespace
-            import polars as pl
-            import numpy as np
-            from datetime import datetime, UTC
+            from datetime import UTC, datetime
             
             # Create mock bars data
             n = request.limit if request.limit else 100
@@ -203,8 +195,7 @@ async def run_measured_cycle():
             return bars_obj
         
         def get_crypto_latest_bar(self, request):
-            from types import SimpleNamespace
-            from datetime import datetime, UTC
+            from datetime import UTC, datetime
             symbol = request.symbol_or_symbols if isinstance(request.symbol_or_symbols, str) else request.symbol_or_symbols[0]
             base_price = {"BTC/USD": 50050.0, "ETH/USD": 3000.0, "SOL/USD": 100.0}.get(symbol, 50050.0)
             return {
@@ -249,7 +240,7 @@ async def run_measured_cycle():
         positions = await ex.get_positions()
     
     # Process each symbol
-    for symbol, bar_result in zip(settings.SYMBOLS, bar_results):
+    for symbol, bar_result in zip(settings.SYMBOLS, bar_results, strict=False):
         if isinstance(bar_result, Exception):
             print(f"  Error fetching bar for {symbol}: {bar_result}")
             continue
@@ -264,7 +255,7 @@ async def run_measured_cycle():
         
         # Measure regime analysis
         with Timer("analyze_market_regime", {"symbol": symbol}):
-            regime_data = await strategy.analyze_market_regime(symbol)
+            await strategy.analyze_market_regime(symbol)
         
         # Measure feature engineering (this is called inside analyze_market_regime)
         # But let's also measure multi-timeframe features separately
@@ -281,7 +272,7 @@ async def run_measured_cycle():
         
         # Measure onchain data fetch
         with Timer("fetch_derivatives_data", {"symbol": symbol}):
-            deriv_data = await fetch_derivatives_data(symbol)
+            await fetch_derivatives_data(symbol)
         
         # Measure sentiment fetch
         with Timer("extract_sentiment", {"symbol": symbol}):
@@ -295,7 +286,7 @@ async def run_measured_cycle():
         if signal.get("action") in ["buy", "sell"]:
             from src.committee.committee import run_committee
             with Timer("run_committee", {"symbol": symbol}):
-                committee_result = await run_committee(symbol, current_price, signal)
+                await run_committee(symbol, current_price, signal)
             
             # Measure transformer inference specifically
             from src.committee.transformer_brain import transformer_brain
@@ -506,7 +497,7 @@ def print_results():
     with open("performance_results.json", "w") as f:
         json.dump(output, f, indent=2)
     
-    print(f"\n\nFull results saved to performance_results.json")
+    print("\n\nFull results saved to performance_results.json")
 
 
 async def main():

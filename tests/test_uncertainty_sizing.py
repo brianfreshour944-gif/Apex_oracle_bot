@@ -1,6 +1,5 @@
 """Tests for apply_uncertainty_scaling — wires the strategy layer's
 transition-risk and position-scale metrics into position sizing."""
-import math
 
 import pytest
 

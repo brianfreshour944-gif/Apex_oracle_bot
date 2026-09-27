@@ -7,14 +7,12 @@ Logs weekly drift reports and alerts when features drift beyond thresholds.
 
 import json
 import os
-from collections import defaultdict
-from datetime import datetime, timedelta, UTC
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import numpy as np
 import pandas as pd
 
-from src.config import settings
 from src.logging_config import get_logger
 
 logger = get_logger("feature_drift")
@@ -147,7 +145,7 @@ class FeatureDriftMonitor:
     def _load_state(self) -> None:
         if os.path.exists(self.state_path):
             try:
-                with open(self.state_path, "r") as f:
+                with open(self.state_path) as f:
                     self._state = json.load(f)
             except Exception as e:
                 logger.warning(f"Failed to load feature drift state: {e}")
@@ -220,7 +218,7 @@ class FeatureDriftMonitor:
             (self._state["reference_windows"], ref_cutoff),
             (self._state["monitor_windows"], mon_cutoff),
         ]:
-            for feature_name, data in window_dict.items():
+            for data in window_dict.values():
                 if "values" in data:
                     data["values"] = [
                         v for v in data["values"]

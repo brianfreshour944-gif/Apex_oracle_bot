@@ -4,20 +4,19 @@ Pulls historical DecisionSnapshots from the database, feeds them into MetaDecisi
 and trains a PPO agent to predict optimal committee weights and position sizing.
 """
 
-import sys
-import os
 import json
-import numpy as np
+import os
+import sys
 
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 
-from src.db import get_engine, DecisionSnapshot, Base
 from sqlalchemy import select
 from sqlalchemy.orm import Session
-from src.logging_config import get_logger
 from stable_baselines3 import PPO
 
 from src.committee.rl_env import MetaDecisionEnv
+from src.db import Base, DecisionSnapshot, get_engine
+from src.logging_config import get_logger
 
 logger = get_logger("train_ppo")
 
@@ -49,7 +48,7 @@ def main():
                 "final_action": t.final_action,
                 "realized_pnl": t.realized_pnl
             })
-        except Exception as e:
+        except Exception:
             continue
             
     if not snapshots:

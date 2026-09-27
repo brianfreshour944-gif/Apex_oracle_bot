@@ -1,11 +1,10 @@
-import os
 import json
+import os
 import sys
 from datetime import date
 
 import pandas as pd
 from sqlalchemy import create_engine
-from typing import Dict, Any
 
 # Ensure we can import from src
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
@@ -128,7 +127,6 @@ def main() -> int:
         for symbol, group in df.groupby('symbol'):
             total_trades = len(group)
             winning_trades = len(group[group['realized_pnl'] > 0])
-            losing_trades = len(group[group['realized_pnl'] <= 0])
             
             win_rate = (winning_trades / total_trades) * 100 if total_trades > 0 else 0.0
             
@@ -172,7 +170,7 @@ def main() -> int:
         existing_bans = []
         if os.path.exists(ban_file):
             try:
-                with open(ban_file, 'r') as f:
+                with open(ban_file) as f:
                     existing_bans = json.load(f)
             except Exception as ban_read_err:
                 logger.warning(f"Could not read existing bans ({ban_read_err}) - starting a fresh list.")
@@ -242,7 +240,7 @@ def main() -> int:
         existing_thresh = {}
         if os.path.exists(thresh_file):
             try:
-                with open(thresh_file, 'r') as f:
+                with open(thresh_file) as f:
                     existing_thresh = json.load(f)
             except Exception as thresh_read_err:
                 logger.warning(f"Could not read existing thresholds ({thresh_read_err}) - rebuilding from this run.")

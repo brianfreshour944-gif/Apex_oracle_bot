@@ -48,6 +48,13 @@ dependencies = [
     # ImportError the first time either path is hit. Found via an external
     # correctness audit, 2026-09-22.
     "scipy>=1.11.0",
+    # pandas is imported unconditionally by src/feature_engineering.py, which
+    # bot.py loads on every startup, and torch is pulled in unconditionally by
+    # src/committee/committee.py -> decision_transformer.py. Both were only
+    # declared in requirements.txt (and pandas only under the dev extra), so a
+    # clean `pip install .` produced an ImportError at import time.
+    "pandas>=2.2.0",
+    "torch>=2.2.0",
 ]
 
 [project.scripts]
@@ -79,6 +86,46 @@ select = [
     "RUF",  # ruff-specific rules
 ]
 ignore = ["E501"]
+
+# T201 (flake8-print) is kept enabled for importable library code, where
+# stdout output should go through the structured logger instead. It is
+# disabled for the surfaces whose entire job is console output: CLI tools,
+# audit/report/verification scripts, tests, the Kaggle notebook, and the
+# `if __name__ == "__main__"` self-test/demo entry points.
+#
+# E402 (module-import-not-at-top) is disabled for those same entry points:
+# each one bootstraps the repo root onto sys.path (PROJECT_ROOT =
+# Path(__file__).parent.parent; sys.path.insert(0, ...)) before it can
+# `from src... import ...`, so the late imports are deliberate, not sloppy.
+# Importable `src/` modules are unaffected and must keep imports at the top.
+[tool.ruff.lint.per-file-ignores]
+"scripts/*" = ["T201", "E402"]
+"tests/*" = ["T201"]
+"kaggle_llm_pipeline/*" = ["T201", "E402"]
+"audit_*.py" = ["T201", "E402"]
+"verify_*.py" = ["T201", "E402"]
+"measure_*.py" = ["T201"]
+"run_*.py" = ["T201", "E402"]
+"scan_learning.py" = ["T201", "E402"]
+"sweep_params.py" = ["T201"]
+"security_check.py" = ["T201"]
+"soak_test_plan.py" = ["T201"]
+"vuln_check.py" = ["T201"]
+"rate_limit_analysis.py" = ["T201"]
+"remove_tunnel_protocol.py" = ["T201"]
+"src/alerting.py" = ["T201"]
+"src/backtest.py" = ["T201"]
+"src/bayesian_optimizer.py" = ["T201"]
+"src/bot.py" = ["T201"]
+"src/committee/batch_ensemble.py" = ["T201"]
+"src/committee/bayesian_transformer.py" = ["T201"]
+"src/committee/decision_transformer.py" = ["T201"]
+"src/committee/hierarchical_skills.py" = ["T201"]
+"src/logging_config.py" = ["T201"]
+"src/main.py" = ["T201"]
+"src/ood_discriminator.py" = ["T201"]
+"src/population_trainer.py" = ["T201"]
+"src/walkforward.py" = ["T201"]
 
 [tool.mypy]
 python_version = "3.12"

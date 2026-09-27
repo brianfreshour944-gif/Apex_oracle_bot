@@ -8,22 +8,20 @@ actual execution records for recent trades. Outputs PASS/FAIL with details.
 Run: python scripts/verify_data_integrity.py --days 7
 """
 
-import os
-import sys
-import json
 import argparse
-import sqlite3
+import json
+import sys
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from datetime import datetime, timedelta, timezone
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from src.config import settings
-from src.exchange import AlpacaExchange
-from src.db import init_db, OrderRecord
 from sqlalchemy import select
 from sqlalchemy.orm import Session
+
+from src.db import OrderRecord
+from src.exchange import AlpacaExchange
 
 DB_PATH = PROJECT_ROOT / "data" / "bot.db"
 
@@ -42,12 +40,12 @@ def load_trades_from_db(days_back: int) -> list:
         print(f"Database not found: {DB_PATH}")
         return []
     
-    from src.db import get_engine, DecisionSnapshot, OrderRecord
-    from sqlalchemy import select, and_
-    from sqlalchemy.orm import Session
+    from sqlalchemy import and_
+
+    from src.db import DecisionSnapshot, get_engine
     
     engine = get_engine()
-    cutoff = datetime.now(timezone.utc) - timedelta(days=days_back)
+    cutoff = datetime.now(UTC) - timedelta(days=days_back)
     
     with Session(engine) as session:
         # Query closed decision snapshots with their order records
@@ -95,7 +93,7 @@ def fetch_alpaca_fills(days_back: int) -> list:
         exchange = AlpacaExchange()
         
         # Alpaca's get_orders can filter by date
-        after = (datetime.now(timezone.utc) - timedelta(days=days_back)).isoformat()
+        after = (datetime.now(UTC) - timedelta(days=days_back)).isoformat()
         
         # Use the exchange's method to get order history
         import asyncio
@@ -206,11 +204,9 @@ def match_and_compare(db_trades: list, alpaca_orders: list) -> dict:
                     "alpaca_qty": alpaca_qty
                 })
     
-    # Check for Alpaca orders not in DB
-    db_decision_ids = {t.get("decision_id") for t in db_trades if t.get("decision_id")}
-    for order in alpaca_orders:
-        # Can't easily match without decision_id in Alpaca
-        pass
+    # NOTE: Alpaca fills carry no decision_id, so orders can't be matched
+    # back to DB decisions here; unmatched orders are surfaced via
+    # missing_in_alpaca above instead.
     
     return results
 
@@ -220,7 +216,7 @@ def main():
     args = parser.parse_args()
     
     print_section(f"DATA INTEGRITY VERIFICATION — Last {args.days} Days")
-    print(f"Timestamp: {datetime.now(timezone.utc).isoformat()}")
+    print(f"Timestamp: {datetime.now(UTC).isoformat()}")
     
     # Load data
     db_trades = load_trades_from_db(args.days)
@@ -285,7 +281,7 @@ def main():
     
     # Save report
     report = {
-        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "timestamp": datetime.now(UTC).isoformat(),
         "days_back": args.days,
         "verdict": verdict,
         "results": results

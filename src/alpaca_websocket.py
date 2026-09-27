@@ -5,15 +5,13 @@ Uses alpaca-py's WebSocket client for crypto market data.
 """
 
 import asyncio
-import datetime
-import json
 import time
 from collections import defaultdict
-from typing import Any, Callable, Dict, List, Optional, Set
+from collections.abc import Callable
+from typing import Any
 
-import structlog
-from alpaca.data.live.crypto import CryptoDataStream
 from alpaca.data.enums import DataFeed
+from alpaca.data.live.crypto import CryptoDataStream
 
 from src.config import settings
 from src.logging_config import get_logger
@@ -87,20 +85,21 @@ class AlpacaWebSocketClient:
         self.secret_key = settings.ALPACA_SECRET_KEY
         self.paper = "paper" in (settings.ALPACA_BASE_URL or "").lower()
         
-        self._stream: Optional[CryptoDataStream] = None
-        self._callbacks: Dict[str, List[Callable]] = defaultdict(list)
-        self._subscriptions: Dict[str, Set[str]] = defaultdict(set)  # timeframe -> symbols
+        self._stream: CryptoDataStream | None = None
+        self._callbacks: dict[str, list[Callable]] = defaultdict(list)
+        self._callback_tasks: set[asyncio.Task] = set()
+        self._subscriptions: dict[str, set[str]] = defaultdict(set)  # timeframe -> symbols
         self._running = False
         self._start_time = 0.0
         self._bars_received = 0
         self._bars_finalized = 0
         self._errors = 0
-        self._last_bar_ts: Dict[str, str] = {}  # symbol|timeframe -> timestamp
+        self._last_bar_ts: dict[str, str] = {}  # symbol|timeframe -> timestamp
         
     def on_bar_close(
         self,
-        symbols: List[str],
-        timeframes: List[str],
+        symbols: list[str],
+        timeframes: list[str],
         callback: Callable[[BarCloseEvent], Any],
     ) -> None:
         """
@@ -243,7 +242,10 @@ class AlpacaWebSocketClient:
             for callback in callbacks:
                 try:
                     if asyncio.iscoroutinefunction(callback):
-                        asyncio.create_task(callback(event))
+                        # Keep a strong reference: a bare create_task() result is
+                        # eligible for GC mid-flight, which can cancel the callback.
+                        self._callback_tasks.add(task := asyncio.create_task(callback(event)))
+                        task.add_done_callback(self._callback_tasks.discard)
                     else:
                         callback(event)
                 except Exception as e:
@@ -275,7 +277,7 @@ class AlpacaWebSocketClient:
 
 
 # Global instance for easy access
-_ws_client: Optional[AlpacaWebSocketClient] = None
+_ws_client: AlpacaWebSocketClient | None = None
 
 
 def get_ws_client() -> AlpacaWebSocketClient:
@@ -286,7 +288,7 @@ def get_ws_client() -> AlpacaWebSocketClient:
     return _ws_client
 
 
-async def start_ws_client(symbols: List[str], timeframes: List[str]) -> AlpacaWebSocketClient:
+async def start_ws_client(symbols: list[str], timeframes: list[str]) -> AlpacaWebSocketClient:
     """Start the global WebSocket client with subscriptions."""
     client = get_ws_client()
     client.on_bar_close(symbols, timeframes, lambda e: None)  # Placeholder, real callbacks registered by bot

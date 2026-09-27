@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from src.logging_config import get_logger
-import asyncio
 
 logger = get_logger("metrics") 
  

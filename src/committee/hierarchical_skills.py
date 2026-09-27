@@ -128,7 +128,7 @@ class SkillEncoder(nn.Module):
             dict with skill_logits, skill_probs, skill_embeddings, entropy
         """
         if state.dim() == 3:
-            batch, seq_len, _ = state.shape
+            _batch, _seq_len, _ = state.shape
             state_flat = state.reshape(-1, self.state_dim)
             skill_logits = self.skill_head(state_flat)  # [B*L, K]
             skill_logits = skill_logits.view(state.shape[0], state.shape[1], -1)
@@ -235,7 +235,7 @@ class SkillLSTMExecutor(nn.Module):
         else:
             squeeze_seq = False
         
-        batch, seq_len, _ = state.shape
+        batch, _seq_len, _ = state.shape
         
         # Concatenate state + skill embedding
         x = torch.cat([state, skill_embed], dim=-1)  # [B, L, state+skill]
@@ -709,7 +709,7 @@ async def run_hierarchical_skills(
         from src.committee.decision_transformer import _build_context_sequence, _get_recent_decisions
         
         recent_decisions = _get_recent_decisions()
-        states, actions, rtg, timesteps, mask = _build_context_sequence(
+        states, _actions, rtg, _timesteps, _mask = _build_context_sequence(
             recent_decisions,
             target_return_pct / 100.0,
             _DT_CONFIG.regimes if _DT_CONFIG else ["default"],

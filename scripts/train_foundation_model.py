@@ -8,16 +8,15 @@ It saves the foundational weights and the feature scaler for live use.
 """
 
 import os
+import pickle
 import sys
+
 import numpy as np
-import polars as pl
-import pandas as pd
-import yfinance as yf
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from torch.utils.data import Dataset, DataLoader
-import pickle
+import yfinance as yf
+from torch.utils.data import DataLoader, Dataset
 
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 from src.committee.transformer_brain import GrokGQA_Transformer
@@ -100,7 +99,8 @@ def main() -> int:
         try:
             ticker = yf.Ticker(sym)
             df = ticker.history(period=f"{DAYS}d", interval="1h")
-            if df.empty: continue
+            if df.empty:
+                continue
 
             df = df.reset_index()
             df = df.rename(columns={"Datetime": "t", "Open": "open", "High": "high", "Low": "low", "Close": "close", "Volume": "volume"})
@@ -171,7 +171,6 @@ def main() -> int:
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=3)
     
     # 5. Training Loop with Early Stopping
-    best_val_loss = float('inf')
     best_val_acc = 0.0
     patience_counter = 0
     
@@ -214,7 +213,6 @@ def main() -> int:
         logger.info(f"Epoch {epoch}/{EPOCHS} | Train Loss: {train_loss:.4f} | Val Loss: {val_loss:.4f} | Val Acc: {val_acc:.2f}%")
         
         if val_acc > best_val_acc:
-            best_val_loss = val_loss
             best_val_acc = val_acc
             patience_counter = 0
             torch.save(model.state_dict(), MODEL_PATH)

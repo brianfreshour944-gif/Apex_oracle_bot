@@ -72,7 +72,7 @@ class BatchEnsembleLinear(nn.Module):
         Returns:
             out: [batch_size, ensemble_size, out_features]
         """
-        batch_size, ens_size, in_feats = x.shape
+        _batch_size, ens_size, in_feats = x.shape
         assert ens_size == self.ensemble_size, f"Expected ensemble_size={self.ensemble_size}, got {ens_size}"
         assert in_feats == self.in_features
         

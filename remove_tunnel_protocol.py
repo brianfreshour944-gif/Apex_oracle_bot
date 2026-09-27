@@ -1,4 +1,4 @@
-with open('/Users/brian/air/Apex_oracle_bot/src/bot.py', 'r', encoding='utf-8') as f:
+with open('/Users/brian/air/Apex_oracle_bot/src/bot.py', encoding='utf-8') as f:
     content = f.read()
 
 start = content.find('def read_tunnel_status() -> bool:')

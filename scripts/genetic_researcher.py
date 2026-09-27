@@ -4,21 +4,22 @@ Evolves the best trading parameters over multiple generations using
 cross-breeding, mutation, and Monte Carlo survival-of-the-fittest.
 """
 
-import sys
-import os
 import asyncio
-import random
 import copy
+import os
+import random
+import sys
 from datetime import datetime
-from typing import Dict, Any, List
+from typing import Any
 
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 
-from src.config import settings
-from src.backtest import run_backtest, BacktestResult, run_monte_carlo_analysis
-from src.logging_config import get_logger
-from src.db import save_experiment_record
 import uuid
+
+from src.backtest import run_backtest, run_monte_carlo_analysis
+from src.config import settings
+from src.db import save_experiment_record
+from src.logging_config import get_logger
 
 logger = get_logger("genetic_researcher")
 
@@ -36,7 +37,7 @@ PARAM_BOUNDS = {
     "RSI_OVERBOUGHT": (55.0, 85.0),
 }
 
-def generate_random_genome() -> Dict[str, Any]:
+def generate_random_genome() -> dict[str, Any]:
     """Create a random parameter configuration."""
     return {
         "STOP_LOSS_PCT": round(random.uniform(*PARAM_BOUNDS["STOP_LOSS_PCT"]), 3),
@@ -45,14 +46,14 @@ def generate_random_genome() -> Dict[str, Any]:
         "RSI_OVERBOUGHT": round(random.uniform(*PARAM_BOUNDS["RSI_OVERBOUGHT"]), 1),
     }
 
-def crossover(parent_a: Dict[str, Any], parent_b: Dict[str, Any]) -> Dict[str, Any]:
+def crossover(parent_a: dict[str, Any], parent_b: dict[str, Any]) -> dict[str, Any]:
     """Combine genes from two parents."""
     child = {}
     for key in PARAM_BOUNDS.keys():
         child[key] = parent_a[key] if random.random() > 0.5 else parent_b[key]
     return child
 
-def mutate(genome: Dict[str, Any]) -> Dict[str, Any]:
+def mutate(genome: dict[str, Any]) -> dict[str, Any]:
     """Randomly mutate genes."""
     child = copy.deepcopy(genome)
     for key, bounds in PARAM_BOUNDS.items():
@@ -64,7 +65,7 @@ def mutate(genome: Dict[str, Any]) -> Dict[str, Any]:
     return child
 
 
-async def evaluate_fitness(symbol: str, config: Dict[str, Any], seed: int = 42) -> Dict[str, Any]:
+async def evaluate_fitness(symbol: str, config: dict[str, Any], seed: int = 42) -> dict[str, Any]:
     """Run a backtest and Monte Carlo to determine fitness score."""
     originals = {k: getattr(settings, k) for k in config.keys()}
     try:

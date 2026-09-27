@@ -1,7 +1,9 @@
 """Minimal HTTP endpoint to expose performance metrics."""
-from http.server import HTTPServer, BaseHTTPRequestHandler
 import json
+from http.server import BaseHTTPRequestHandler, HTTPServer
+
 from src.performance_tracker import get_performance_tracker
+
 
 class MetricsHandler(BaseHTTPRequestHandler):
     def do_GET(self):

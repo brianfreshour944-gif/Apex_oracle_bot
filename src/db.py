@@ -4,7 +4,7 @@ import datetime
 import json
 import os
 import time
-from typing import Any, Dict, List
+from typing import Any
 
 from sqlalchemy import (
     DateTime,
@@ -253,7 +253,7 @@ def save_order_record(
         return False
 
 
-def get_recent_order_records(symbol_clean: str, max_age_sec: float = 3600.0) -> List[Dict[str, Any]]:
+def get_recent_order_records(symbol_clean: str, max_age_sec: float = 3600.0) -> list[dict[str, Any]]:
     """Most-recent-first order-ledger records for a symbol within max_age_sec.
 
     `symbol_clean` matches the slash-stripped form exchange positions use
@@ -871,7 +871,7 @@ def get_open_snapshot(symbol: str) -> dict[str, Any] | None:
             if row.created_at is not None:
                 created_dt = row.created_at
                 if created_dt.tzinfo is None:
-                    created_dt = created_dt.replace(tzinfo=datetime.timezone.utc)
+                    created_dt = created_dt.replace(tzinfo=datetime.UTC)
                 created_iso = created_dt.isoformat()
             result = {
                 "decision_id": row.decision_id,
@@ -929,7 +929,7 @@ def update_decision_snapshot_position(
         return False
 
 
-def get_all_open_snapshots() -> List[Dict[str, Any]]:
+def get_all_open_snapshots() -> list[dict[str, Any]]:
     """Return minimal info for ALL open decision snapshots.
 
     Used by the startup reconciliation pass (bot.reconcile_open_snapshots) to

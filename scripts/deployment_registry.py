@@ -9,15 +9,14 @@ Writes a machine-parseable JSON file that can be checked at a glance.
 Run: python scripts/deployment_registry.py [--register|--heartbeat|--status|--cleanup]
 """
 
-import os
-import sys
-import json
-import time
-import socket
 import argparse
+import json
+import os
+import socket
 import subprocess
+import sys
+from datetime import UTC, datetime
 from pathlib import Path
-from datetime import datetime, timezone
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 REGISTRY_PATH = PROJECT_ROOT / "data" / "deployment_registry.json"
@@ -84,8 +83,8 @@ def register_process(args):
         "pid": pid,
         "hostname": hostname,
         "account": account,
-        "started_at": datetime.now(timezone.utc).isoformat(),
-        "last_heartbeat": datetime.now(timezone.utc).isoformat(),
+        "started_at": datetime.now(UTC).isoformat(),
+        "last_heartbeat": datetime.now(UTC).isoformat(),
         "git_commit": git_info["commit"],
         "git_branch": git_info["branch"],
         "git_dirty": git_info["dirty"],
@@ -108,7 +107,7 @@ def heartbeat_process(args):
         print(f"Process {key} not registered. Run with --register first.")
         sys.exit(1)
     
-    registry["processes"][key]["last_heartbeat"] = datetime.now(timezone.utc).isoformat()
+    registry["processes"][key]["last_heartbeat"] = datetime.now(UTC).isoformat()
     registry["processes"][key]["status"] = "running"
     save_registry(registry)
     print(f"Heartbeat: {key}")
@@ -116,7 +115,7 @@ def heartbeat_process(args):
 def cleanup_stale():
     """Remove processes that haven't heartbeated within TTL."""
     registry = load_registry()
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     removed = []
     
     for key, proc in list(registry["processes"].items()):
@@ -154,7 +153,7 @@ def show_status():
         print(f"\n  Account: {account} ({len(procs)} process(es))")
         for key, proc in procs:
             last_hb = datetime.fromisoformat(proc["last_heartbeat"].replace("Z", "+00:00"))
-            age = (datetime.now(timezone.utc) - last_hb).total_seconds()
+            age = (datetime.now(UTC) - last_hb).total_seconds()
             status = proc.get("status", "unknown")
             role = proc.get("role", "unknown")
             symbols = ", ".join(proc.get("symbols", [])) or "N/A"

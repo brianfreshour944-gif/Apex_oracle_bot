@@ -10,9 +10,8 @@ Tests:
 
 import os
 import sys
-import numpy as np
+
 import torch
-import torch.nn.functional as F
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
@@ -23,7 +22,7 @@ os.environ.setdefault("ALPACA_SECRET_KEY", "test")
 # ── 1. Quantile Huber Loss correctness ───────────────────────────────
 def test_quantile_huber_loss_basic():
     """Test quantile huber loss produces correct pinball loss behavior."""
-    from src.committee.decision_transformer import quantile_huber_loss, QUANTILES
+    from src.committee.decision_transformer import QUANTILES, quantile_huber_loss
     
     batch_size = 4
     num_quantiles = 5
@@ -41,7 +40,7 @@ def test_quantile_huber_loss_basic():
     # Higher tau should give higher loss for positive error
     # tau=0.95 should penalize more than tau=0.05
     individual_losses = []
-    for i, tau in enumerate(QUANTILES):
+    for tau in QUANTILES:
         pred_i = torch.zeros(batch_size, 1)
         target_i = torch.ones(batch_size, 1) * 0.1
         loss_i = quantile_huber_loss(pred_i, target_i, torch.tensor([tau]))
@@ -55,7 +54,7 @@ def test_quantile_huber_loss_basic():
     pred = torch.ones(batch_size, num_quantiles) * 0.2
     target = torch.ones(batch_size, 1) * 0.1
     individual_losses = []
-    for i, tau in enumerate(QUANTILES):
+    for tau in QUANTILES:
         pred_i = torch.ones(batch_size, 1) * 0.2
         target_i = torch.ones(batch_size, 1) * 0.1
         loss_i = quantile_huber_loss(pred_i, target_i, torch.tensor([tau]))
@@ -68,7 +67,7 @@ def test_quantile_huber_loss_basic():
 
 def test_quantile_huber_loss_huber_smoothing():
     """Test that Huber smoothing kicks in for small errors."""
-    from src.committee.decision_transformer import quantile_huber_loss, QUANTILES
+    from src.committee.decision_transformer import quantile_huber_loss
     
     # Small error should use quadratic (L2) not linear
     pred = torch.tensor([[0.051]])  # error = 0.001
@@ -87,7 +86,7 @@ def test_quantile_huber_loss_huber_smoothing():
 # ── 2. CVaR Action Selection ────────────────────────────────────────
 def test_cvar_action_selection():
     """Test that CVaR uses tau=0.05 (worst-case) for action selection."""
-    from src.committee.decision_transformer import CVAR_QUANTILE_IDX, NUM_QUANTILES, QUANTILES
+    from src.committee.decision_transformer import CVAR_QUANTILE_IDX, QUANTILES
     
     assert CVAR_QUANTILE_IDX == 0, "CVaR should use first quantile (tau=0.05)"
     assert QUANTILES[CVAR_QUANTILE_IDX] == 0.05, "First quantile should be 0.05"
@@ -150,7 +149,7 @@ def test_temporal_ema_smoothing():
 # ── 5. Quantile Head Shapes ──────────────────────────────────────────
 def test_quantile_head_shapes():
     """Test that quantile heads have correct output shapes."""
-    from src.committee.decision_transformer import DecisionTransformer, EMBED_DIM, NUM_QUANTILES, BRAINS, ACTIONS
+    from src.committee.decision_transformer import EMBED_DIM, NUM_QUANTILES, DecisionTransformer
     
     device = torch.device("cpu")
     model = DecisionTransformer(
@@ -163,10 +162,7 @@ def test_quantile_head_shapes():
         dropout=0.1,
     ).to(device)
     
-    batch_size = 2
-    seq_len = 4
     state_dim = 64
-    act_dim = 12
     
     s = torch.randn(1, 4, state_dim, device=device)
     a = torch.randn(1, 4, 12, device=device)
@@ -197,7 +193,7 @@ def test_quantile_head_shapes():
 # ── 6. Spectral Norm on Quantile Heads ───────────────────────────────
 def test_spectral_norm_on_quantile_heads():
     """Verify spectral norm is applied to quantile heads."""
-    from src.committee.decision_transformer import DecisionTransformer, USE_SPECTRAL_NORM, EMBED_DIM
+    from src.committee.decision_transformer import EMBED_DIM, USE_SPECTRAL_NORM, DecisionTransformer
     
     if not USE_SPECTRAL_NORM:
         return  # Skip if disabled

@@ -13,9 +13,9 @@ import json
 
 import pytest
 
-from src.committee.adaptive_meta import AdaptiveMetaLearner, BRAINS
-from src.committee.models import BrainVote
 from src.committee import outcome_tracker
+from src.committee.adaptive_meta import BRAINS, AdaptiveMetaLearner
+from src.committee.models import BrainVote
 
 
 def _vote(name, action, conf=0.8):
@@ -73,7 +73,7 @@ def test_weights_stay_clamped_and_normalized(tmp_path):
     # Hammer transformer as correct many times; it must not exceed max_weight.
     for _ in range(100):
         learner.update(
-            _snapshot("uptrend", "buy", {b: "buy" for b in BRAINS}),
+            _snapshot("uptrend", "buy", dict.fromkeys(BRAINS, "buy")),
             {"net_pnl": 50.0},
         )
     w = learner.weights["uptrend"]

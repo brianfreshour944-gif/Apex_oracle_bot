@@ -49,7 +49,7 @@ def test_prune_keeps_peaks_for_symbols_still_held():
     bot_mod._state.strategy = _FakeStrategy()
     bot_mod._state.position_adds = {}
 
-    dropped_peaks, dropped_adds = bot_mod._prune_stale_restored_state({"BTCUSD"})
+    dropped_peaks, _dropped_adds = bot_mod._prune_stale_restored_state({"BTCUSD"})
 
     assert dropped_peaks == []
     assert "BTC/USD" in bot_mod._state.risk_manager.peak_prices

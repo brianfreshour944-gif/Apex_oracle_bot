@@ -9,20 +9,18 @@ summary. No docstrings, no stale comments — just live truth.
 Run: python scripts/dump_active_config.py
 """
 
-import os
 import json
 import sys
+from datetime import UTC, datetime
 from pathlib import Path
-from datetime import datetime, timezone
 
 # Add project root to path
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
+from src.bot import get_banned_symbols, read_regime_flag
+from src.committee.committee import DEFAULT_SCORE_THRESHOLD, REGIME_WEIGHT_MATRIX, get_meta_learner
 from src.config import settings
-from src.committee.committee import get_meta_learner, REGIME_WEIGHT_MATRIX, DEFAULT_SCORE_THRESHOLD
-from src.risk import RiskManager
-from src.bot import _state, read_regime_flag, get_banned_symbols
 
 
 def print_section(title: str):
@@ -37,7 +35,7 @@ def print_kv(key: str, value: any, indent: int = 2):
 
 
 def main():
-    print(f"\n[ACTIVE CONFIGURATION SNAPSHOT] — {datetime.now(timezone.utc).isoformat()}")
+    print(f"\n[ACTIVE CONFIGURATION SNAPSHOT] — {datetime.now(UTC).isoformat()}")
     print(f"Project root: {PROJECT_ROOT}")
 
     # ─── CORE SETTINGS ───

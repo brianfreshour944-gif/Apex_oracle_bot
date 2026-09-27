@@ -9,9 +9,9 @@ a genetic algorithm and massive backtesting across all assets.
 """
 
 import os
-import sys
 import shutil
 import subprocess
+import sys
 
 # Add project root to path before importing src
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))

@@ -12,12 +12,11 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from src.config import settings
 from src.committee import committee as committee_mod
-from src.committee.committee import run_committee, WINNING_SCORE_THRESHOLD
-from src.committee.adaptive_meta import AdaptiveMetaLearner, BRAINS
+from src.committee.adaptive_meta import BRAINS, AdaptiveMetaLearner
+from src.committee.committee import run_committee
+from src.config import settings
 from src.risk import RiskManager
-
 
 BUY_SIGNAL = {"action": "buy", "confidence": 0.92, "regime": "uptrend", "rsi": 22.0, "atr": 50.0}
 CRASH_SIGNAL = {"action": "buy", "confidence": 0.85, "regime": "crash", "rsi": 15.0, "atr": 100.0}

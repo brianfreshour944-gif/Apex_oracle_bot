@@ -1,8 +1,8 @@
 """Crash-recovery simulations: what happens after a hard kill with positions open.
 Run: python audit_crash_recovery.py
 """
-import asyncio, os, math, time
-from datetime import datetime, timezone, timedelta
+import os
+import time
 
 PASS = []
 def report(name, severity, reproduced, detail):
@@ -14,8 +14,9 @@ def report(name, severity, reproduced, detail):
 # long BTC entered at 100, rallied to peak 120 (activation crossed, peak
 # recorded), then crashed down to 108 -- pre-crash the trailing stop fires.
 # After a restart the peak is forgotten.
-from src.risk import RiskManager
 from src.config import settings
+from src.risk import RiskManager
+
 
 class FakeEx:
     async def get_positions(self): return []
@@ -43,6 +44,7 @@ report("Trailing-stop peak lost on restart; stop that should have fired does not
 # ── SIM 2: cooldown loss -> immediate re-entry after restart ─────────────────
 # _state.cooldowns is in-memory. Scenario: SL fired seconds before the crash.
 import src.bot as bot_mod
+
 pre_state = bot_mod.BotState()
 pre_state.cooldowns["BTC/USD"] = time.time() + settings.COOLDOWN_SECONDS_BUY
 pre_blocked = time.time() < pre_state.cooldowns["BTC/USD"]
@@ -57,6 +59,7 @@ report("Entry cooldown forgotten on restart (whipsaw re-entry immediately after 
 
 # ── SIM 3: scale-in cap + size decay forgotten on restart ────────────────────
 from src.config import MAX_POSITION_ADDS, POSITION_ADD_SIZE_DECAY
+
 pre_adds = {"count": MAX_POSITION_ADDS, "last_add_time": time.time(), "last_add_score": 0.9}
 pre_blocked = pre_adds["count"] >= MAX_POSITION_ADDS
 post_adds = bot_mod.BotState().position_adds.get("BTC/USD", {"count": 0, "last_add_time": 0.0, "last_add_score": 0.0})
@@ -72,6 +75,7 @@ report("Scale-in cap and size decay reset by restart -> re-adds beyond MAX_POSIT
 
 # ── SIM 4: stale 'open' decision snapshot after external close ───────────────
 import src.db as db
+
 settings.DATABASE_URL = "sqlite:///data/audit_crash.db"
 db._open_snapshot_cache.clear()
 db._tables_ensured = False

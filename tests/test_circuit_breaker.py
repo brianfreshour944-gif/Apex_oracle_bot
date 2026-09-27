@@ -1,11 +1,12 @@
 """Tests for circuit breaker functionality."""
 
 import asyncio
-import time
-import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
-import sys
 import os
+import sys
+import time
+from unittest.mock import MagicMock, patch
+
+import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
@@ -28,11 +29,11 @@ class TestCircuitBreaker:
     async def test_opens_after_threshold_failures(self, circuit_breaker):
         """Circuit opens after threshold failures."""
         async def failing_func():
-            raise Exception("Simulated failure")
+            raise ConnectionError("Simulated failure")
 
         # Fail up to threshold
         for _ in range(3):
-            with pytest.raises(Exception):
+            with pytest.raises(ConnectionError, match="Simulated failure"):
                 await circuit_breaker.call(failing_func)
 
         assert circuit_breaker.state == CircuitState.OPEN
@@ -46,7 +47,7 @@ class TestCircuitBreaker:
         async def test_func():
             return "success"
 
-        with pytest.raises(RuntimeError, match="Circuit.*is OPEN"):
+        with pytest.raises(RuntimeError, match=r"Circuit.*is OPEN"):
             await circuit_breaker.call(test_func)
 
     @pytest.mark.asyncio
@@ -86,9 +87,9 @@ class TestCircuitBreaker:
         circuit_breaker._state = CircuitState.HALF_OPEN
 
         async def failing_func():
-            raise Exception("fail")
+            raise ConnectionError("fail")
 
-        with pytest.raises(Exception):
+        with pytest.raises(ConnectionError, match="fail"):
             await circuit_breaker.call(failing_func)
 
         assert circuit_breaker.state == CircuitState.OPEN
@@ -174,9 +175,9 @@ class TestCircuitBreaker:
 
         # Fail twice (below threshold)
         for _ in range(2):
-            with pytest.raises(Exception):
+            with pytest.raises(ConnectionError, match="fail"):
                 async def failing_func():
-                    raise Exception("fail")
+                    raise ConnectionError("fail")
                 await circuit_breaker.call(failing_func)
 
         # Success should reset failure count
@@ -192,21 +193,21 @@ class TestCircuitBreakerIntegration:
     @pytest.mark.asyncio
     async def test_exchange_circuit_breaker_opens_on_failures(self):
         """Test that exchange circuit breaker opens after failures."""
-        from src.exchange import AlpacaExchange
         from src.circuit_breaker import CircuitBreaker
+        from src.exchange import AlpacaExchange
 
         with patch.object(AlpacaExchange, '__init__', lambda self: None):
             exchange = AlpacaExchange()
             exchange.circuit_breaker = CircuitBreaker("test_exchange", failure_threshold=2, open_seconds=1)
 
             async def failing_call():
-                raise Exception("API error")
+                raise ConnectionError("API error")
 
             # Fail twice to trip circuit
             for _ in range(2):
-                with pytest.raises(Exception):
+                with pytest.raises(ConnectionError, match="fail"):
                     async def failing_func():
-                        raise Exception("fail")
+                        raise ConnectionError("fail")
                     await exchange.circuit_breaker.call(failing_func)
 
             assert exchange.circuit_breaker.state == CircuitState.OPEN

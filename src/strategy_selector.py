@@ -1,11 +1,10 @@
 """AI Strategy Selector that uses Adaptive Meta-Learning to pick the best strategy."""
 
 import os
-from datetime import datetime, UTC
+from datetime import UTC, datetime
 from typing import Any
 
 from src.committee.adaptive_meta import AdaptiveMetaLearner
-from src.config import settings
 from src.execution_strategies import STRATEGIES
 from src.logging_config import get_logger
 from src.performance_tracker import record_trade_outcome
@@ -38,8 +37,6 @@ def _estimate_strategy_costs(strategy_name: str, regime: str, atr_pct: float) ->
     Estimate relative transaction cost burden for a strategy in a given regime.
     Returns a multiplier (1.0 = baseline, >1.0 = higher cost burden).
     """
-    # Base cost per round trip in bps
-    base_cost_bps = settings.TX_COST_FEE_BPS + settings.TX_COST_SLIPPAGE_BPS + settings.TX_COST_SPREAD_BPS
     
     # Strategy-specific trade frequency multipliers (relative to trend_following)
     freq_multipliers = {
@@ -86,7 +83,6 @@ def select_best_strategy(regime: str, features: dict[str, Any] | None = None) ->
     close_price = (features.get("close") or 1.0) if features else 1.0
     atr_pct = features.get("atr", 0.0) / close_price * 100 if features else 1.0
     in_transition = features.get("in_transition", False) if features else False
-    hurst_velocity = features.get("hurst_velocity", 0.0) if features else 0.0
     
     # Default logical priors based on market regime
     if not weights:

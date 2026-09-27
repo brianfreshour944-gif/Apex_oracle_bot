@@ -10,32 +10,33 @@ This script:
 5. Overwrites the Production model if a candidate decisively wins.
 """
 
+import logging
 import os
 import sys
-import logging
+from datetime import UTC, datetime, timedelta
+
+import joblib
 import numpy as np
 import pandas as pd
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from torch.utils.data import Dataset, DataLoader
-from datetime import datetime, timedelta, timezone
-from sklearn.preprocessing import StandardScaler
-import joblib
-
 from alpaca.data.historical import CryptoHistoricalDataClient
 from alpaca.data.requests import CryptoBarsRequest
 from alpaca.data.timeframe import TimeFrame, TimeFrameUnit
+from sklearn.preprocessing import StandardScaler
+from torch.utils.data import DataLoader, Dataset
 
 # Ensure we can import from src
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from src.feature_engineering import add_features, MASTER_FEATURE_COLS, get_active_features
-from src.committee.transformer_brain import GrokGQA_Transformer
-from src.telegram_alerts import send_telegram_alert
-from src.db import save_experiment_record
 import asyncio
 import uuid
+
+from src.committee.transformer_brain import GrokGQA_Transformer
+from src.db import save_experiment_record
+from src.feature_engineering import MASTER_FEATURE_COLS, add_features, get_active_features
+from src.telegram_alerts import send_telegram_alert
 
 ACTIVE_FEATURES = get_active_features()
 
@@ -78,17 +79,19 @@ def _get_data_client() -> CryptoHistoricalDataClient:
 
 def fetch_bars(client, symbol: str, days: int) -> pd.DataFrame | None:
     try:
-        start = datetime.now(tz=timezone.utc) - timedelta(days=days)
+        start = datetime.now(tz=UTC) - timedelta(days=days)
         req = CryptoBarsRequest(symbol_or_symbols=symbol, timeframe=BAR_TIMEFRAME, start=start)
         raw_bars = client.get_crypto_bars(req).data.get(symbol, [])
-        if not raw_bars: return None
+        if not raw_bars:
+            return None
         df = pd.DataFrame([{
             "timestamp": b.timestamp, "open": float(b.open or 0), "high": float(b.high or 0),
             "low": float(b.low or 0), "close": float(b.close or 0), "volume": float(b.volume or 0),
             "vwap": float(b.vwap or 0), "trade_count": float(b.trade_count or 0),
         } for b in raw_bars])
         df.set_index("timestamp", inplace=True)
-        if df.index.tz is not None: df.index = df.index.tz_localize(None)
+        if df.index.tz is not None:
+            df.index = df.index.tz_localize(None)
         df["vwap"] = df["vwap"].where(df["vwap"] > 0, df["close"])
         return df[df["close"] > 0]
     except Exception as exc:
@@ -99,7 +102,8 @@ def build_arrays(client, symbols: list[str], days: int, seq_len: int, horizon: i
     all_X, all_y = [], []
     for sym in symbols:
         df_raw = fetch_bars(client, sym, days)
-        if df_raw is None or len(df_raw) < seq_len + horizon + 10: continue
+        if df_raw is None or len(df_raw) < seq_len + horizon + 10:
+            continue
         df_feat = add_features(df_raw)
         shared_idx = df_feat.index.intersection(df_raw.index)
         df_feat = df_feat.loc[shared_idx]
@@ -110,10 +114,12 @@ def build_arrays(client, symbols: list[str], days: int, seq_len: int, horizon: i
             x_window = feat_arr[idx : idx + seq_len]
             close_now = close_arr[idx + seq_len - 1]
             close_future = close_arr[idx + seq_len - 1 + horizon]
-            if close_now <= 0: continue
+            if close_now <= 0:
+                continue
             all_X.append(x_window)
             all_y.append(1.0 if close_future > close_now else 0.0)
-    if not all_X: raise RuntimeError("No training windows collected.")
+    if not all_X:
+        raise RuntimeError("No training windows collected.")
     return np.stack(all_X, axis=0).astype(np.float32), np.array(all_y, dtype=np.float32)
 
 def chrono_split(X, y, t_frac, v_frac):
@@ -176,7 +182,7 @@ def train_candidate(name, config, X_tr, y_tr, X_va, y_va, n_feat, device):
             optimizer.step()
             scheduler.step()
             
-        v_l, v_a = evaluate_model(model, val_loader, device, criterion)
+        v_l, _v_a = evaluate_model(model, val_loader, device, criterion)
         if v_l < best_val_loss:
             best_val_loss = v_l
             best_state = {k: v.cpu() for k, v in model.state_dict().items()}
@@ -268,7 +274,7 @@ def main() -> int:
     log.info("Calculating Permutation Importance on validation set...")
     if best_name and best_name in trained_models:
         eval_model = trained_models[best_name]
-        baseline_loss, baseline_acc = evaluate_model(eval_model, holdout_loader, device, criterion)
+        _baseline_loss, baseline_acc = evaluate_model(eval_model, holdout_loader, device, criterion)
         
         importances = {}
         for i, feat_name in enumerate(ACTIVE_FEATURES):
@@ -301,7 +307,7 @@ def main() -> int:
             with open(os.path.join(DATA_DIR, "active_features.json"), "w") as f:
                 json.dump(ACTIVE_FEATURES, f)
             
-    msg_lines.append(f"\nCandidates are now live in the Shadow Arena.")
+    msg_lines.append("\nCandidates are now live in the Shadow Arena.")
     msg = "\n".join(msg_lines)
     
     try:

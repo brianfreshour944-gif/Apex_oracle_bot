@@ -1,5 +1,6 @@
 """Reproduction tests for audit findings. Run: python audit_repro.py"""
-import asyncio, inspect, sys, math
+import inspect
+import math
 
 results = []
 
@@ -11,9 +12,10 @@ def report(name, ok, detail):
 # AlpacaExchange.get_positions() builds dicts WITHOUT "created_at"
 # (src/exchange.py:300-309). strategies._check_price_based_exits gates the
 # max-hold check on `if "created_at" in position` (strategies.py:537).
-from src.strategies import TradingStrategy
+from datetime import UTC, datetime, timedelta
+
 from src.config import settings
-from datetime import datetime, timezone, timedelta
+from src.strategies import TradingStrategy
 
 strat = TradingStrategy(exchange=None)  # exchange unused by _check_price_based_exits
 # scenario A: position shaped like the real exchange dict (no created_at),
@@ -21,37 +23,45 @@ strat = TradingStrategy(exchange=None)  # exchange unused by _check_price_based_
 pos_live = {"symbol": "BTC/USD", "qty": "1.0", "avg_entry_price": "100.0",
             "market_value": "100.0", "unrealized_pl": "0.0", "unrealized_plpc": "0.0"}
 # scenario B: same position but with created_at long past the limit
-pos_db = dict(pos_live, created_at=(datetime.now(timezone.utc) - timedelta(hours=settings.MAX_HOLD_HOURS + 100)).isoformat())
-r_live = strat._check_price_based_exits("BTC/USD", 100.0, pos_live)   # price flat -> only max-hold could fire
+pos_db = dict(pos_live, created_at=(datetime.now(UTC) - timedelta(hours=settings.MAX_HOLD_HOURS + 100)).isoformat())
+r_live = strat._check_price_based_exits("BTC/USD", 100.0, pos_live)   # first sight -> clock starts, cannot fire yet
+# Simulate the position having been held past the limit since first sight.
+strat._position_first_seen["BTC/USD"] = datetime.now(UTC) - timedelta(hours=settings.MAX_HOLD_HOURS + 100)
+r_aged = strat._check_price_based_exits("BTC/USD", 100.0, pos_live)
 r_db   = strat._check_price_based_exits("BTC/USD", 100.0, pos_db)
-report("Max-hold exit dead with exchange-shaped position dict",
-       r_live is None and r_db is not None and r_db.get("reason") == "max_hold_time_exceeded",
-       f"live-shape -> {r_live} (max-hold never fires); with created_at -> {r_db.get('reason')}")
+report("Max-hold exit fires for exchange-shaped position dict",
+       r_live is None and r_aged is not None and r_aged.get("reason") == "max_hold_time_exceeded"
+       and r_db is not None and r_db.get("reason") == "max_hold_time_exceeded",
+       f"first-sight -> {r_live} (no age yet); aged live-shape -> {r_aged.get('reason')}; with created_at -> {r_db.get('reason')}")
 
 # ── Repro 2: NaN committee score passes threshold gate & yields 1.75x sizing ─
 from src.committee.committee import calculate_confidence_size_multiplier
+
 nan = float("nan")
 mult = calculate_confidence_size_multiplier(nan, 0.0, 0.15)
 report("NaN score bypasses threshold gate and yields max size multiplier",
        math.isnan(nan) and (nan < 0.15) is False and mult == 1.75,
        f"score=NaN: (nan < threshold) is {nan < 0.15}; size_multiplier = {mult} (should be 0/rejected)")
 
-# ── Repro 3: dual AlertingEngine instances split cooldown state ──────────────
-from src.alerting import AlertingEngine
-from src.alerting import AlertCategory, AlertSeverity
-e1, e2 = AlertingEngine(), AlertingEngine()
-async def dual():
-    a = await e1.fire(AlertCategory.SYSTEM, AlertSeverity.CRITICAL, "T", "msg", key="k")
-    b = await e2.fire(AlertCategory.SYSTEM, AlertSeverity.CRITICAL, "T", "msg", key="k")
-    return a, b
-a, b = asyncio.run(dual())
-report("Committee's private AlertingEngine bypasses bot engine's cooldown dedup",
-       a is True and b is True,
-       f"same alert key fired via engine1 -> sent={a}, via committee's separate engine2 -> sent={b} "
-       f"(two live engines exist: src/committee/committee.py:35 and src/bot.py:1664)")
+# ── Repro 3: committee and bot must share ONE AlertingEngine ─────────────────
+# Production wiring uses src.alerting.get_alerting_engine(); if any hot-path
+# module built its own AlertingEngine() the cooldown/dedup state would split.
+import src.bot as botmod
+import src.committee.committee as cmod
+from src.alerting import get_alerting_engine
+
+shared = (
+    cmod._alerting_engine is get_alerting_engine()
+    and botmod.get_alerting_engine() is get_alerting_engine()
+)
+report("Committee and bot share the singleton AlertingEngine",
+       shared,
+       f"committee engine is singleton: {cmod._alerting_engine is get_alerting_engine()}; "
+       f"bot engine is singleton: {botmod.get_alerting_engine() is get_alerting_engine()}")
 
 # ── Repro 4: bayesian_transformer.py:329 undefined BrainVote annotation ──────
 import src.committee.bayesian_transformer as bt
+
 try:
     import typing
     typing.get_type_hints(bt.bayesian_transformer_brain)
@@ -61,9 +71,10 @@ except NameError as e:
 report("Undefined 'BrainVote' in bayesian_transformer signature (latent, annotation-only)", ok, detail)
 
 # ── Repro 5: await-on-sync sweep on the live call graph ──────────────────────
+from src.committee import committee as cmod
 from src.exchange import AlpacaExchange
 from src.risk import RiskManager
-from src.committee import committee as cmod
+
 ex_methods = ["load","close","get_account","get_bars","get_positions","get_order","get_orders","create_order","get_latest_bar"]
 bad = [m for m in ex_methods if not inspect.iscoroutinefunction(getattr(AlpacaExchange, m))]
 risk_async = ["update_account_status","check_killswitch_conditions","check_and_reserve_exposure",

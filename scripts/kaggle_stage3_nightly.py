@@ -12,9 +12,9 @@ Every night at 2 AM, this script:
 """
 
 import os
-import sys
 import shutil
 import subprocess
+import sys
 from datetime import datetime
 
 # Add project root to path before importing src

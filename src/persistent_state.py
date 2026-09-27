@@ -23,7 +23,7 @@ import json
 import os
 import tempfile
 import time
-from typing import Any, Dict
+from typing import Any
 
 from src.logging_config import get_logger
 
@@ -36,13 +36,13 @@ def _state_path() -> str:
     return os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "data", STATE_FILENAME)
 
 
-def load_persistent_state() -> Dict[str, Any]:
+def load_persistent_state() -> dict[str, Any]:
     """Load persisted bot state. Returns {} on any error (fail-safe)."""
     path = _state_path()
     try:
         if not os.path.exists(path):
             return {}
-        with open(path, "r", encoding="utf-8") as f:
+        with open(path, encoding="utf-8") as f:
             data = json.load(f)
         return data if isinstance(data, dict) else {}
     except json.JSONDecodeError as e:
@@ -66,7 +66,7 @@ def load_persistent_state() -> Dict[str, Any]:
         return {}
 
 
-def save_persistent_state(data: Dict[str, Any]) -> bool:
+def save_persistent_state(data: dict[str, Any]) -> bool:
     """Atomically persist bot state (temp file + os.replace). Fail-safe."""
     path = _state_path()
     try:
@@ -105,14 +105,14 @@ class PersistentBotState:
     def mark_dirty(self) -> None:
         self._dirty = True
 
-    def flush(self, snapshot: Dict[str, Any]) -> bool:
+    def flush(self, snapshot: dict[str, Any]) -> bool:
         """Force-write the given snapshot. Returns True if written."""
         ok = save_persistent_state(snapshot)
         self._dirty = False
         self._last_flush = time.monotonic()
         return ok
 
-    def flush_if_due(self, snapshot: Dict[str, Any], force: bool = False) -> bool:
+    def flush_if_due(self, snapshot: dict[str, Any], force: bool = False) -> bool:
         """Write when dirty (immediately) or as a periodic heartbeat.
 
         The heartbeat exists because some tracked dicts (e.g.

@@ -1,10 +1,11 @@
 """Unit tests for TradingStrategy market regime TTL caching."""
 
-import pytest
-import time
-import polars as pl
-import numpy as np
 from unittest.mock import AsyncMock, patch
+
+import numpy as np
+import polars as pl
+import pytest
+
 from src.strategies import TradingStrategy
 
 
@@ -56,5 +57,5 @@ async def test_regime_analysis_ttl_cache():
         # is the one that actually catches it.
         cached_time, cached_res = strat._regime_cache["BTC/USD"]
         strat._regime_cache["BTC/USD"] = (cached_time - 10.0, cached_res)
-        res3 = await strat.analyze_market_regime("BTC/USD")
+        await strat.analyze_market_regime("BTC/USD")
         assert ex.get_bars.call_count == 2

@@ -7,23 +7,23 @@ strategy across deep historical data for multiple crypto assets. This prevents
 the cold-start data starvation problem.
 """
 
+import asyncio
+import hashlib
+import json
 import os
 import sys
-import json
-import asyncio
+
+import numpy as np
 import polars as pl
 import yfinance as yf
-import numpy as np
-import hashlib
 
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 
-from src.config import settings
-from src.strategies import TradingStrategy
-from src.risk import RiskManager
 from src.committee.committee import run_committee
 from src.committee.models import BrainVote
 from src.logging_config import get_logger
+from src.risk import RiskManager
+from src.strategies import TradingStrategy
 
 # When set, transformer_brain uses a fast synthetic model instead of the
 # real PyTorch inference so the replay dataset can be bootstrapped in
@@ -45,9 +45,9 @@ if FAST_MODE:
     os.environ["ADAPTIVE_ML_ENABLED"] = "0"
 
 if FAST_MODE:
-    import src.committee.transformer_brain as _tb
     import src.committee.committee as _cm
     import src.committee.rl_meta as _rlm
+    import src.committee.transformer_brain as _tb
 
     async def _fast_transformer_brain(symbol: str, price: float, signal: dict) -> BrainVote:
         """Synthetic transformer brain that generates deterministic tensor_state
@@ -225,7 +225,6 @@ async def generate_history_for_symbol(symbol: str, bars: pl.DataFrame):
                     }
                     
         elif final_action == "close" and open_pos is not None:
-            qty = open_pos["qty"]
             if open_pos["side"] == "long":
                 pnl_pct = (current_price - entry_price) / entry_price * 100
             else:

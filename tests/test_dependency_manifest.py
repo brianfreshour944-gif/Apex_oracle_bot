@@ -68,6 +68,21 @@ def test_pyproject_and_requirements_agree_on_alpaca_py():
     assert _min_version(py_alpaca) == _min_version(req_alpaca)
 
 
+def test_runtime_dependencies_present_in_both_manifests():
+    """Any package imported unconditionally on the live startup path must be
+    declared as a core (non-dev) dependency in both manifests -- otherwise a
+    clean `pip install .` raises ImportError at import time. Guards the
+    scipy/pandas/torch additions that were previously requirements.txt-only.
+    """
+    core_reqs = _requirements_lines()
+    req_names = {re.split(r"[<>=!~]", line)[0].strip().lower() for line in core_reqs}
+    py_names = {re.split(r"[<>=!~]", d)[0].strip().lower() for d in _pyproject_dependencies()}
+
+    for pkg in ("scipy", "pandas", "torch"):
+        assert pkg in py_names, f"{pkg} is imported on the startup path but missing from pyproject.toml dependencies"
+        assert pkg in req_names, f"{pkg} is imported on the startup path but missing from requirements.txt"
+
+
 def test_pyproject_declares_wheel_package_location():
     """
     Separate bug from the alpaca-py mismatch, discovered while actually

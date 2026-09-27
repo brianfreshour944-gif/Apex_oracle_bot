@@ -1,10 +1,10 @@
 """Telegram alert notifications."""
 
+
 import httpx
 
 from src.config import settings
 from src.logging_config import get_logger
-import asyncio
 
 logger = get_logger(__name__)
 

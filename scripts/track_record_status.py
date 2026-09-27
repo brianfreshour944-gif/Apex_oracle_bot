@@ -11,20 +11,20 @@ Reports on the actual validated track record of the system:
 Run: python scripts/track_record_status.py
 """
 
-import os
-import sys
 import json
+import sys
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from datetime import datetime, timedelta, timezone
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from src.config import settings
-from src.committee.committee import get_meta_learner
-from src.db import init_db, get_engine, DecisionSnapshot
-from sqlalchemy import select, func, and_
+from sqlalchemy import and_, select
 from sqlalchemy.orm import Session
+
+from src.committee.committee import get_meta_learner
+from src.config import settings
+from src.db import DecisionSnapshot, get_engine
 
 DB_PATH = PROJECT_ROOT / "data" / "bot.db"
 ADAPTIVE_STATE_PATH = PROJECT_ROOT / "data" / "adaptive_meta_state.json"
@@ -50,7 +50,7 @@ def get_db_trade_stats(days_back: int = 30) -> dict:
         return {}
     
     engine = get_engine()
-    cutoff = datetime.now(timezone.utc) - timedelta(days=days_back)
+    cutoff = datetime.now(UTC) - timedelta(days=days_back)
     
     with Session(engine) as session:
         # Overall stats - fetch all closed trades and compute in Python
@@ -94,7 +94,7 @@ def get_db_trade_stats(days_back: int = 30) -> dict:
             by_regime[regime]["pnls"].append(trade.realized_pnl)
         
         # Compute averages
-        for regime, data in by_regime.items():
+        for data in by_regime.values():
             data["win_rate"] = data["wins"] / data["total"] if data["total"] > 0 else 0
             data["avg_return_pct"] = sum(data["returns"]) / len(data["returns"]) if data["returns"] else 0
             data["total_pnl"] = sum(data["pnls"])
@@ -119,8 +119,8 @@ def check_retraining_cycles() -> dict:
         full_path = PROJECT_ROOT / path
         if full_path.exists():
             stat = full_path.stat()
-            modified = datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc)
-            age_hours = (datetime.now(timezone.utc) - modified).total_seconds() / 3600
+            modified = datetime.fromtimestamp(stat.st_mtime, tz=UTC)
+            age_hours = (datetime.now(UTC) - modified).total_seconds() / 3600
             results[name] = {
                 "exists": True,
                 "last_modified": modified.isoformat(),
@@ -144,8 +144,8 @@ def check_model_freshness() -> dict:
     for name, path in models.items():
         if path.exists():
             stat = path.stat()
-            modified = datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc)
-            age_days = (datetime.now(timezone.utc) - modified).total_seconds() / 86400
+            modified = datetime.fromtimestamp(stat.st_mtime, tz=UTC)
+            age_days = (datetime.now(UTC) - modified).total_seconds() / 86400
             results[name] = {
                 "exists": True,
                 "path": str(path.relative_to(PROJECT_ROOT)),
@@ -158,13 +158,12 @@ def check_model_freshness() -> dict:
     return results
 
 def main():
-    print_section(f"TRACK RECORD STATUS — {datetime.now(timezone.utc).isoformat()}")
+    print_section(f"TRACK RECORD STATUS — {datetime.now(UTC).isoformat()}")
     
     # 1. Adaptive Learner Gates
     print_section("1. ADAPTIVE LEARNER VALIDATION GATES")
     learner = get_meta_learner()
     if learner:
-        adaptive_state = load_adaptive_state()
         print_kv("State File Exists", ADAPTIVE_STATE_PATH.exists())
         print_kv("Total Samples (all regimes)", learner.sample_count)
         print_kv("Min Trades Before Live", settings.ADAPTIVE_MIN_TRADES_BEFORE_LIVE)

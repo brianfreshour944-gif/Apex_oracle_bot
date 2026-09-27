@@ -19,7 +19,6 @@ os.environ.setdefault("ALPACA_SECRET_KEY", "test")
 # ── 1. NaN handling in sentiment_analyzer.py ─────────────────────────
 def test_sentiment_analyzer_nan_clamping():
     """NaN/Inf sentiment scores must be clamped to safe defaults, not +1.0."""
-    from src.sentiment_analyzer import _heuristic_fallback
 
     # Simulate a corrupted LLM response that returns NaN values.
     # Before the fix, max(-1.0, min(1.0, NaN)) would silently produce +1.0
@@ -121,7 +120,6 @@ def test_transformer_brain_asyncio_import():
 def test_transformer_brain_asyncio_to_thread_reachable():
     """Verify asyncio.to_thread is used in the outer transformer_brain scope
     (not only inside _do_inference)."""
-    import ast
 
     tb_path = os.path.join(os.path.dirname(__file__), "..", "src", "committee", "transformer_brain.py")
     with open(tb_path) as f:

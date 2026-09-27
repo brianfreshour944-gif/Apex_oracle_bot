@@ -1,8 +1,9 @@
-import ast, os
+import ast
+import os
 
 ROOT = r"C:\TradingBots\Apex_oracle_bot-main"
 unresolved = {}
-for dirpath, dirnames, filenames in os.walk(ROOT):
+for dirpath, _dirnames, filenames in os.walk(ROOT):
     if "__pycache__" in dirpath or ".venv" in dirpath or ".git" in dirpath:
         continue
     for fn in filenames:

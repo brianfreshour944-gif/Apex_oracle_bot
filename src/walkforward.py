@@ -4,10 +4,10 @@ Provides tools for robust strategy validation using walk-forward analysis
 (purged K-fold cross-validation) instead of single train/test splits.
 """
 
-import asyncio
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
-from typing import Any, Callable, List, Optional
+from typing import Any
 
 import numpy as np
 import polars as pl
@@ -28,7 +28,7 @@ class WalkForwardWindow:
     train_bars: pl.DataFrame
     test_bars: pl.DataFrame
     index: int
-    
+
     def __post_init__(self):
         self.duration_train = (self.train_end - self.train_start).days
         self.duration_test = (self.test_end - self.test_start).days
@@ -37,22 +37,22 @@ class WalkForwardWindow:
 @dataclass
 class WalkForwardResult:
     """Results from a walk-forward validation run."""
-    windows: List[BacktestResult] = field(default_factory=list)
-    metrics_per_window: List[dict] = field(default_factory=list)
+    windows: list[BacktestResult] = field(default_factory=list)
+    metrics_per_window: list[dict] = field(default_factory=list)
     aggregated_metrics: dict = field(default_factory=dict)
     parameter_stability: dict = field(default_factory=dict)
-    
+
     def compute_aggregated_metrics(self) -> dict:
         """Compute aggregated statistics across all windows."""
         if not self.windows:
             return {}
-        
+
         returns = [w.total_return_pct for w in self.windows]
         sharpes = [w.sharpe for w in self.windows if w.sharpe != 0]
         max_dds = [w.max_drawdown_pct for w in self.windows]
         win_rates = [w.win_rate for w in self.windows if w.n_trades > 0]
         n_trades = [w.n_trades for w in self.windows]
-        
+
         metrics = {
             "n_windows": len(self.windows),
             "total_return_pct": {
@@ -86,7 +86,7 @@ class WalkForwardResult:
                 "pct_windows_dd_lt_10": float(np.sum(np.array(max_dds) > -10.0) / len(max_dds) * 100),
             }
         }
-        
+
         self.aggregated_metrics = metrics
         return metrics
 
@@ -94,13 +94,13 @@ class WalkForwardResult:
 class WalkForwardValidator:
     """
     Walk-forward validator using purged K-fold cross-validation.
-    
+
     Key features:
     - Purging: Gap between train and test to prevent data leakage
     - Embargo: Additional gap after test to prevent forward-looking bias
     - Anchored vs sliding: Anchored keeps train start fixed, sliding moves both
     """
-    
+
     def __init__(
         self,
         n_splits: int = 5,
@@ -125,19 +125,19 @@ class WalkForwardValidator:
         self.anchored = anchored
         self.min_train_days = min_train_days
         self.min_test_days = min_test_days
-    
+
     def create_windows(
         self,
         bars: pl.DataFrame,
         date_col: str = "t",
-    ) -> List[WalkForwardWindow]:
+    ) -> list[WalkForwardWindow]:
         """
         Create walk-forward windows from bar data.
-        
+
         Args:
             bars: DataFrame with timestamp column
             date_col: Name of timestamp column
-            
+
         Returns:
             List of WalkForwardWindow objects
         """
@@ -147,42 +147,45 @@ class WalkForwardValidator:
             dates = [datetime.fromisoformat(ts.replace('Z', '+00:00')) for ts in timestamps]
         else:
             dates = timestamps
-        
+
         start_date = dates[0]
         end_date = dates[-1]
         total_days = (end_date - start_date).days
-        
+
         if total_days < self.min_train_days + self.min_test_days:
             raise ValueError(f"Insufficient data: {total_days} days < min required {self.min_train_days + self.min_test_days}")
-        
+
         # Calculate window sizes
         test_window_days = max(self.min_test_days, total_days // (self.n_splits + 1))
         purge_days = int(test_window_days * self.purge_pct)
         embargo_days = int(test_window_days * self.embargo_pct)
-        
+        # Embargo widens the train/test gap beyond the purge. The class
+        # docstring advertises it, but it was previously computed and then
+        # discarded (the gap used purge_days alone), so the forward-looking
+        # bias it is meant to prevent was not actually guarded against.
+        gap_days = purge_days + embargo_days
+
         windows = []
-        
+
         if self.anchored:
             # Anchored: train start fixed, train end expands
             train_start = start_date
             for i in range(self.n_splits):
                 test_start = start_date + timedelta(days=self.min_train_days + i * test_window_days)
                 test_end = test_start + timedelta(days=test_window_days)
-                train_end = test_start - timedelta(days=purge_days)
-                
+                train_end = test_start - timedelta(days=gap_days)
+
                 if test_end > end_date:
                     test_end = end_date
                     test_start = test_end - timedelta(days=test_window_days)
-                
-                # Apply embargo
-                embargo_end = test_end + timedelta(days=embargo_days)
-                
+
+
                 train_mask = (pl.col(date_col) >= train_start) & (pl.col(date_col) < train_end)
                 test_mask = (pl.col(date_col) >= test_start) & (pl.col(date_col) < test_end)
-                
+
                 train_bars = bars.filter(train_mask)
                 test_bars = bars.filter(test_mask)
-                
+
                 if len(train_bars) >= self.min_train_days and len(test_bars) >= self.min_test_days:
                     windows.append(WalkForwardWindow(
                         train_start=train_start,
@@ -195,23 +198,22 @@ class WalkForwardValidator:
                     ))
         else:
             # Sliding: both train and test windows slide forward
-            window_total = test_window_days + self.min_train_days
             for i in range(self.n_splits):
                 window_start = start_date + timedelta(days=i * test_window_days)
                 train_start = window_start
-                train_end = train_start + timedelta(days=self.min_train_days) - timedelta(days=purge_days)
-                test_start = train_end + timedelta(days=purge_days)
+                train_end = train_start + timedelta(days=self.min_train_days) - timedelta(days=gap_days)
+                test_start = train_end + timedelta(days=gap_days)
                 test_end = test_start + timedelta(days=test_window_days)
-                
+
                 if test_end > end_date:
                     break
-                
+
                 train_mask = (pl.col(date_col) >= train_start) & (pl.col(date_col) < train_end)
                 test_mask = (pl.col(date_col) >= test_start) & (pl.col(date_col) < test_end)
-                
+
                 train_bars = bars.filter(train_mask)
                 test_bars = bars.filter(test_mask)
-                
+
                 if len(train_bars) >= self.min_train_days and len(test_bars) >= self.min_test_days:
                     windows.append(WalkForwardWindow(
                         train_start=train_start,
@@ -222,7 +224,7 @@ class WalkForwardValidator:
                         test_bars=test_bars,
                         index=i,
                     ))
-        
+
         logger.info(f"Created {len(windows)} walk-forward windows (anchored={self.anchored})")
         return windows
 
@@ -239,7 +241,7 @@ async def run_walkforward_validation(
 ) -> WalkForwardResult:
     """
     Run walk-forward validation for a symbol.
-    
+
     Args:
         symbol: Trading symbol
         bars: Historical OHLCV data
@@ -249,41 +251,41 @@ async def run_walkforward_validation(
         anchored: Use anchored (expanding) or sliding windows
         backtest_params: Additional params passed to run_backtest()
         progress_callback: Optional callback(window_idx, n_windows, result) for progress
-        
+
     Returns:
         WalkForwardResult with all window results and aggregated metrics
     """
     if backtest_params is None:
         backtest_params = {}
-    
+
     validator = WalkForwardValidator(
         n_splits=n_splits,
         purge_pct=purge_pct,
         embargo_pct=embargo_pct,
         anchored=anchored,
     )
-    
+
     windows = validator.create_windows(bars)
     if not windows:
         raise ValueError("No valid walk-forward windows created")
-    
+
     result = WalkForwardResult()
-    
+
     for i, window in enumerate(windows):
         logger.info(f"Walk-forward window {i+1}/{len(windows)}: "
                    f"train={window.train_start.date()} to {window.train_end.date()}, "
                    f"test={window.test_start.date()} to {window.test_end.date()}")
-        
+
         # Run backtest on test window
         bt_result = await run_backtest(
             symbol=symbol,
             bars=window.test_bars,
             **backtest_params,
         )
-        
+
         bt_result.n_trades = len(bt_result.trades)  # Ensure it's set
         result.windows.append(bt_result)
-        
+
         # Store window metrics
         result.metrics_per_window.append({
             "window": i,
@@ -299,10 +301,10 @@ async def run_walkforward_validation(
             "win_rate": bt_result.win_rate,
             "n_trades": bt_result.n_trades,
         })
-        
+
         if progress_callback:
             await progress_callback(i + 1, len(windows), bt_result)
-    
+
     result.compute_aggregated_metrics()
     return result
 
@@ -312,43 +314,43 @@ def print_walkforward_summary(result: WalkForwardResult) -> None:
     print("\n" + "=" * 80)
     print("WALK-FORWARD VALIDATION SUMMARY")
     print("=" * 80)
-    
+
     if not result.windows:
         print("No windows completed")
         return
-    
+
     agg = result.aggregated_metrics
     print(f"\nWindows: {agg['n_windows']}")
     print(f"Total Trades: {agg['n_trades_per_window']['total']}")
     print(f"Avg Trades/Window: {agg['n_trades_per_window']['mean']:.1f}")
-    
-    print(f"\n--- Returns ---")
+
+    print("\n--- Returns ---")
     ret = agg['total_return_pct']
     print(f"  Mean: {ret['mean']:.2f}%  Std: {ret['std']:.2f}%  Median: {ret['median']:.2f}%")
     print(f"  Range: [{ret['min']:.2f}%, {ret['max']:.2f}%]")
-    
-    print(f"\n--- Sharpe ---")
+
+    print("\n--- Sharpe ---")
     shp = agg['sharpe']
     print(f"  Mean: {shp['mean']:.3f}  Std: {shp['std']:.3f}  Median: {shp['median']:.3f}")
-    
-    print(f"\n--- Max Drawdown ---")
+
+    print("\n--- Max Drawdown ---")
     dd = agg['max_drawdown_pct']
     print(f"  Mean: {dd['mean']:.2f}%  Std: {dd['std']:.2f}%  Worst: {dd['worst']:.2f}%")
-    
-    print(f"\n--- Win Rate ---")
+
+    print("\n--- Win Rate ---")
     wr = agg['win_rate_pct']
     print(f"  Mean: {wr['mean']:.1f}%  Std: {wr['std']:.1f}%")
-    
-    print(f"\n--- Consistency ---")
+
+    print("\n--- Consistency ---")
     cons = agg['consistency']
     print(f"  % Positive Windows: {cons['pct_positive_windows']:.1f}%")
     print(f"  % Windows Sharpe > 1: {cons['pct_windows_sharpe_gt_1']:.1f}%")
     print(f"  % Windows DD < 10%: {cons['pct_windows_dd_lt_10']:.1f}%")
-    
-    print(f"\n--- Per-Window Details ---")
+
+    print("\n--- Per-Window Details ---")
     for wm in result.metrics_per_window:
         print(f"  W{wm['window']}: ret={wm['total_return_pct']:.2f}%  "
               f"sharpe={wm['sharpe']:.2f}  dd={wm['max_drawdown_pct']:.2f}%  "
               f"wr={wm['win_rate']:.1f}%  trades={wm['n_trades']}")
-    
+
     print("=" * 80)

@@ -7,10 +7,12 @@ which would pass even if the gate's actual logic were broken - e.g. always
 returning allowed=True, or skipping a check. These tests exercise the real
 fail-closed behavior the gate exists to guarantee.
 """
-import pytest
+import dataclasses
 from unittest.mock import MagicMock, patch
 
-from src.committee.decision_gate import check_decision_source_gate, GateResult
+import pytest
+
+from src.committee.decision_gate import GateResult, check_decision_source_gate
 
 
 def _make_learner(sample_count=0, validated=False):
@@ -104,5 +106,5 @@ class TestDecisionSourceGate:
     def test_result_is_immutable(self):
         """GateResult is frozen - callers can't accidentally mutate a cached result."""
         result = GateResult(allowed=True, source="ppo", regime="sideways", reason="x", details={})
-        with pytest.raises(Exception):
+        with pytest.raises(dataclasses.FrozenInstanceError):
             result.allowed = False

@@ -7,13 +7,13 @@ import sys
 import threading
 import time
 from datetime import UTC, datetime
-from typing import Any, Dict
+from typing import Any
 
 import numpy as np
 from tenacity import RetryError
 
 from scripts.deployment_registry import cleanup_stale, heartbeat_process, register_process
-from src.alerting import AlertingEngine, get_alerting_engine
+from src.alerting import get_alerting_engine
 from src.api import start_fastapi_server_async
 from src.committee.transformer_brain import _model_inference_lock
 from src.config import (
@@ -26,6 +26,7 @@ from src.config import (
 from src.db import init_db
 from src.exchange import AlpacaExchange
 from src.logging_config import get_logger
+from src.persistent_state import PersistentBotState
 from src.population_trainer import get_pbt_trainer
 from src.risk import RiskManager, apply_uncertainty_scaling
 from src.strategies import TradingStrategy
@@ -527,7 +528,7 @@ class BotState:
         self._transformer_online_total_steps = 10000
         self._transformer_online_lock = threading.Lock()
 
-    def cleanup_stale_state(self, max_age_seconds: float = 3600) -> Dict[str, int]:
+    def cleanup_stale_state(self, max_age_seconds: float = 3600) -> dict[str, int]:
         """Clean up stale state entries to prevent memory leaks.
         
         Args:
@@ -619,8 +620,6 @@ def read_regime_flag():
 # One debounced writer for the whole process. The main loop calls
 # flush_crash_recovery_state() once per cycle; mutations elsewhere just set
 # the dirty flag. Never throws -- persistence problems must not block trading.
-from src.persistent_state import PersistentBotState, save_persistent_state
-
 _crash_state_writer = PersistentBotState(flush_interval=5.0)
 
 
@@ -648,6 +647,55 @@ async def flush_crash_recovery_state(force: bool = False) -> None:
             await asyncio.to_thread(_crash_state_writer.flush, snapshot)
     except Exception as e:
         logger.debug(f"Crash-recovery state flush skipped (non-fatal): {e}")
+
+
+def apply_crash_recovery_state(recovery: dict[str, Any] | None) -> dict[str, int]:
+    """Apply a persisted crash-recovery snapshot onto the live bot state.
+
+    Restores peak_prices / trailing peaks / cooldowns / position_adds and the
+    risk-manager equity/PNL baselines so trailing stops, entry cooldowns, the
+    scale-in cap, and the drawdown killswitch all survive a restart instead of
+    silently resetting. Fail-safe: never raises, returns per-key restore counts.
+    """
+    counts = {
+        "peak_prices": 0,
+        "trailing_peaks": 0,
+        "trailing_troughs": 0,
+        "cooldowns": 0,
+        "position_adds": 0,
+    }
+    if not recovery:
+        return counts
+    try:
+        if _state.risk_manager is not None:
+            if "peak_prices" in recovery:
+                _state.risk_manager.peak_prices.update(recovery["peak_prices"])
+                counts["peak_prices"] = len(recovery["peak_prices"])
+            # peak equity -- prevents drawdown reset to 0% after crash
+            # (without this, a 5% drop + crash + restart = killswitch thinks
+            #  equity is at peak and won't trip at 10% drawdown)
+            if recovery.get("risk_peak_equity", 0) > 0:
+                _state.risk_manager.peak_equity = recovery["risk_peak_equity"]
+            if "risk_daily_pnl" in recovery:
+                _state.risk_manager.daily_pnl = recovery["risk_daily_pnl"]
+            if recovery.get("risk_start_of_day_equity", 0) > 0:
+                _state.risk_manager.start_of_day_equity = recovery["risk_start_of_day_equity"]
+        if _state.strategy is not None:
+            if "trailing_peaks" in recovery:
+                _state.strategy._trailing_peaks.update(recovery["trailing_peaks"])
+                counts["trailing_peaks"] = len(recovery["trailing_peaks"])
+            if "trailing_troughs" in recovery:
+                _state.strategy._trailing_troughs.update(recovery["trailing_troughs"])
+                counts["trailing_troughs"] = len(recovery["trailing_troughs"])
+        if "cooldowns" in recovery:
+            _state.cooldowns.update(recovery["cooldowns"])
+            counts["cooldowns"] = len(recovery["cooldowns"])
+        if "position_adds" in recovery:
+            _state.position_adds.update(recovery["position_adds"])
+            counts["position_adds"] = len(recovery["position_adds"])
+    except Exception as restore_err:
+        logger.warning(f"Could not restore crash-recovery state (non-fatal): {restore_err}")
+    return counts
 
 
 async def crash_state_flush_heartbeat_loop() -> None:
@@ -714,7 +762,7 @@ async def reconcile_open_snapshots(exchange: AlpacaExchange) -> None:
       - exchange position with NO open snapshot (restart gap) -> warn.
     Fully fail-safe: any error is logged and skipped.
     """
-    from src.db import get_all_open_snapshots, close_decision_snapshot
+    from src.db import close_decision_snapshot, get_all_open_snapshots
     try:
         open_snaps = await asyncio.to_thread(get_all_open_snapshots)
     except Exception as e:
@@ -1087,7 +1135,7 @@ def _count_same_regime_open_positions(symbol: str, positions: list, strategy: Tr
     return count
 
 
-async def process_signal_for_symbol(symbol: str, current_price: float, risk_manager: RiskManager, strategy: TradingStrategy, ex: AlpacaExchange, positions: list = None, regime_flag: dict = None, banned_symbols: set = None) -> None:
+async def process_signal_for_symbol(symbol: str, current_price: float, risk_manager: RiskManager, strategy: TradingStrategy, ex: AlpacaExchange, positions: list | None = None, regime_flag: dict | None = None, banned_symbols: set | None = None) -> None:
     """Processes signal for a single symbol asynchronously."""
     # Get or create lock for this symbol
     lock = _state._symbol_locks.setdefault(symbol, asyncio.Lock())
@@ -2719,34 +2767,14 @@ async def run_trading_bot() -> None:
         # killswitch logic don't start from scratch after a crash.
         try:
             from src.persistent_state import load_persistent_state
-            recovery = load_persistent_state()
-            if recovery and _state.risk_manager is not None:
-                # Restore peak_prices
-                if "peak_prices" in recovery:
-                    _state.risk_manager.peak_prices.update(recovery["peak_prices"])
-                # Restore trailing peaks/troughs on strategy
-                if "trailing_peaks" in recovery and _state.strategy is not None:
-                    _state.strategy._trailing_peaks.update(recovery["trailing_peaks"])
-                if "trailing_troughs" in recovery and _state.strategy is not None:
-                    _state.strategy._trailing_troughs.update(recovery["trailing_troughs"])
-                # Restore cooldowns
-                if "cooldowns" in recovery:
-                    _state.cooldowns.update(recovery["cooldowns"])
-                # Restore position adds
-                if "position_adds" in recovery:
-                    _state.position_adds.update(recovery["position_adds"])
-                # Restore peak equity — prevents drawdown reset to 0% after crash
-                # (without this, a 5% drop + crash + restart = killswitch thinks
-                #  equity is at peak and won't trip at 10% drawdown)
-                if "risk_peak_equity" in recovery and recovery["risk_peak_equity"] > 0:
-                    _state.risk_manager.peak_equity = recovery["risk_peak_equity"]
-                if "risk_daily_pnl" in recovery:
-                    _state.risk_manager.daily_pnl = recovery["risk_daily_pnl"]
-                if "risk_start_of_day_equity" in recovery and recovery["risk_start_of_day_equity"] > 0:
-                    _state.risk_manager.start_of_day_equity = recovery["risk_start_of_day_equity"]
-                logger.info(f"Restored crash-recovery state: peak_equity={_state.risk_manager.peak_equity:.2f}, "
-                           f"{len(recovery.get('peak_prices', {}))} peak prices, "
-                           f"{len(recovery.get('cooldowns', {}))} cooldowns restored")
+            counts = apply_crash_recovery_state(load_persistent_state())
+            logger.info(
+                f"Restored crash-recovery state: "
+                f"peak_equity={_state.risk_manager.peak_equity:.2f}, "
+                f"{counts['peak_prices']} peak prices, "
+                f"{counts['cooldowns']} cooldowns, "
+                f"{counts['position_adds']} position_adds restored"
+            )
         except Exception as restore_err:
             logger.warning(f"Could not restore crash-recovery state (non-fatal): {restore_err}")
 
@@ -3060,7 +3088,7 @@ async def run_trading_bot() -> None:
                 except Exception as ord_e:
                     logger.debug(f"[MAIN_LOOP] Error fetching open orders (non-fatal): {ord_e}")
 
-                for symbol, bar_result in zip(settings.SYMBOLS, bar_results):
+                for symbol, bar_result in zip(settings.SYMBOLS, bar_results, strict=False):
                     try:
                         if isinstance(bar_result, Exception):
                             logger.error(f"[MAIN_LOOP] Error fetching bar for {symbol}: {bar_result}")

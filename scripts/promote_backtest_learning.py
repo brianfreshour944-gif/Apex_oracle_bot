@@ -51,7 +51,7 @@ from datetime import datetime
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from src.committee.adaptive_meta import AdaptiveMetaLearner, BRAINS
+from src.committee.adaptive_meta import BRAINS, AdaptiveMetaLearner
 from src.logging_config import get_logger
 
 logger = get_logger("promote_backtest_learning")

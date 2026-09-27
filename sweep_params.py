@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Apex Oracle Bot – Multi-Parameter Sweep Optimizer
+Apex Oracle Bot - Multi-Parameter Sweep Optimizer
 =================================================
 Performs a grid search across key strategy parameters:
   - Max Hold Hours (8h, 16h, 24h, 48h)
@@ -10,13 +10,10 @@ Performs a grid search across key strategy parameters:
 Goal: Find a parameter set that avoids the drawdown killswitch and achieves positive return.
 """
 
-import sys
 import io
+import sys
 import warnings
-from datetime import datetime
-from collections import defaultdict
 from dataclasses import dataclass
-from typing import Optional
 
 import numpy as np
 import pandas as pd
@@ -56,21 +53,21 @@ def hurst(prices, ml=20):
         if len(v) < ml * 2:
             return 0.5
         lags = range(2, ml)
-        vrs = [np.var(v[l:] - v[:-l]) for l in lags]
+        vrs = [np.var(v[lag:] - v[:-lag]) for lag in lags]
         vi = [i for i, x in enumerate(vrs) if x > 0]
         if len(vi) < 3:
             return 0.5
         p = np.polyfit(np.log([lags[i] for i in vi]), np.log([vrs[i] for i in vi]), 1)
         return float(np.clip(p[0]/2, 0, 1))
-    except:
+    except Exception:
         return 0.5
 
 def rsi(p, per=14):
     d = p.diff()
     g = d.clip(lower=0)
-    l = -d.clip(upper=0)
+    loss = -d.clip(upper=0)
     ag = g.rolling(per, min_periods=per).mean()
-    al = l.rolling(per, min_periods=per).mean()
+    al = loss.rolling(per, min_periods=per).mean()
     rs = ag / al.replace(0, np.nan)
     return (100 - 100 / (1 + rs)).fillna(50.0)
 
@@ -313,13 +310,13 @@ def run_simulation(data, max_hold_h, stop_loss_pct, profit_target_pct):
 
     pnls = [c["pp"] for c in comp]
     w = [p for p in pnls if p > 0]
-    l = [p for p in pnls if p <= 0]
+    losses = [p for p in pnls if p <= 0]
     edf = pd.DataFrame(eq_curve)
     ret = (edf["eq"].iloc[-1] - ACCOUNT_BASE) / ACCOUNT_BASE * 100 if len(edf) > 0 else 0.0
     pk2 = edf["eq"].cummax()
     mdd = ((edf["eq"] - pk2) / pk2 * 100).min()
     gp = sum(w) if w else 0
-    gl = abs(sum(l)) if l else 0
+    gl = abs(sum(losses)) if losses else 0
     pf = gp / gl if gl > 0 else (float("inf") if gp > 0 else 0)
     n = len(comp)
 

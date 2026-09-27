@@ -7,26 +7,27 @@ recorded during actual backtesting/live trading. Continuously fine-tunes the
 Grok GQA model using experience replay.
 """
 
+import asyncio
+import json
 import os
 import sys
-import json
-import torch
-import torch.nn as nn
-import torch.optim as optim
-from torch.utils.data import Dataset, DataLoader
-import numpy as np
-import asyncio
-import joblib
-import polars as pl
-import yfinance as yf
 import traceback
 from collections import Counter
 
+import joblib
+import numpy as np
+import polars as pl
+import torch
+import torch.nn as nn
+import torch.optim as optim
+import yfinance as yf
+from torch.utils.data import DataLoader, Dataset
+
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
-from src.committee.transformer_brain import GrokGQA_Transformer, set_ml_predictor_override, reset_ml_predictor
 from src.backtest import run_backtest
-from src.walkforward import run_walkforward_validation
+from src.committee.transformer_brain import GrokGQA_Transformer, reset_ml_predictor, set_ml_predictor_override
 from src.logging_config import get_logger, set_correlation_id
+from src.walkforward import run_walkforward_validation
 
 logger = get_logger("transformer_replay")
 
@@ -47,7 +48,7 @@ class ReplayBufferDataset(Dataset):
         self.labels = []
         for data_path in data_paths:
             if os.path.exists(data_path):
-                with open(data_path, "r") as f:
+                with open(data_path) as f:
                     lines = f.readlines()
                     # Keep only the last `max_size_per_file` trades
                     for line in lines[-max_size_per_file:]:
@@ -57,7 +58,7 @@ class ReplayBufferDataset(Dataset):
                             label = float(record["label"])
                             self.samples.append((tensor_state, label))
                             self.labels.append(label)
-                        except Exception as e:
+                        except Exception:
                             pass
                              
     def __len__(self):
@@ -251,7 +252,7 @@ def retrain_model() -> int:
         champ_embed = 128
         if os.path.exists(config_path):
             import json
-            with open(config_path, "r") as f:
+            with open(config_path) as f:
                 arch = json.load(f)
                 champ_layers = arch.get("num_layers", 4)
                 champ_embed = arch.get("embed_dim", 128)

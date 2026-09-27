@@ -1,7 +1,8 @@
 """Integration test: verify regime detection, signals, and risk logic actually work with synthetic data."""
 
-import sys
 import os
+import sys
+
 import numpy as np
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
@@ -28,13 +29,10 @@ def test_regime_detection_works():
     assert 0.0 <= h_m <= 1.0, "mr hurst out of range"
     # They should differ meaningfully (not both 0.5 / not both neutral)
     assert abs(h_t - h_m) > 0.05, f"Hurst values too similar: {h_t} vs {h_m}"
-    print("Regime detection produces distinct, valid Hurst values - NOT always neutral.")
-    return True
 
 def test_price_based_exits():
     """Prove stop-loss / profit-target exits fire."""
     from src.strategies import TradingStrategy
-    from src.config import settings
 
     strat = TradingStrategy(None)
 
@@ -51,26 +49,60 @@ def test_price_based_exits():
     print(f"Profit-target signal: {sig2}")
     assert sig2 is not None and sig2["action"] == "close", "profit target did not fire"
     assert sig2["reason"] == "profit_target_reached"
-    print("Price-based exits (stop loss + profit target) fire correctly.")
-    return True
 
-def test_risk_limits_scaled():
-    """Prove daily loss / portfolio caps scale to equity, not *1000."""
+def test_max_hold_fires_for_alternate_entry_time_keys():
+    """Max-hold exit must work for every entry-time key an exchange might emit."""
+    from datetime import UTC, datetime, timedelta
+
+    from src.config import settings
+    from src.strategies import TradingStrategy
+
+    strat = TradingStrategy(exchange=None)
+    held = datetime.now(UTC) - timedelta(hours=settings.MAX_HOLD_HOURS + 100)
+    base = {"symbol": "BTC/USD", "qty": "1.0", "avg_entry_price": "100.0"}
+
+    for key, value in (
+        ("created_at", held.isoformat()),
+        ("entry_time", held.isoformat()),
+        ("opened_at", held.isoformat()),
+        ("created_at", held.timestamp()),
+    ):
+        pos = dict(base, **{key: value})
+        sig = strat._check_price_based_exits("BTC/USD", 100.0, pos)
+        assert sig is not None, f"max-hold did not fire for {key}={value!r}"
+        assert sig["reason"] == "max_hold_time_exceeded", sig
+
+    # A fresh position must NOT be force-closed.
+    fresh = dict(base, entry_time=datetime.now(UTC).isoformat())
+    assert strat._check_price_based_exits("BTC/USD", 100.0, fresh) is None
+
+async def test_risk_limits_scaled():
+    """Prove the daily loss killswitch scales to actual equity, not a *1000 base."""
+    from src.config import settings
     from src.risk import RiskManager
 
-    # Fake exchange
     class FakeEx:
+        def __init__(self, equity: float):
+            self._equity = equity
+
         async def get_account(self):
-            return {"equity": 10000.0, "cash": 5000.0, "portfolio_value": 10000.0}
+            return {"equity": self._equity, "cash": self._equity, "portfolio_value": self._equity}
+
         async def get_positions(self):
             return []
 
-    rm = RiskManager(FakeEx())
-    # daily loss limit is -3% of 10000 = -300
-    daily_abs = -3.0 / 100.0 * 10000.0
-    assert abs(daily_abs - (-300.0)) < 0.01, f"daily limit wrong: {daily_abs}"
-    print(f"Daily loss limit correctly scaled to equity: ${daily_abs:.2f} (not *1000)")
-    return True
+    equity = 10000.0
+    rm = RiskManager(FakeEx(equity))
+    # First call establishes the start-of-day equity baseline; the second call
+    # applies a loss that breaches the configured percentage of equity and must
+    # trip the killswitch. -4% is beyond the default -3% limit but nowhere near
+    # the $-1000+ a hard-coded *1000 base would have required.
+    await rm.update_account_status(account={"equity": equity, "cash": 0.0, "portfolio_value": equity})
+    loss = settings.DAILY_LOSS_LIMIT / 100.0 * equity - 100.0
+    status = await rm.update_account_status(account={"equity": equity + loss, "cash": 0.0, "portfolio_value": equity + loss})
+    assert status["status"] == "killswitch_activated", f"daily loss limit did not trip: {status}"
+    assert status["reason"] == "daily_loss_limit_exceeded", status
+    assert abs(status["daily_pnl"] - loss) < 0.01, f"daily_pnl wrong: {status['daily_pnl']} vs {loss}"
 
 if __name__ == "__main__":
     print("=" * 60)
@@ -81,7 +113,7 @@ if __name__ == "__main__":
         test_regime_detection_works()
         test_price_based_exits()
         test_risk_limits_scaled()
-    except Exception as e:
+    except Exception:
         ok = False
         import traceback
         traceback.print_exc()

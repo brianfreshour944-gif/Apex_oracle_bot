@@ -1,19 +1,20 @@
 """Integration tests for the full trading loop."""
 
 import asyncio
-import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
-import sys
 import os
+import sys
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
 
 # Add src to path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
-from src.committee.models import BrainVote
-from src.bot import run_trading_bot, process_signal_for_symbol
+from src.bot import process_signal_for_symbol
 from src.committee.committee import run_committee
-from src.risk import RiskManager
+from src.committee.models import BrainVote
 from src.exchange import AlpacaExchange
+from src.risk import RiskManager
 from src.strategies import TradingStrategy
 
 
@@ -96,25 +97,10 @@ class TestFullTradingLoop:
     @pytest.mark.asyncio
     async def test_full_buy_signal_flow(self, mock_exchange, mock_strategy, mock_risk_manager):
         """Test complete buy signal processing flow."""
-        from src.bot import process_signal_for_symbol
         
         # Setup mock bar data
-        import polars as pl
         import pandas as pd
-        import numpy as np
-        
-        dates = pd.date_range("2024-01-01", periods=100, freq="1h")
-        closes = np.cumsum(np.random.randn(100) * 10) + 50000
-        bars_df = pl.DataFrame({
-            "t": dates,
-            "open": closes + np.random.randn(100) * 5,
-            "high": np.abs(np.random.randn(100) * 10) + closes + 10,
-            "low": np.abs(np.random.randn(100) * 10) + closes - 10,
-            "close": closes,
-            "volume": np.abs(np.random.randn(100) * 1000) + 100,
-            "vwap": closes,
-            "trade_count": np.ones(100) * 100
-        })
+        import polars as pl
         
         mock_exchange.get_latest_bar = AsyncMock(return_value=pl.DataFrame({
             "t": [pd.Timestamp.now(tz="UTC")],
@@ -158,12 +144,8 @@ class TestFullTradingLoop:
     @pytest.mark.asyncio
     async def test_close_position_flow(self, mock_exchange, mock_strategy, mock_risk_manager):
         """Test position close flow."""
-        from src.bot import process_signal_for_symbol
         
         # Setup existing position
-        import polars as pl
-        import pandas as pd
-        import numpy as np
         
         mock_exchange.get_positions = AsyncMock(return_value=[
             {"symbol": "BTC/USD", "qty": "0.1", "side": "long", "avg_entry_price": 50000.0, "market_value": 5000.0}
@@ -209,7 +191,6 @@ class TestFullTradingLoop:
     @pytest.mark.asyncio
     async def test_trailing_stop_trigger(self, mock_exchange, mock_strategy, mock_risk_manager):
         """Test trailing stop triggers position close."""
-        from src.bot import process_signal_for_symbol
         
         # Setup position with profit
         mock_exchange.get_positions = AsyncMock(return_value=[
@@ -263,7 +244,7 @@ class TestFullTradingLoop:
         committee/regime size multipliers upstream), with the symbol already
         at MAX_POSITION_ADDS -- and asserts the gate still vetoes the add.
         """
-        from src.bot import process_signal_for_symbol, _state
+        from src.bot import _state
 
         symbol = "BTC/USD"
         current_price = 50050.0
@@ -305,7 +286,6 @@ class TestCommitteeErrorHandling:
     @pytest.mark.asyncio
     async def test_committee_single_brain_failure(self):
         """Test committee handles single brain failure gracefully."""
-        from src.committee.committee import run_committee
         
         signal = {
             "action": "buy",
@@ -329,7 +309,7 @@ class TestCommitteeErrorHandling:
                         with patch("src.committee.committee.llm_brain", return_value=AsyncMock(return_value=BrainVote(
                             name="llm", action="hold", confidence=0.5, weight=0.1, regime="trending", reason="test"
                         ))):
-                            result = await run_committee("BTC/USD", 50000.0, {"action": "buy", "regime": "trending", "features": {}})
+                            result = await run_committee("BTC/USD", 50000.0, signal)
                             
                             # Should still produce result despite one brain failing
                             assert result.action in ["buy", "sell", "hold", "stand_aside"]
@@ -341,8 +321,8 @@ class TestRiskManagerRaceConditions:
     @pytest.mark.asyncio
     async def test_concurrent_exposure_reservation(self):
         """Test concurrent exposure reservations don't exceed limit."""
-        from src.risk import RiskManager
         from src.exchange import AlpacaExchange
+        from src.risk import RiskManager
         
         mock_exchange = AsyncMock(spec=AlpacaExchange)
         mock_exchange.get_account = AsyncMock(return_value={
@@ -371,22 +351,33 @@ class TestGracefulShutdown:
 
     @pytest.mark.asyncio
     async def test_shutdown_cancels_background_tasks(self):
-        """Verify shutdown cancels all background tasks."""
-        from src.bot import _state
-        
-        # Add some mock tasks
+        """Verify shutdown cancels all registered background tasks."""
+        import src.bot as bot_mod
+
+        state = bot_mod.BotState()
+        cancelled = []
+
         async def dummy_task():
             try:
                 await asyncio.sleep(10)
             except asyncio.CancelledError:
+                cancelled.append(True)
                 raise
-        
-        task1 = asyncio.create_task(dummy_task())
-        task2 = asyncio.create_task(dummy_task())
-        
-        # Simulate shutdown
-        # This would be tested via BotState.shutdown()
-        assert True  # Placeholder
+
+        state.add_background_task(asyncio.create_task(dummy_task()))
+        state.add_background_task(asyncio.create_task(dummy_task()))
+        assert len(state._background_tasks) == 2
+
+        # Let both tasks actually start (and park in sleep) before shutdown,
+        # otherwise they're cancelled before their first step and the
+        # CancelledError handler never runs.
+        await asyncio.sleep(0.01)
+
+        await state.shutdown()
+
+        # Both tasks must have observed cancellation and been drained.
+        assert len(cancelled) == 2
+        assert not state._background_tasks
 
 
 class TestSameRegimePositionCounting:

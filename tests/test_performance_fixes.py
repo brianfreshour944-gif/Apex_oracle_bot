@@ -3,21 +3,21 @@
 These tests ensure the event-loop-blocking / redundant-call / memory-leak
 fixes from the performance audit are not silently regressed by later edits.
 """
-import pytest
-import asyncio
-import time
-import os
-import sys
-import inspect
 import ast
-from unittest.mock import Mock, patch, AsyncMock
+import asyncio
+import inspect
+import os
+import time
+from unittest.mock import AsyncMock, Mock, patch
+
+import pytest
 
 # Must be set BEFORE importing src.bot (which reads settings at import time)
 os.environ.setdefault("ALPACA_API_KEY", "test_key_dummy")
 os.environ.setdefault("ALPACA_SECRET_KEY", "test_secret_dummy")
 os.environ.setdefault("DATABASE_URL", "sqlite:///./tmp_perf_test.db")
 
-from src.db import init_db, save_decision_snapshot, get_open_snapshot, close_decision_snapshot, DecisionSnapshot
+from src.db import init_db, save_decision_snapshot
 from src.risk import RiskManager
 
 
@@ -66,7 +66,7 @@ class TestRedundantAPICalls:
             return await asyncio.gather(*tasks)
 
         t0 = time.perf_counter()
-        results = asyncio.run(run_concurrent())
+        asyncio.run(run_concurrent())
         elapsed = time.perf_counter() - t0
 
         # Should complete in well under 1 second (was ~2.85s with lock serialization)
@@ -136,8 +136,9 @@ class TestDBIndex:
     (symbol, status) so get_open_snapshot does not full-scan."""
 
     def test_symbol_status_index_exists(self, fresh_db):
-        from src.db import get_engine
         from sqlalchemy import text
+
+        from src.db import get_engine
         with get_engine().connect() as conn:
             indexes = conn.execute(text("PRAGMA index_list('decision_snapshots')")).fetchall()
             names = [row[1] for row in indexes]
@@ -145,8 +146,9 @@ class TestDBIndex:
                 f"Expected an index on (symbol, status) on decision_snapshots, got: {names}"
 
     def test_shadow_trade_index_exists(self, fresh_db):
-        from src.db import get_engine
         from sqlalchemy import text
+
+        from src.db import get_engine
         with get_engine().connect() as conn:
             indexes = conn.execute(text("PRAGMA index_list('shadow_trades')")).fetchall()
             names = [row[1] for row in indexes]
@@ -162,7 +164,7 @@ class TestShadowArenaNoCreateAllPerCall:
     def test_no_runtime_create_all(self):
         import src.shadow_arena as sa
         src_path = inspect.getsourcefile(sa)
-        with open(src_path, "r") as f:
+        with open(src_path) as f:
             tree = ast.parse(f.read())
 
         create_all_calls = []

@@ -1,9 +1,12 @@
 import asyncio
+
 import polars as pl
 import yfinance as yf
-from src.backtest import BacktestExchange, print_backtest_summary, BacktestResult, BacktestTrade
-from src.strategies import TradingStrategy
+
+from src.backtest import BacktestExchange, BacktestResult, BacktestTrade, print_backtest_summary
 from src.risk import RiskManager
+from src.strategies import TradingStrategy
+
 
 class LiveBacktestExchange(BacktestExchange):
     def __init__(self, bars):

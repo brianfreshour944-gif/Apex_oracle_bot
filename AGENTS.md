@@ -132,6 +132,35 @@ Residual risks: <summary or NONE>
 Use `NEEDS_HUMAN_REVIEW` for high-stakes files, live/paper uncertainty, missing evidence,
 or any condition requiring user approval. A fixer may not self-approve.
 
+## Lint and hygiene policy
+
+`ruff` must report `All checks passed!` over the whole repo before a change is
+considered verified. Two rules have deliberate, scoped exemptions that live in
+`pyproject.toml` rather than inline `noqa`s:
+
+- `E402` (imports not at top) is ignored for entry-point scripts (`audit_*.py`,
+  `verify_*.py`, `run_*.py`, `scripts/*`, `scan_learning.py`, `kaggle_llm_pipeline/*`).
+  Each bootstraps the repo root onto `sys.path` before importing `src`, so the late
+  imports are intentional. Importable `src/` modules must keep imports at the top.
+- `T201` (print) is ignored only for the console-output surfaces listed in the config.
+
+Do not silence a rule by widening these globs. Fix the real issue, or add a targeted
+inline `noqa` with a one-line justification (e.g. the import-for-side-effect check in
+`scripts/sync_kaggle.py`). Removing a `noqa` that is no longer needed matters too:
+`RUF100` flags stale directives.
+
+Tracked-but-ignored artifacts: several large generated files are both
+`.gitignore`d and tracked on purpose (`data/*.jsonl`, `models/*.pth|pkl`,
+`models/transformer_config.json`). Do not `git rm --cached` them. The
+tracked copies are part of the deployed state — the bot and its nightly
+learning pipeline expect `data/live_experiences.jsonl` and
+`data/historical_experiences.jsonl` to exist at runtime, and
+`tests/test_weekly_analyzer_bans.py` asserts it. Untracking records a
+deletion that a fresh checkout will apply, silently removing the file.
+If an artifact truly must leave the index, confirm with the user first and
+add a source-controlled seed/regeneration path so a clean checkout still
+satisfies the runtime and test expectations.
+
 ## OpenCode operation
 
 Use the project-defined `apex-manager` as the primary agent. In OpenCode, select it with

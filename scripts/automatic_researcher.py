@@ -5,17 +5,17 @@ It compares them to the baseline (current settings) and generates a report
 of statistically significant improvements.
 """
 
-import sys
-import os
 import asyncio
 import itertools
+import os
+import sys
 from datetime import datetime
-from typing import Dict, Any, List
+from typing import Any
 
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 
+from src.backtest import BacktestResult, run_backtest
 from src.config import settings
-from src.backtest import run_backtest, BacktestResult
 from src.logging_config import get_logger
 
 logger = get_logger("automatic_researcher")
@@ -34,7 +34,7 @@ MIN_SHARPE_IMPROVEMENT_PCT = 10.0  # Must improve Sharpe by 10%
 MIN_RETURN_IMPROVEMENT_PCT = 5.0   # Must improve total return by 5%
 
 
-async def run_experiment(symbol: str, config: Dict[str, Any], seed: int = 42) -> BacktestResult:
+async def run_experiment(symbol: str, config: dict[str, Any], seed: int = 42) -> BacktestResult:
     """Run a backtest with temporary settings."""
     # Store originals
     originals = {}
@@ -83,8 +83,8 @@ async def main() -> int:
     
     significant_improvements = []
     
-    for i, p in enumerate(permutations):
-        config = dict(zip(keys, p))
+    for p in permutations:
+        config = dict(zip(keys, p, strict=False))
         
         # Skip evaluating the exact baseline
         if config == baseline_config:

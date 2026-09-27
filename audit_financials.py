@@ -1,10 +1,10 @@
 """Financial correctness audit: every dollar figure vs hand-calculated expected values.
 Run: python audit_financials.py
 """
-import math
 from decimal import Decimal
-from src.risk import RiskManager, DEFAULT_TX_COSTS
+
 from src.config import settings
+from src.risk import RiskManager
 from src.strategies import TradingStrategy
 
 print(f"Config: BASE_RISK_PERCENT={settings.BASE_RISK_PERCENT} STOP_LOSS_PCT={settings.STOP_LOSS_PCT} "
@@ -52,12 +52,20 @@ check("sizing w/ ATR: qty", round(min(eff_risk / 200.0, settings.MAX_SINGLE_TRAD
 
 # ── 2. PnL — scale-in (multiple entries), via the FIXED _record_committee_outcome
 print("\n(2) PnL: scale-in position, entry1 100@0.05, add @110@0.05 (fill), exit fill 120")
-import src.db as db, asyncio as aio, os
+import asyncio as aio
+import os
+
 import src.bot as bot_mod
+import src.db as db
+
 settings.DATABASE_URL = "sqlite:///data/audit_fin.db"
-db._open_snapshot_cache.clear(); db._tables_ensured = False; db._engine = None
-try: os.remove("data/audit_fin.db")
-except OSError: pass
+db._open_snapshot_cache.clear()
+db._tables_ensured = False
+db._engine = None
+try:
+    os.remove("data/audit_fin.db")
+except OSError:
+    pass
 db.init_db()
 db.save_decision_snapshot(decision_id="fin-1", symbol="SCAL/USD", regime="bull",
                           final_action="buy", confidence=0.8, size_multiplier=1.0,
@@ -68,7 +76,6 @@ db.update_decision_snapshot_position("fin-1", entry_price=(100.0*0.05 + 110.0*0.
 aio.run(bot_mod._record_committee_outcome("SCAL/USD", 120.0,
                                           exit_reason="test", entry_price=105.0,
                                           qty=0.10, commission=0.01))
-from src.db import get_closed_decision_snapshots
 snap_rows = db.get_closed_decision_snapshots()
 recorded = snap_rows[0]["realized_pnl"] if snap_rows else None
 expected = (120.0 - 105.0) * 0.10 - 0.01   # 1.49
@@ -138,6 +145,7 @@ def mkpos(sym, qty, mv): return {"symbol": sym, "qty": str(qty), "avg_entry_pric
                                  "market_value": str(mv), "unrealized_pl": "0", "unrealized_plpc": "0"}
 rm3 = RiskManager(HedgedEx([mkpos("A/USD", 30, 3000.0), mkpos("B/USD", -30, -3000.0)]))
 import asyncio
+
 hedged_positions = asyncio.run(rm3.exchange.get_positions())
 st_hedged = asyncio.run(rm3.update_account_status(positions=hedged_positions))
 hedged_blocked = st_hedged["status"] == "exposure_limit_exceeded"

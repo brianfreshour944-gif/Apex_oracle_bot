@@ -21,7 +21,6 @@ import torch.nn.functional as F
 
 from src.config import settings
 from src.logging_config import get_logger
-from .models import BrainVote
 
 from .models import BrainVote
 
@@ -462,7 +461,7 @@ async def bayesian_transformer_brain(
             res = await asyncio.to_thread(_do_inference)
             
             if res is not None:
-                prob, logit, epistemic, aleatoric, causal_reasoning_dict, tensor_state = res
+                prob, _logit, epistemic, aleatoric, causal_reasoning_dict, tensor_state = res
                 reason = f"Bayesian Ensemble prob={prob:.3f} (epi={epistemic:.4f}, alea={aleatoric:.4f})"
         except Exception as e:
             import logging

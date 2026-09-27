@@ -5,10 +5,9 @@ Run: python -m audit_check
 Exit code 0 = all checks pass, 1 = one or more checks failed.
 """
 
-import os
 import ast
+import os
 import sys
-import math
 
 FAILURES = []
 PASSES = []
@@ -25,24 +24,32 @@ def check_async_sync_mismatches():
 
     issues = []
 
-    # bot.py: all await usage on risk_manager sync methods and vice versa
+    # bot.py: risk_manager.<method> calls must be awaited iff the method is async.
+    # Derive the real sync/async split from risk.py's AST rather than a
+    # hardcoded list -- the previous hardcoded list went stale when
+    # release_reserved_exposure became async, producing false positives.
     bot_path = "src/bot.py"
     with open(bot_path) as f:
         bot_src = f.read()
 
-    # These risk methods MUST NOT be awaited (they are sync)
-    sync_risk_methods = [
-        "risk_manager.check_trailing_stop",
-        "risk_manager.calculate_position_size",
-        "risk_manager.release_reserved_exposure",
-        "risk_manager.record_fill_costs",
-    ]
-    for method in sync_risk_methods:
-        pattern = rf"await\s+{re.escape(method)}\s*\("
+    risk_async: dict[str, bool] = {}
+    risk_tree = ast.parse(open("src/risk.py").read())
+    for node in ast.walk(risk_tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            risk_async[node.name] = isinstance(node, ast.AsyncFunctionDef)
+
+    for method in sorted(risk_async):
+        pattern = rf"(await\s+)?risk_manager\.{re.escape(method)}\s*\("
         for match in re.finditer(pattern, bot_src):
-            issues.append(
-                f"bot.py: '{method}' is sync but awaited at offset {match.start()}"
-            )
+            awaited = match.group(1) is not None
+            if risk_async[method] and not awaited:
+                issues.append(
+                    f"bot.py: 'risk_manager.{method}' is async but NOT awaited at offset {match.start()}"
+                )
+            elif not risk_async[method] and awaited:
+                issues.append(
+                    f"bot.py: 'risk_manager.{method}' is sync but awaited at offset {match.start()}"
+                )
 
     # send_telegram_alert is async and MUST be awaited
     alert_calls = re.findall(
@@ -65,7 +72,6 @@ def check_async_sync_mismatches():
 
     # check_and_reserve_exposure is async and MUST be awaited
     # Use multiline-aware check: await may be on a previous line due to line wrapping
-    import re as _re
     _src_normalized = re.sub(r"\s+", " ", bot_src)
     reserve = len(re.findall(r"risk_manager\.check_and_reserve_exposure\s*\(", _src_normalized))
     await_reserve = len(re.findall(r"await\s+risk_manager\.check_and_reserve_exposure\s*\(", _src_normalized))
@@ -87,7 +93,7 @@ def check_missing_imports():
     tb_path = "src/committee/transformer_brain.py"
     with open(tb_path) as f:
         tb_src = f.read()
-        tb_tree = ast.parse(tb_source := tb_src)
+    tb_tree = ast.parse(tb_src)
 
     # Collect top-level imports
     top_level_imports = set()
@@ -98,19 +104,6 @@ def check_missing_imports():
         elif isinstance(node, ast.ImportFrom):
             for alias in node.names:
                 top_level_imports.add(alias.asname or alias.name)
-
-    # Check if asyncio is used at module / function level (not inside nested fns)
-    tb_asyncio_used_outside_nested = False
-    for node in ast.iter_child_nodes(tb_tree):
-        if isinstance(node, (ast.AsyncFunctionDef, ast.FunctionDef)):
-            for child in ast.walk(node):
-                if isinstance(child, ast.Attribute) and isinstance(child.value, ast.Name):
-                    if child.value.id == "asyncio" and child.attr == "to_thread":
-                        # Check if this is inside a nested function
-                        # Walk the tree to find if we're inside a nested function
-                        # For simplicity, check line number context
-                        if not _is_inside_nested_function(node, child):
-                            tb_asyncio_used_outside_nested = True
 
     # Simple check: is 'import asyncio' at top level?
     has_asyncio_import = "asyncio" in top_level_imports
@@ -148,17 +141,9 @@ def _is_inside_nested_function(funcdef, target_node):
 # ── 3. Global State Scoping ───────────────────────────────────────────
 def check_global_state_scoping():
     """Verify global state variables are properly scoped."""
-    issues = []
-
-    bot_path = "src/bot.py"
-    with open(bot_path) as f:
-        bot_src = f.read()
-
-    # Check if _state is defined before first use at runtime
-    # _state = BotState() at line 416
-    # _record_committee_outcome at line 54 references _state
-    # process_signal_for_symbol at line 432 references _state
-    # This is fine in Python since globals are resolved at call time, not def time
+    # _state is defined at module level in bot.py (line ~416) and referenced by
+    # _record_committee_outcome / process_signal_for_symbol. Python resolves
+    # module globals at call time, not def time, so the ordering is correct.
     check("3. Global State Scoping", True,
           "All global state properly scoped with runtime resolution. _state singleton defined at module level; _THRESHOLDS_CACHE correctly uses 'global' declaration.")
 
@@ -240,7 +225,7 @@ def check_indentation():
 
     # Parse AST to catch indentation errors
     try:
-        tree = ast.parse(source)
+        ast.parse(source)
     except IndentationError as e:
         issues.append(f"committee.py: IndentationError: {e}")
     except SyntaxError as e:
@@ -292,16 +277,9 @@ def check_circuit_breaker():
 # ── 7. Exchange create_order Error Handling ───────────────────────────
 def check_exchange_create_order():
     """Verify create_order handles errors properly."""
-    issues = []
-
-    ex_path = "src/exchange.py"
-    with open(ex_path) as f:
-        src = f.read()
-
-    # Check that create_order catches order submission failures before confirmation loop
-    # Note: @retry decorator without retry= parameter retries on ALL exceptions by default (tenacity behavior)
-    # so the order submission IS retried on any exception, not just rate limits.
-    # The exposure cleanup (release_reserved_exposure) is handled in bot.py's error handler.
+    # create_order is wrapped with @retry (retries ALL exceptions, 5 attempts
+    # with exponential backoff). Confirmation polling has try/except, and
+    # exposure cleanup is handled by the caller (bot.py line 752).
     check("7. Exchange create_order Error Handling", True,
           "create_order is wrapped with @retry (retries ALL exceptions, 5 attempts with exponential backoff). "
           "Confirmation polling has try/except. Exposure cleanup handled by caller (bot.py line 752).")

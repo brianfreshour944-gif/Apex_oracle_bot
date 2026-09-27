@@ -16,7 +16,6 @@ graceful-degradation branch the mocked failure was meant to exercise).
 Fixed to patch the function actually called, matching the same pattern
 verified by reproducing the failure before this fix and the pass after it.
 """
-import asyncio
 from unittest.mock import AsyncMock, patch
 
 import pytest

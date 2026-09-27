@@ -4,19 +4,19 @@ Analyzes losing trades from the database to identify common failure conditions
 (regime misclassifications, bad features) and generates an analytical report.
 """
 
-import sys
-import os
 import json
-from datetime import datetime
+import os
+import sys
 from collections import Counter
-from typing import Dict, Any, List
+from datetime import datetime
 
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 
-from src.db import get_engine, DecisionSnapshot
-from src.logging_config import get_logger
 from sqlalchemy import select
 from sqlalchemy.orm import Session
+
+from src.db import DecisionSnapshot, get_engine
+from src.logging_config import get_logger
 
 logger = get_logger("post_mortem_ai")
 
@@ -64,7 +64,7 @@ def analyze_losses() -> int:
             
         try:
             causal = json.loads(t.causal_reasoning_json)
-            if "transformer" in causal and causal["transformer"]:
+            if causal.get("transformer"):
                 for feat, val in causal["transformer"].items():
                     causal_aggregate[feat] += val
                     causal_counts[feat] += 1
@@ -117,7 +117,7 @@ def analyze_losses() -> int:
         worst_regime = regime_counter.most_common(1)[0][0] if regime_counter else "None"
         worst_strat = strategy_counter.most_common(1)[0][0] if strategy_counter else "None"
         
-        f.write(f"> [!WARNING]\n")
+        f.write("> [!WARNING]\n")
         f.write(f"> **Critical Vulnerability Detected:** The bot is struggling in the **{worst_regime}** regime, specifically when using the **{worst_strat}** strategy.\n")
         f.write("> **Action Item:** The AutoML Pipeline should penalize the weights for this strategy in this regime, or the user should tweak the strategy parameters in `execution_strategies.py`.\n")
 

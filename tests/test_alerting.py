@@ -2,12 +2,13 @@
 Tests for Alerting Engine — Step 7 of Foundation Hardening.
 """
 
+from unittest.mock import AsyncMock, patch
+
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
 
 from src.alerting import (
-    AlertingEngine,
     AlertCategory,
+    AlertingEngine,
     AlertSeverity,
     get_alerting_engine,
     reset_alerting_engine,

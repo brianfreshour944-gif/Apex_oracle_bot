@@ -1,9 +1,10 @@
 """Concurrency / race-condition audit: constructed interleavings run for real.
 Run: python audit_concurrency.py
 """
-import asyncio, time
-from src.risk import RiskManager
+import asyncio
+
 from src.config import settings
+from src.risk import RiskManager
 
 results = []
 def verdict(name, passed, detail):
@@ -60,7 +61,7 @@ rm2 = RiskManager(FakeEx())
 rm2._get_max_portfolio_cap = lambda: 5000.0
 async def t2():
     async def reserve(i):
-        approved, reason = await rm2.check_and_reserve_exposure(1500.0)
+        approved, _reason = await rm2.check_and_reserve_exposure(1500.0)
         return approved
     return await asyncio.gather(*[reserve(i) for i in range(10)])
 approved = asyncio.run(t2())

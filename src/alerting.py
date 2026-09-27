@@ -207,7 +207,7 @@ class AlertingEngine:
     def _format_alert(self, alert: Alert) -> str:
         """Format alert for Telegram/email."""
         severity_emoji = {
-            AlertSeverity.INFO: "ℹ️",
+            AlertSeverity.INFO: "ℹ️",  # noqa: RUF001 -- intentional info glyph
             AlertSeverity.WARNING: "⚠️",
             AlertSeverity.CRITICAL: "🚨",
         }

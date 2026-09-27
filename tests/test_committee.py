@@ -1,18 +1,19 @@
 """Unit tests for 5-Brain Ensemble Committee decision system with confidence sizing."""
 
-import sys
 import os
+import sys
+
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 import asyncio
-from src.committee.models import BrainVote, CommitteeResult
 
-from src.committee.committee import run_committee, WINNING_SCORE_THRESHOLD, calculate_confidence_size_multiplier, DEFAULT_SCORE_THRESHOLD
-from src.committee.sentinel_brain import sentinel_brain
-from src.committee.momentum_brain import momentum_brain
-from src.committee.quant_brain import quant_brain
-from src.committee.transformer_brain import transformer_brain
-from src.committee.llm_brain import llm_brain
+from src.committee.committee import (
+    DEFAULT_SCORE_THRESHOLD,
+    WINNING_SCORE_THRESHOLD,
+    calculate_confidence_size_multiplier,
+    run_committee,
+)
+
 
 async def test_committee_buy_consensus_and_sizing():
     """Test committee agreement on buy action and dynamic confidence position multiplier."""

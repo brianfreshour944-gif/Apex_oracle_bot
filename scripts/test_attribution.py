@@ -5,10 +5,12 @@ import sys
 # Add project root to Python path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from src.db import init_db, get_engine, get_db_session, DecisionSnapshot
-from src.attribution import analyze_closed_trade
 import uuid
 from datetime import datetime
+
+from src.attribution import analyze_closed_trade
+from src.db import DecisionSnapshot, get_db_session, init_db
+
 
 async def main():
     print("Testing Causal Attribution Engine...")

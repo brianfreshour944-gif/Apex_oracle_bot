@@ -9,12 +9,12 @@ while the foundation is still being hardened.
 Run: python scripts/enforce_capability_freeze.py
 """
 
-import os
-import sys
-import subprocess
 import json
+import os
+import subprocess
+import sys
+from datetime import UTC, datetime
 from pathlib import Path
-from datetime import datetime, timezone
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
@@ -36,11 +36,11 @@ STATUS_FILE = PROJECT_ROOT / "data" / "foundation_status.json"
 
 def run_check(name: str, command: str, args: list) -> dict:
     """Run a foundation check and return result."""
-    full_cmd = command if isinstance(command, str) else " ".join([command] + args)
+    full_cmd = command if isinstance(command, str) else " ".join([command, *args])
     
     try:
         if command.endswith(".py"):
-            cmd = [sys.executable, command] + args
+            cmd = [sys.executable, command, *args]
             result = subprocess.run(
                 cmd,
                 cwd=PROJECT_ROOT,
@@ -97,7 +97,7 @@ def print_section(title: str):
 
 
 def main():
-    print_section(f"FOUNDATION FREEZE STATUS — {datetime.now(timezone.utc).isoformat()}")
+    print_section(f"FOUNDATION FREEZE STATUS — {datetime.now(UTC).isoformat()}")
     
     results = []
     all_pass = True
@@ -128,7 +128,7 @@ def main():
     
     # Save status
     status_data = {
-        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "timestamp": datetime.now(UTC).isoformat(),
         "total_checks": total,
         "passed": passed,
         "all_pass": all_pass,
@@ -153,7 +153,7 @@ def main():
         f.write(f"""# Capability Freeze Status
 
 **Status:** {freeze_status}
-**Last Check:** {datetime.now(timezone.utc).isoformat()}
+**Last Check:** {datetime.now(UTC).isoformat()}
 **Passed:** {passed}/{total} checks
 
 ## Foundation Checks (Steps 1-8)

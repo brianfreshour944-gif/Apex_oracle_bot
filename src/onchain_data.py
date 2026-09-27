@@ -7,9 +7,7 @@ Adds Z-scored versions for regime-invariant comparison across time.
 """
 
 import asyncio
-import time
 from collections import deque
-from typing import Optional
 
 import httpx
 import numpy as np
@@ -23,7 +21,7 @@ _DERIVATIVES_HISTORY: dict[str, dict[str, deque]] = {}
 _HISTORY_MAXLEN = 200  # ~200 5-min intervals = ~16 hours
 
 # Shared async client for connection pooling
-_derivatives_client: Optional[httpx.AsyncClient] = None
+_derivatives_client: httpx.AsyncClient | None = None
 
 
 async def _get_client() -> httpx.AsyncClient:

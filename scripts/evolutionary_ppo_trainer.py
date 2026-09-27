@@ -7,25 +7,23 @@ pass rigid statistical hurdles (Sharpe, Max DD, Win Rate, Monte Carlo) are
 permitted to contribute their historical trades to the PPO Meta-Learner.
 """
 
-import sys
-import os
-import copy
-import random
 import asyncio
+import copy
+import os
+import random
+import sys
+from typing import Any
+
 import numpy as np
 import polars as pl
-from datetime import datetime
-from typing import Dict, Any, List
 
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 
-from src.config import settings
 from src.backtest import BacktestResult, BacktestTrade, run_monte_carlo_analysis
-from src.strategies import TradingStrategy
-from src.risk import RiskManager
-from src.committee.committee import run_committee
-from src.committee.outcome_tracker import from_decision_snapshot
+from src.config import settings
 from src.logging_config import get_logger
+from src.risk import RiskManager
+from src.strategies import TradingStrategy
 
 logger = get_logger("evolutionary_ppo")
 
@@ -56,13 +54,13 @@ class FastExchange:
             return filtered.tail(limit)
         return self.df.tail(limit)
         
-    async def get_account(self) -> Dict[str, Any]:
+    async def get_account(self) -> dict[str, Any]:
         return {"equity": 0.0, "cash": 0.0, "portfolio_value": 0.0}
         
-    async def get_positions(self) -> List[Dict[str, Any]]:
+    async def get_positions(self) -> list[dict[str, Any]]:
         return []
 
-def mutate(genome: Dict[str, Any]) -> Dict[str, Any]:
+def mutate(genome: dict[str, Any]) -> dict[str, Any]:
     child = copy.deepcopy(genome)
     for key, bounds in PARAM_BOUNDS.items():
         if random.random() < MUTATION_RATE:
@@ -94,7 +92,7 @@ def build_backtest_stats(result: BacktestResult):
         std_rets = np.std(rets)
         result.sharpe = float(np.mean(rets) / (std_rets + 1e-9) * np.sqrt(252)) if std_rets > 0 else 0.0
 
-async def simulate_candidate(bars: pl.DataFrame, symbol: str, config: Dict[str, Any]) -> tuple[BacktestResult, List[Dict]]:
+async def simulate_candidate(bars: pl.DataFrame, symbol: str, config: dict[str, Any]) -> tuple[BacktestResult, list[dict]]:
     # Apply config
     originals = {k: getattr(settings, k) for k in config.keys()}
     for k, v in config.items():
@@ -343,8 +341,9 @@ async def main() -> int:
             current_model = candidate
             logger.info(f"🏆 NEW CHAMPION: {current_model}")
             try:
-                from src.db import save_experiment_record
                 import uuid
+
+                from src.db import save_experiment_record
                 save_experiment_record(
                     experiment_id=str(uuid.uuid4()),
                     generation_type="GA-PPO",
@@ -374,9 +373,11 @@ async def main() -> int:
 
     if surviving_snapshots:
         logger.info(f"Training PPO Meta-Learner on {len(surviving_snapshots)} surviving trades...")
-        from src.committee.rl_env import MetaDecisionEnv
-        from stable_baselines3 import PPO
         import os
+
+        from stable_baselines3 import PPO
+
+        from src.committee.rl_env import MetaDecisionEnv
         
         env = MetaDecisionEnv(surviving_snapshots)
         models_dir = os.path.join(os.path.dirname(__file__), '..', 'models')
@@ -391,7 +392,8 @@ async def main() -> int:
                 action, _ = test_model.predict(obs, deterministic=True)
                 obs, reward, done, truncated, _ = test_env.step(action)
                 total_reward += reward
-                if truncated: done = True
+                if truncated:
+                    done = True
             return total_reward
 
         # 1. Evaluate PPO Champion

@@ -6,12 +6,14 @@ Covers:
 - TradingStrategy._calculate_hurst (random walk, trending, mean-reverting, edge cases)
 """
 
-import pytest
-import numpy as np
 from unittest.mock import AsyncMock
+
+import numpy as np
+import pytest
+
+from src.config import settings
 from src.risk import RiskManager
 from src.strategies import TradingStrategy
-from src.config import settings
 
 
 def test_position_size_basic():
@@ -43,10 +45,10 @@ def test_position_size_regime_scaling():
     regimes = ["low_volatility", "high_volatility", "trending", "bear", "bull"]
     sizes = {}
     for r in regimes:
-        size, status = rm.calculate_position_size("BTC/USD", 50000.0, r, atr=500.0)
+        size, _status = rm.calculate_position_size("BTC/USD", 50000.0, r, atr=500.0)
         sizes[r] = size
 
-    unique_sizes = set(round(s, 8) for s in sizes.values())
+    unique_sizes = {round(s, 8) for s in sizes.values()}
     assert len(unique_sizes) > 1, f"All regimes produced same size: {sizes}"
 
 
@@ -123,7 +125,7 @@ async def test_reserve_position_slot_same_regime_cluster_cap():
 
     # A different-regime entry with the same open_position_count is unaffected.
     rm2 = RiskManager(AsyncMock())
-    ok2, reason2 = await rm2.reserve_position_slot("SOL/USD", open_position_count=2, same_regime_open_count=0)
+    ok2, _reason2 = await rm2.reserve_position_slot("SOL/USD", open_position_count=2, same_regime_open_count=0)
     assert ok2
 
 
@@ -230,7 +232,7 @@ def test_trailing_stop_regime_scaling_widens_in_high_volatility():
     """
     # Get actual distance from settings
     base_distance = settings.TRAILING_DISTANCE_PCT
-    high_vol_distance = base_distance * 1.5  # high_volatility multiplier
+    # high_volatility multiplier widens the trailing distance by 1.5x
     
     # Use a drop that's between base and high_vol thresholds
     # e.g., if base=1%, high_vol=1.5%, use 1.2% drop
@@ -257,7 +259,7 @@ def test_trailing_stop_regime_scaling_tightens_in_low_volatility():
     """
     # Get actual distance from settings
     base_distance = settings.TRAILING_DISTANCE_PCT
-    low_vol_distance = base_distance * 0.6  # low_volatility multiplier
+    # low_volatility multiplier tightens the trailing distance to 0.6x
     
     # Use a drop that's between low_vol and base thresholds
     # e.g., if base=1%, low_vol=0.6%, use 0.8% drop
@@ -297,6 +299,7 @@ def test_trailing_stop_params_clamp_unsafe_multiplier():
     activation must be clamped, never producing a stop that triggers
     immediately upon activation instead of trailing."""
     from unittest.mock import patch
+
     import src.risk as risk_mod
 
     rm = RiskManager(AsyncMock())
@@ -384,11 +387,11 @@ def test_dynamic_transaction_costs():
     assert costs2["spread_bps"] > 2.0
     
     # High costs should reduce position size
-    size_before, _ = rm.calculate_position_size("BTC/USD", 50000.0, "trending", atr=500.0, confidence=1.0, expected_return_pct=0.03)
+    _size_before, _ = rm.calculate_position_size("BTC/USD", 50000.0, "trending", atr=500.0, confidence=1.0, expected_return_pct=0.03)
     # Simulate more high-cost fills to push edge below threshold
     for _ in range(5):
         rm.record_fill_costs("BTC/USD", fee_bps=10.0, slippage_bps=20.0, spread_bps=5.0)
-    size_after, status = rm.calculate_position_size("BTC/USD", 50000.0, "trending", atr=500.0, confidence=1.0, expected_return_pct=0.03)
+    _size_after, status = rm.calculate_position_size("BTC/USD", 50000.0, "trending", atr=500.0, confidence=1.0, expected_return_pct=0.03)
     # With high costs, net edge may be below threshold
     # The test verifies the dynamic model is being used
     assert status in ("ok", "rejected: insufficient edge after costs")

@@ -4,19 +4,21 @@ scripts/evolution_cull.py — The Monthly Cull (Level 4)
 Evaluates all shadow models against the production model based on live paper-trading PnL.
 """
 
-import os
-import sys
 import logging
+import os
 import shutil
-from sqlalchemy import select, func
-from datetime import datetime, timezone, timedelta
+import sys
+from datetime import UTC, datetime, timedelta
+
+from sqlalchemy import func, select
 
 # Ensure we can import from src
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from src.db import get_engine, get_db_session, ShadowTrade, DecisionSnapshot, Base
-from src.telegram_alerts import send_telegram_alert
 import asyncio
+
+from src.db import Base, DecisionSnapshot, ShadowTrade, get_db_session, get_engine
+from src.telegram_alerts import send_telegram_alert
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(message)s")
 log = logging.getLogger(__name__)
@@ -30,7 +32,7 @@ def evaluate_and_cull() -> int:
     Base.metadata.create_all(get_engine())
     
     # Calculate cutoff for "this month"
-    one_month_ago = datetime.now(timezone.utc) - timedelta(days=30)
+    one_month_ago = datetime.now(UTC) - timedelta(days=30)
     
     scores = {}
     
@@ -79,7 +81,7 @@ def evaluate_and_cull() -> int:
             shutil.copy(cand_scaler, PROD_SCALER_OUT)
     else:
         log.info("🛡️ Production model defended its title. No promotion.")
-        msg_lines.append(f"\n🛡️ Production defended its title. No promotion.")
+        msg_lines.append("\n🛡️ Production defended its title. No promotion.")
         
     try:
         asyncio.run(send_telegram_alert("\n".join(msg_lines)))

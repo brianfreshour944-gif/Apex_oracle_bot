@@ -6,7 +6,6 @@ Run: python -m scripts.train_decision_transformer [--epochs N] [--batch-size N] 
 """
 
 import argparse
-import asyncio
 import json
 import os
 import sys

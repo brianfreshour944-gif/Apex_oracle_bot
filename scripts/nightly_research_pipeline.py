@@ -10,11 +10,10 @@ This script executes the complete autonomous daily research loop:
 Schedule this to run daily (e.g., at 2:00 AM) via cron.
 """
 
-import sys
 import os
 import subprocess
+import sys
 from datetime import datetime
-
 
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 from src.logging_config import get_logger

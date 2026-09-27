@@ -1,7 +1,7 @@
 """Modern trading strategies using Polars for data analysis."""
 
 import time
-from datetime import UTC
+from datetime import UTC, datetime
 from typing import Any
 
 import numpy as np
@@ -11,7 +11,6 @@ from src.config import settings
 from src.exchange import AlpacaExchange
 from src.feature_engineering import add_multi_timeframe_features
 from src.logging_config import get_logger
-import asyncio
 
 logger = get_logger(__name__)
 
@@ -48,6 +47,13 @@ class TradingStrategy:
         # Cache of feature DataFrames from add_multi_timeframe_features
         # (symbol -> DataFrame) for cross-asset correlation analysis
         self._feature_dfs: dict[str, pd.DataFrame] = {}
+        # First time this process saw a position for a symbol, used as the
+        # max-hold clock when the exchange and the decision-snapshot DB both
+        # lack an entry timestamp (AlpacaExchange.get_positions() emits none).
+        # Best-effort: a mid-life restart resets the clock, which under-fires
+        # (never spuriously closes) and is strictly better than the previous
+        # behaviour of never firing at all.
+        self._position_first_seen: dict[str, datetime] = {}
 
     def get_cached_feature_dfs(self) -> dict[str, pd.DataFrame]:
         """
@@ -75,9 +81,14 @@ class TradingStrategy:
         from bot.py's state_cleanup_loop) -- confirmed as a real gap
         2026-09-21 cross-checking an external audit against this code.
         """
-        cleaned = {"trailing_peaks": 0, "trailing_troughs": 0}
+        cleaned = {"trailing_peaks": 0, "trailing_troughs": 0, "position_first_seen": 0}
         if active_symbols is None:
             return cleaned
+        stale_first_seen = [k for k in self._position_first_seen if k not in active_symbols]
+        for k in stale_first_seen:
+            del self._position_first_seen[k]
+        cleaned["position_first_seen"] = len(stale_first_seen)
+
         stale_peaks = [k for k in self._trailing_peaks if k not in active_symbols]
         for k in stale_peaks:
             del self._trailing_peaks[k]
@@ -108,7 +119,6 @@ class TradingStrategy:
             # Get velocity proxies from cached feature history / latest features
             roll_autocorr = float(regime_data.get("roll_autocorr", 0.0))
             vol_of_vol = float(regime_data.get("vol_of_vol", 0.0))
-            atr = float(regime_data.get("atr", 0.0))
             
             # Calculate velocity proxies from rolling differences
             # (If no historical velocity tracked, approximate from current values vs 20-bar mean)
@@ -421,7 +431,7 @@ class TradingStrategy:
             # Compute uncertainty estimates for robust execution decision
             expected_edge_bps = max(0, (regime_data.get("confidence", 1.0) * 100) - 20)  # proxy
             execution_cost_bps = 10.0  # from settings.TX_COST_MIN_EDGE_BPS / dynamic model
-            transition_prob = regime_data.get("in_transition", False) and 0.38 or 0.08  # from transition forecasting
+            transition_prob = (regime_data.get("in_transition", False) and 0.38) or 0.08  # from transition forecasting
             brain_disagreement = "LOW"  # overridden by committee; placeholder for single-strategy
 
             # Final position scale: confidence * transition penalty * gap multiplier
@@ -454,8 +464,7 @@ class TradingStrategy:
             # Record features for drift monitoring (non-blocking)
             try:
                 from src.feature_drift_monitor import record_features_for_drift
-                from datetime import datetime
-                record_features_for_drift(symbol, res, datetime.utcnow())
+                record_features_for_drift(symbol, res, datetime.now(UTC))
             except Exception:
                 pass  # Don't let drift monitoring affect trading
             
@@ -703,6 +712,25 @@ class TradingStrategy:
                 "features": {}
             }
 
+    @staticmethod
+    def _parse_entry_time(value: Any) -> datetime | None:
+        """Parse a position entry timestamp from ISO string or epoch seconds/ms."""
+        if isinstance(value, datetime):
+            return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
+        if isinstance(value, (int, float)):
+            seconds = value / 1000.0 if value > 1e11 else float(value)
+            try:
+                return datetime.fromtimestamp(seconds, tz=UTC)
+            except (OverflowError, OSError, ValueError):
+                return None
+        if isinstance(value, str):
+            try:
+                parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+            except ValueError:
+                return None
+            return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=UTC)
+        return None
+
     def _check_price_based_exits(self, symbol: str, current_price: float, position: dict[str, Any]) -> dict[str, Any] | None:
         """Check price-based exit conditions: stop loss, profit target, trailing stop, max hold."""
         try:
@@ -780,10 +808,26 @@ class TradingStrategy:
                                 "pnl_pct": pnl_pct
                             }
 
-            # Max hold time check
-            if "created_at" in position:
-                from datetime import datetime
-                created = datetime.fromisoformat(position["created_at"].replace("Z", "+00:00"))
+            # Max hold time check. AlpacaExchange.get_positions() builds dicts
+            # without any entry timestamp, so accept the common alternate key
+            # names (and numeric epochs) rather than silently doing nothing --
+            # a missing key must not disable this exit entirely.
+            entry_time = next(
+                (position[k] for k in ("created_at", "entry_time", "opened_at") if position.get(k) is not None),
+                None,
+            )
+            if entry_time is not None:
+                created = self._parse_entry_time(entry_time)
+            else:
+                # No timestamp from any source: fall back to when this process
+                # first saw the position. Only applies to live runs -- in
+                # backtests positions are simulated per-bar and must not be
+                # force-closed by wall-clock time.
+                created = None if self.backtest else self._position_first_seen.get(symbol)
+                if not self.backtest and symbol not in self._position_first_seen:
+                    self._position_first_seen[symbol] = datetime.now(UTC)
+                    created = self._position_first_seen[symbol]
+            if created is not None:
                 hold_hours = (datetime.now(UTC) - created).total_seconds() / 3600
                 if hold_hours >= settings.MAX_HOLD_HOURS:
                     return {

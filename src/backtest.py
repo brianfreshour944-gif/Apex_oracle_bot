@@ -7,8 +7,8 @@ This is empirical validation of the deployed strategy - not a placeholder.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 import datetime
+from dataclasses import dataclass, field
 from datetime import UTC
 from decimal import Decimal
 from typing import Any
@@ -734,14 +734,11 @@ async def run_benchmark_comparison(
     # 2. Random Entry Benchmark (from Monte Carlo)
     mc_result = run_monte_carlo_analysis(result, n_simulations=500)
     random_avg_return = mc_result.get("p05_return_pct", 0)  # 5th percentile as conservative random baseline
-    random_avg_sharpe = 0.0  # Would need to compute from permutations
-    
+
     # 3. Compare
     strategy_return = float(result.total_return_pct)
     strategy_sharpe = float(result.sharpe)
     strategy_max_dd = float(result.max_drawdown_pct)
-    strategy_calmar = getattr(result, 'calmar', 0.0)
-    strategy_sortino = getattr(result, 'sortino', 0.0)
     
     comparison = {
         "strategy": {
@@ -807,7 +804,6 @@ def print_benchmark_comparison(comparison: dict[str, Any]) -> None:
 
 async def main():
     import argparse
-    import asyncio
 
     parser = argparse.ArgumentParser(description="Run Apex Oracle Bot Backtest Engine")
     parser.add_argument("--symbol", type=str, default="BTC/USD", help="Symbol to backtest (default: BTC/USD)")

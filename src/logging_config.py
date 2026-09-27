@@ -4,7 +4,7 @@ import json
 import logging
 import sys
 import uuid
-from datetime import datetime, UTC
+from datetime import UTC, datetime
 
 import structlog
 
@@ -51,11 +51,13 @@ def configure_structlog() -> None:
         # JSON formatter for production, console for development
         import os
         if os.getenv("ENVIRONMENT", "development") == "production":
-            processors = shared_processors + [
+            processors = [
+                *shared_processors,
                 structlog.processors.JSONRenderer()
             ]
         else:
-            processors = shared_processors + [
+            processors = [
+                *shared_processors,
                 structlog.dev.ConsoleRenderer(colors=True)
             ]
 

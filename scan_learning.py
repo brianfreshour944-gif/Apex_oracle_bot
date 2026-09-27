@@ -3,8 +3,7 @@
 
 import json
 import os
-import sys
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 print("=" * 60)
 print("LEARNING PIPELINE SCAN")
@@ -20,8 +19,12 @@ for f in ['data/historical_experiences.jsonl', 'data/live_experiences.jsonl']:
             if lines:
                 rec = json.loads(lines[0])
                 print(f"    Keys: {list(rec.keys())}")
-                tensor = rec.get('tensor', [])
-                print(f"    Tensor: {len(tensor)} steps x {len(tensor[0]) if tensor else 0} features")
+                tensor = rec.get('tensor') or []
+                if tensor and isinstance(tensor[0], (list, tuple)):
+                    shape = f"{len(tensor)} steps x {len(tensor[0])} features"
+                else:
+                    shape = f"{len(tensor)} features (flat)"
+                print(f"    Tensor: {shape}")
                 print(f"    Label: {rec.get('label')}")
                 print(f"    Regime: {rec.get('market_regime')}")
     else:
@@ -50,7 +53,7 @@ print("\n[3] PPO META-LEARNER")
 ppo_path = 'models/ppo_meta_weights.zip'
 if os.path.exists(ppo_path):
     size = os.path.getsize(ppo_path)
-    mtime = datetime.fromtimestamp(os.path.getmtime(ppo_path), tz=timezone.utc)
+    mtime = datetime.fromtimestamp(os.path.getmtime(ppo_path), tz=UTC)
     print(f"  {ppo_path}: {size} bytes, modified {mtime.isoformat()}")
 else:
     print(f"  {ppo_path}: NOT FOUND")
@@ -60,7 +63,7 @@ print("\n[4] TRANSFORMER MODEL")
 for f in ['models/grok_gqa_v9_best.pth', 'models/feature_scaler.pkl', 'models/transformer_config.json']:
     if os.path.exists(f):
         size = os.path.getsize(f)
-        mtime = datetime.fromtimestamp(os.path.getmtime(f), tz=timezone.utc)
+        mtime = datetime.fromtimestamp(os.path.getmtime(f), tz=UTC)
         print(f"  {f}: {size} bytes, modified {mtime.isoformat()}")
     else:
         print(f"  {f}: NOT FOUND")
@@ -68,6 +71,7 @@ for f in ['models/grok_gqa_v9_best.pth', 'models/feature_scaler.pkl', 'models/tr
 # 5. Config gates
 print("\n[5] GATING CONFIG")
 from src.config import settings
+
 print(f"  ADAPTIVE_ML_ENABLED: {settings.ADAPTIVE_ML_ENABLED}")
 print(f"  ADAPTIVE_MIN_TRADES_BEFORE_LIVE: {settings.ADAPTIVE_MIN_TRADES_BEFORE_LIVE}")
 print(f"  PPO_MIN_TRADES_BEFORE_LIVE: {settings.PPO_MIN_TRADES_BEFORE_LIVE}")
@@ -114,7 +118,7 @@ for f in ['data/adaptive_meta_state.json']:
                 issues.append(f"Regime '{regime}' has only {count} samples (gate={settings.ADAPTIVE_MIN_TRADES_BEFORE_LIVE})")
 
 # Check Transformer online step LR
-print(f"  OK: Transformer online LR = 1e-5 (in bot.py)")
+print("  OK: Transformer online LR = 1e-5 (in bot.py)")
 
 # Check PPO gate
 if settings.PPO_MIN_TRADES_BEFORE_LIVE > settings.ADAPTIVE_MIN_TRADES_BEFORE_LIVE:

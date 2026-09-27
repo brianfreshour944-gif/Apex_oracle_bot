@@ -1,12 +1,13 @@
 """Post-fix verification for audit findings 1-3. Run: python verify_fixes.py"""
-import asyncio, math
-from datetime import datetime, timezone, timedelta
+import math
+from datetime import UTC, datetime, timedelta
 
 ok = []
 
 # Fix 3: committee and bot now share ONE AlertingEngine singleton
-from src.alerting import get_alerting_engine, AlertCategory, AlertSeverity
 import src.committee.committee as cmod
+from src.alerting import get_alerting_engine
+
 shared = cmod._alerting_engine is get_alerting_engine()
 ok.append(("AlertingEngine singleton shared by committee + bot", shared))
 
@@ -18,6 +19,7 @@ gated = not math.isfinite(nan) or nan < effective_threshold or winner in ["stand
 ok.append(("NaN committee score routed to stand_aside (committee.py gate)", gated))
 # and confirm the guard is actually in run_committee's source path
 import inspect
+
 src = inspect.getsource(cmod.run_committee)
 ok.append(("isfinite guard present inside run_committee", "math.isfinite(score)" in src))
 
@@ -25,10 +27,13 @@ ok.append(("isfinite guard present inside run_committee", "math.isfinite(score)"
 # persisted open decision snapshot; verify the full chain against a real
 # (temporary) sqlite DB.
 from src.config import settings
+
 settings.DATABASE_URL = "sqlite:///data/audit_verify.db"
 from src import db as dbmod
+
 dbmod.get_engine.cache_clear() if hasattr(dbmod.get_engine, "cache_clear") else None
 import src.db as db
+
 db._open_snapshot_cache.clear()
 db.init_db()
 did = db.save_decision_snapshot(
@@ -46,11 +51,12 @@ did = db.save_decision_snapshot(
 # open-snapshot cache so get_open_snapshot re-reads it (bot.py would see the
 # same cached value within a cycle).
 from sqlalchemy import update as sa_update
+
 with db.get_db_session() as session:
     session.execute(
         sa_update(db.DecisionSnapshot)
         .where(db.DecisionSnapshot.decision_id == "audit-fix-1")
-        .values(created_at=datetime.now(timezone.utc) - timedelta(hours=settings.MAX_HOLD_HOURS + 24))
+        .values(created_at=datetime.now(UTC) - timedelta(hours=settings.MAX_HOLD_HOURS + 24))
     )
     session.commit()
 db._open_snapshot_cache.clear()
@@ -61,6 +67,7 @@ pos = {"symbol": "TEST/USD", "qty": "1.0", "avg_entry_price": "100.0",
 if snap and snap.get("created_at"):
     pos["created_at"] = snap["created_at"]
 from src.strategies import TradingStrategy
+
 strat = TradingStrategy(exchange=None)
 r = strat._check_price_based_exits("TEST/USD", 100.0, pos)
 ok.append(("Max-hold exit fires with snapshot-attached created_at", r is not None and r.get("reason") == "max_hold_time_exceeded"))

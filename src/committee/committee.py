@@ -16,7 +16,7 @@ import uuid
 from collections import defaultdict
 from typing import Any
 
-from src.alerting import AlertingEngine, get_alerting_engine
+from src.alerting import get_alerting_engine
 from src.config import settings
 from src.logging_config import get_logger
 from src.ood_discriminator import check_ood_and_override, get_ood_discriminator
@@ -25,7 +25,7 @@ from .adaptive_meta import AdaptiveMetaLearner
 from .decision_gate import check_decision_source_gate
 from .decision_transformer import run_decision_transformer
 from .llm_brain import llm_brain
-from .models import BrainVote, CommitteeResult, calculate_vote_entropy, disagreement_from_entropy
+from .models import BrainVote, CommitteeResult, calculate_vote_entropy
 from .momentum_brain import momentum_brain
 from .quant_brain import quant_brain
 from .rl_meta import RLMetaLearner

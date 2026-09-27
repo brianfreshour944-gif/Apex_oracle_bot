@@ -9,13 +9,14 @@ These tests verify the actual data that downstream decisions depend on:
 - risk manager position sizing with real cost data
 """
 
-import pytest
-from unittest.mock import MagicMock, AsyncMock, patch
-from datetime import datetime, timezone
+from datetime import UTC, datetime
+from unittest.mock import MagicMock
 
+import pytest
+
+from src.config import settings
 from src.exchange import AlpacaExchange
 from src.risk import RiskManager
-from src.config import settings
 
 
 class TestExchangeFillDataIntegrity:
@@ -45,7 +46,7 @@ class TestExchangeFillDataIntegrity:
         # CRITICAL: These are the actual Alpaca SDK field names
         fake_filled_order.filled_avg_price = "50000.00"
         # NOTE: real alpaca-py>=0.43 Order has NO .commission attribute; bot must not read it.
-        fake_filled_order.filled_at = datetime.now(timezone.utc).isoformat()
+        fake_filled_order.filled_at = datetime.now(UTC).isoformat()
 
         exchange.trading_client = MagicMock()
         exchange.trading_client.submit_order = MagicMock(return_value=MagicMock(id="ord_123", status="pending_new"))
@@ -75,7 +76,7 @@ class TestExchangeFillDataIntegrity:
         fake_filled_order.type = "market"
         fake_filled_order.filled_avg_price = "50000.00"
         # NOTE: real alpaca-py>=0.43 Order has NO .commission attribute.
-        fake_filled_order.filled_at = datetime.now(timezone.utc).isoformat()
+        fake_filled_order.filled_at = datetime.now(UTC).isoformat()
 
         exchange.trading_client = MagicMock()
         exchange.trading_client.submit_order = MagicMock(return_value=MagicMock(id="ord_123", status="pending_new"))
@@ -98,7 +99,7 @@ class TestExchangeFillDataIntegrity:
         fake_filled_order.type = "market"
         fake_filled_order.filled_avg_price = "50000.00"
         fake_filled_order.commission = "0.30"
-        fake_filled_order.filled_at = datetime.now(timezone.utc).isoformat()
+        fake_filled_order.filled_at = datetime.now(UTC).isoformat()
 
         exchange.trading_client = MagicMock()
         exchange.trading_client.submit_order = MagicMock(return_value=MagicMock(id="ord_123", status="pending_new"))
@@ -123,7 +124,7 @@ class TestExchangeFillDataIntegrity:
         # Missing filled_avg_price - this would be a bug in our mapping
         fake_filled_order.filled_avg_price = None
         fake_filled_order.commission = "0.50"
-        fake_filled_order.filled_at = datetime.now(timezone.utc).isoformat()
+        fake_filled_order.filled_at = datetime.now(UTC).isoformat()
 
         exchange.trading_client = MagicMock()
         exchange.trading_client.submit_order = MagicMock(return_value=MagicMock(id="ord_123", status="pending_new"))
@@ -269,8 +270,8 @@ class TestCommitteeDecisionGate:
 
     def test_gate_requires_min_trades_per_regime(self):
         """Gate should require minimum trades for the specific regime."""
-        from src.committee.decision_gate import check_decision_source_gate
         from src.committee.committee import get_meta_learner
+        from src.committee.decision_gate import check_decision_source_gate
         from src.config import settings as s
         
         # Enable adaptive ML for these tests
@@ -292,8 +293,8 @@ class TestCommitteeDecisionGate:
 
     def test_gate_requires_regime_validation(self):
         """Gate should require regime validation (Sharpe/win-rate)."""
-        from src.committee.decision_gate import check_decision_source_gate
         from src.committee.committee import get_meta_learner
+        from src.committee.decision_gate import check_decision_source_gate
         from src.config import settings as s
         
         original = s.ADAPTIVE_ML_ENABLED
@@ -317,8 +318,8 @@ class TestCommitteeDecisionGate:
 
     def test_gate_allows_when_all_conditions_met(self):
         """Gate should allow when all conditions are met."""
-        from src.committee.decision_gate import check_decision_source_gate
         from src.committee.committee import get_meta_learner
+        from src.committee.decision_gate import check_decision_source_gate
         from src.config import settings as s
         
         original = s.ADAPTIVE_ML_ENABLED
@@ -352,7 +353,6 @@ class TestCommitteeIntegration:
     @pytest.mark.asyncio
     async def test_committee_uses_shared_gate_for_all_sources(self):
         """Verify committee calls check_decision_source_gate for each source."""
-        from src.committee.committee import run_committee
         from src.committee.decision_gate import check_decision_source_gate
         
         # This is a smoke test - verify the function exists and is callable

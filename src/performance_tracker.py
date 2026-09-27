@@ -9,7 +9,7 @@ Cost-adjusted returns, Top trade contribution.
 
 import json
 import os
-from datetime import datetime, timedelta, UTC
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import numpy as np
@@ -104,7 +104,7 @@ class PerformanceTracker:
     def _load_state(self) -> None:
         if os.path.exists(self.state_path):
             try:
-                with open(self.state_path, "r") as f:
+                with open(self.state_path) as f:
                     self._state = json.load(f)
             except Exception as e:
                 logger.warning(f"Failed to load performance tracker state: {e}")
@@ -256,7 +256,7 @@ class PerformanceTracker:
         pnls: list[float] = []
         for key, data in self._state.items():
             try:
-                key_strategy, key_regime = key.split("|", 1)
+                _key_strategy, key_regime = key.split("|", 1)
             except ValueError:
                 continue
             if key_regime != regime:

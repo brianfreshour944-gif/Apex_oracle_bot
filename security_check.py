@@ -21,7 +21,7 @@ log_patterns = [
 
 for filepath in files_to_check:
     if os.path.exists(filepath):
-        with open(filepath, 'r') as f:
+        with open(filepath) as f:
             content = f.read()
         for pattern, desc in log_patterns:
             matches = list(re.finditer(pattern, content, re.IGNORECASE))
@@ -40,7 +40,7 @@ print("=== Checking for hardcoded secrets in config ===")
 config_files = ['src/config.py', '.env.example', '.env']
 for cf in config_files:
     if os.path.exists(cf):
-        with open(cf, 'r') as f:
+        with open(cf) as f:
             content = f.read()
         # Look for actual secret values (not just field definitions)
         secret_patterns = [

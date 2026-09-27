@@ -1,21 +1,23 @@
 import asyncio
-import os
 import json
+import os
+
 import numpy as np
 import polars as pl
 import yfinance as yf
 
 # Override settings BEFORE importing components to ensure sandbox isolation
 from src.config import settings
+
 settings.ADAPTIVE_ML_ENABLED = True
 settings.ADAPTIVE_MIN_TRADES_BEFORE_LIVE = 0
 settings.ADAPTIVE_STATE_PATH = "data/sandbox_meta_state.json"
 
 from src.backtest import BacktestResult, BacktestTrade, print_backtest_summary
-from src.strategies import TradingStrategy
-from src.risk import RiskManager
-from src.committee.committee import run_committee, get_meta_learner
+from src.committee.committee import get_meta_learner, run_committee
 from src.committee.outcome_tracker import from_decision_snapshot
+from src.risk import RiskManager
+from src.strategies import TradingStrategy
 
 # Clean slate sandbox for the meta-learner
 if os.path.exists(settings.ADAPTIVE_STATE_PATH):
@@ -33,10 +35,10 @@ class LiveBacktestExchange:
         return df.tail(limit) if len(df) else df
 
 async def run_adaptive_simulation(symbol: str = "BTC-USD", n_days: int = 180):
-    print(f"===========================================================")
-    print(f"INITIALIZING ADAPTIVE META-LEARNER SIMULATION")
+    print("===========================================================")
+    print("INITIALIZING ADAPTIVE META-LEARNER SIMULATION")
     print(f"Symbol: {symbol} | Period: {n_days} days | Sandbox: ON")
-    print(f"===========================================================\n")
+    print("===========================================================\n")
 
 # ... (I'll just replace the specific lines instead of the whole block, let me use the tool correctly)
 
@@ -268,6 +270,6 @@ async def run_adaptive_simulation(symbol: str = "BTC-USD", n_days: int = 180):
 if __name__ == "__main__":
     try:
         asyncio.run(run_adaptive_simulation(symbol="BTC-USD", n_days=365))
-    except Exception as e:
+    except Exception:
         import traceback
         traceback.print_exc()

@@ -7,12 +7,11 @@ It uploads the live experiences to a Kaggle Dataset, triggers the cloud GPU note
 waits for the NAS/Evolutionary training to finish, and downloads the new Champion models.
 """
 
+import json
 import os
+import subprocess
 import sys
 import time
-import json
-import subprocess
-from datetime import datetime
 
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 from src.logging_config import get_logger
@@ -27,7 +26,7 @@ KERNEL_SLUG = f"{KAGGLE_USERNAME}/apex-oracle-nightly-research"
 
 def ensure_kaggle_api():
     try:
-        import kaggle
+        import kaggle  # noqa: F401  (import validates the API package is installed & importable)
         return True
     except OSError:
         logger.error("Kaggle API key not found! Please place kaggle.json in ~/.kaggle/kaggle.json")

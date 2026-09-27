@@ -5,8 +5,6 @@ Never promotes solely on raw historical PnL — requires OOS walk-forward
 and shadow live validation.
 """
 
-import math
-from typing import Any
 
 
 def compute_fitness(
