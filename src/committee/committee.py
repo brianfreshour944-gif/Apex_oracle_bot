@@ -431,6 +431,27 @@ async def run_committee(symbol: str, price: float, signal: dict[str, Any]) -> Co
         final_action = winner
         size_mult = calculate_confidence_size_multiplier(score, entropy, effective_threshold)
 
+    # ── Entry-agreement floor ──
+    # A single directional brain must not be able to open a position on its
+    # own (live evidence: BTC 0.322 BUY with 4/5 brains HOLD closed at a loss
+    # ~60s later). Require >= MIN_ENTRY_DIRECTIONAL_VOTES distinct brains
+    # voting the winning direction. Fail-safe: blocks rather than bypasses.
+    # Hard exits and sentinel hard vetoes above are untouched.
+    if final_action in ("buy", "sell"):
+        directional_voters = {
+            v.name for v in votes
+            if v.action == final_action and not v.is_veto
+        }
+        if len(directional_voters) < settings.MIN_ENTRY_DIRECTIONAL_VOTES:
+            logger.info(
+                f"[ENTRY_AGREEMENT] {symbol}: {final_action} score {score:.3f} "
+                f"has only {len(directional_voters)} directional voter(s) "
+                f"({sorted(directional_voters)}) — blocked "
+                f"(need >= {settings.MIN_ENTRY_DIRECTIONAL_VOTES})"
+            )
+            final_action = "stand_aside"
+            size_mult = 0.0
+
     result = CommitteeResult(
         action=final_action,
         score=score,

@@ -715,6 +715,34 @@ def save_decision_snapshot(
     try:
         _ensure_tables()
         with get_db_session() as session:
+            # Data-integrity upsert: if an open snapshot already exists for this
+            # symbol (e.g. a stale-positions "new entry" fired before the previous
+            # cycle's fills settled), fold the new entry into it instead of
+            # inserting a duplicate open snapshot.
+            existing = (
+                session.query(DecisionSnapshot)
+                .filter(
+                    DecisionSnapshot.symbol == symbol,
+                    DecisionSnapshot.status == "open",
+                )
+                .order_by(DecisionSnapshot.created_at.desc())
+                .first()
+            )
+            if existing is not None:
+                new_qty = float(existing.qty) + float(qty)
+                if new_qty > 0 and float(existing.entry_price) > 0 and float(entry_price) > 0:
+                    existing.entry_price = (
+                        float(existing.entry_price) * float(existing.qty)
+                        + float(entry_price) * float(qty)
+                    ) / new_qty
+                existing.qty = new_qty
+                session.commit()
+                logger.warning(
+                    f"[DATA_INTEGRITY] save_decision_snapshot: open snapshot "
+                    f"{existing.decision_id} already exists for {symbol}; folded "
+                    f"entry {decision_id} into it (no duplicate created)."
+                )
+                return True
             snap = DecisionSnapshot(
                 decision_id=decision_id,
                 symbol=symbol,

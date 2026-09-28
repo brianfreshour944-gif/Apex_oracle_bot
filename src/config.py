@@ -230,6 +230,12 @@ class TradingBotSettings(BaseSettings):
                     "overrides the gate, so a genuine reversal is not trapped.",
         ge=0
     )
+    MIN_ENTRY_DIRECTIONAL_VOTES: int = Field(
+        default=2,
+        description="Minimum number of distinct committee brains that must vote "
+                    "the winning direction (buy/sell) for a discretionary entry "
+                    "to execute. Single-voice entries are blocked (stand_aside)."
+    )
     MIN_HOLD_CONSECUTIVE_SIGNALS: int = Field(
         default=3,
         description="Consecutive scans the same strategy-based close signal "
