@@ -108,7 +108,10 @@ def _get_data_client():
     when the API credentials change. Avoids creating a new client
     (and its underlying HTTP session) on every inference call."""
     global _data_client_cache, _data_client_cache_key
-    key = (os.getenv("APCA_API_KEY_ID"), os.getenv("APCA_API_SECRET_KEY"))
+    key = (
+        os.getenv("APCA_API_KEY_ID") or os.getenv("ALPACA_API_KEY"),
+        os.getenv("APCA_API_SECRET_KEY") or os.getenv("ALPACA_SECRET_KEY"),
+    )
     if _data_client_cache is not None and _data_client_cache_key == key:
         return _data_client_cache
     from alpaca.data.historical import CryptoHistoricalDataClient
@@ -160,7 +163,9 @@ def get_ml_predictor():
                 "torch": torch,
                 "input_dim": input_dim
             }
-        except Exception:
+        except Exception as e:
+            import logging
+            logging.getLogger("committee").error(f"ML predictor loading failed: {e}")
             _predictor_instance = None
     return _predictor_instance
 
@@ -295,8 +300,8 @@ async def _run_fast_ensemble_inference(
                 df_raw["trade_count"] = 0.0
             is_live = False
         else:
-            key = os.getenv("APCA_API_KEY_ID")
-            secret = os.getenv("APCA_API_SECRET_KEY")
+            key = os.getenv("APCA_API_KEY_ID") or os.getenv("ALPACA_API_KEY")
+            secret = os.getenv("APCA_API_SECRET_KEY") or os.getenv("ALPACA_SECRET_KEY")
             if not key or not secret:
                 return None
 
@@ -509,8 +514,8 @@ async def transformer_brain(symbol: str, price: float, signal: dict) -> BrainVot
                         df_raw["trade_count"] = 0.0
                     is_live = False
                 else:
-                    key = os.getenv("APCA_API_KEY_ID")
-                    secret = os.getenv("APCA_API_SECRET_KEY")
+                    key = os.getenv("APCA_API_KEY_ID") or os.getenv("ALPACA_API_KEY")
+                    secret = os.getenv("APCA_API_SECRET_KEY") or os.getenv("ALPACA_SECRET_KEY")
                     if not key or not secret:
                         return None
     
