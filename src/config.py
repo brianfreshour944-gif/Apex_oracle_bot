@@ -230,6 +230,21 @@ class TradingBotSettings(BaseSettings):
                     "overrides the gate, so a genuine reversal is not trapped.",
         ge=0
     )
+    LOSS_LIMIT_WINDOW_HOURS: float = Field(
+        default=6.0,
+        description="Rolling window (hours) over which realized P&L is summed "
+                    "for the rolling soft loss-limit entry block.",
+        gt=0
+    )
+    ROLLING_LOSS_LIMIT_PCT: float = Field(
+        default=1.0,
+        description="Rolling soft loss limit as percent of equity: if realized "
+                    "P&L over LOSS_LIMIT_WINDOW_HOURS is at or below "
+                    "-|ROLLING_LOSS_LIMIT_PCT|% of equity, new entries are "
+                    "blocked (existing positions still managed normally; no "
+                    "liquidation). Set to 0 to disable.",
+        ge=0
+    )
     MIN_ENTRY_DIRECTIONAL_VOTES: int = Field(
         default=2,
         description="Minimum number of distinct committee brains that must vote "

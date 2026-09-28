@@ -14,6 +14,7 @@ from sqlalchemy import (
     Text,
     create_engine,
     event,
+    func,
     select,
     text,
 )
@@ -1036,6 +1037,30 @@ def close_decision_snapshot(
     except Exception as e:
         logger.warning(f"close_decision_snapshot failed (non-fatal): {e}")
         return False
+
+
+def get_recent_realized_pnl(hours: float) -> float:
+    """Sum realized P&L of decision snapshots closed within the last ``hours``.
+
+    Used by the rolling soft loss-limit entry block (bot.py). Fail-safe:
+    returns 0.0 on any error so trading is never blocked by a bookkeeping bug.
+    """
+    try:
+        cutoff = datetime.datetime.now(datetime.UTC) - datetime.timedelta(hours=float(hours))
+        with get_db_session() as session:
+            total = (
+                session.query(func.sum(DecisionSnapshot.realized_pnl))
+                .filter(
+                    DecisionSnapshot.status == "closed",
+                    DecisionSnapshot.closed_at.isnot(None),
+                    DecisionSnapshot.closed_at >= cutoff,
+                )
+                .scalar()
+            )
+            return float(total) if total is not None else 0.0
+    except Exception as e:
+        logger.warning(f"get_recent_realized_pnl failed (non-fatal, fail-open): {e}")
+        return 0.0
 
 
 def get_db_health() -> bool:

@@ -23,7 +23,7 @@ from src.config import (
     POSITION_ADD_SIZE_DECAY,
     settings,
 )
-from src.db import init_db
+from src.db import get_recent_realized_pnl, init_db
 from src.exchange import AlpacaExchange
 from src.logging_config import get_logger
 from src.persistent_state import PersistentBotState
@@ -1161,6 +1161,38 @@ async def process_signal_for_symbol(symbol: str, current_price: float, risk_mana
                     )
                     return
                 # Fall through: an existing position may still need to exit.
+            # --- ROLLING SOFT LOSS LIMIT (new-entry block only) ---
+            # If realized P&L over the last LOSS_LIMIT_WINDOW_HOURS is at or
+            # below -|ROLLING_LOSS_LIMIT_PCT|% of equity, refuse NEW entries
+            # for this cycle. Open positions still fall through and are managed
+            # normally (SL/TP/trailing/min-hold) — this never liquidates and
+            # never touches the hard killswitch in risk.py. Fail-open: if the
+            # P&L query errors it returns 0.0 and trading proceeds.
+            if settings.ROLLING_LOSS_LIMIT_PCT > 0:
+                try:
+                    # Equity source: peak_equity is maintained by the risk
+                    # manager's 5s account poll (risk.py:460) and is the
+                    # freshest equity value available without an extra
+                    # exchange round-trip in this hot path. Fail-safe
+                    # fallback to settings.ACCOUNT_BASE mirrors risk.py:686.
+                    equity = float(risk_manager.peak_equity) if risk_manager.peak_equity > 0 \
+                        else float(getattr(settings, "ACCOUNT_BASE", 0.0))
+                    rolling_pnl = await asyncio.to_thread(
+                        get_recent_realized_pnl, settings.LOSS_LIMIT_WINDOW_HOURS
+                    )
+                    limit_abs = -abs(settings.ROLLING_LOSS_LIMIT_PCT) / 100.0 * equity
+                    if equity > 0 and rolling_pnl <= limit_abs:
+                        logger.warning(
+                            f"[ROLLING_LOSS_LIMIT] {symbol}: blocking new entry — "
+                            f"realized P&L last {settings.LOSS_LIMIT_WINDOW_HOURS:g}h "
+                            f"is ${rolling_pnl:.2f} (limit ${limit_abs:.2f}, "
+                            f"{settings.ROLLING_LOSS_LIMIT_PCT:g}% of equity ${equity:.2f})"
+                        )
+                        return
+                except Exception as rl_err:
+                    logger.warning(
+                        f"[ROLLING_LOSS_LIMIT] check failed (fail-open, entry allowed): {rl_err}"
+                    )
             if positions is None:
                 # Fallback for direct calls with no pre-fetched positions.
                 positions = await ex.get_positions()
