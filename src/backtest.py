@@ -455,7 +455,7 @@ async def run_backtest(
     result.bars_used = bars
     # Compute metrics
     result.end_equity = float(equity)
-    result.total_return_pct = (equity - Decimal(str(start_equity))) / Decimal(str(start_equity)) * 100
+    result.total_return_pct = float((equity - Decimal(str(start_equity))) / Decimal(str(start_equity)) * 100)
     result.n_trades = len(result.trades)
     result.n_wins = sum(1 for t in result.trades if t.pnl > 0)
     result.n_losses = sum(1 for t in result.trades if t.pnl <= 0)

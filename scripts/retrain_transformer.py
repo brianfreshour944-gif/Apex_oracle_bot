@@ -15,6 +15,7 @@ import traceback
 from collections import Counter
 
 import joblib
+import pandas as pd
 import numpy as np
 import polars as pl
 import torch
@@ -93,7 +94,12 @@ def fetch_validation_bars(symbol: str = "BTC-USD", days: int = 90) -> pl.DataFra
     df = df.reset_index()
     df = df.rename(columns={"Datetime": "t", "Open": "open", "High": "high",
                              "Low": "low", "Close": "close", "Volume": "volume"})
-    df["t"] = df["t"].astype(str)
+    # Keep `t` as native datetimes: WalkForwardValidator.create_windows()
+    # filters the polars column against datetime window bounds. String
+    # timestamps made that comparison raise "cannot compare date/datetime/time
+    # to a string value", zeroing every validation window and vetoing all
+    # promotions (observed 2026-09-27 in retrain_log3.txt).
+    df["t"] = pd.to_datetime(df["t"])
     return pl.from_pandas(df)
 
 
@@ -162,7 +168,7 @@ async def run_multi_symbol_walkforward_validation(
             "mean_return_pct": float(np.mean(returns)),
             "mean_sharpe": float(np.mean(sharpes)),
             "total_trades": int(sum(r.n_trades for r in all_results)),
-            "pct_positive_windows": float(np.mean([r.total_return_pct > 0 for r in returns]) * 100) if returns else 0.0,
+            "pct_positive_windows": float(np.mean([r > 0 for r in returns]) * 100) if returns else 0.0,
             "n_windows": len(all_results),
         }
 
@@ -289,7 +295,9 @@ def retrain_model() -> int:
             
             model = GrokGQA_Transformer(input_dim=input_dim, num_layers=L, embed_dim=E, num_q_heads=arch.get("num_q_heads", 8), num_kv_heads=arch.get("num_kv_heads", 2), seq_len=seq_len).to(device)
             optimizer = optim.Adam(model.parameters(), lr=LR, weight_decay=WEIGHT_DECAY)
-            scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=2, verbose=True)
+            # `verbose` was removed in PyTorch 2.x (deprecated in 1.13);
+            # passing it crashes training instantly on the installed torch.
+            scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=2)
             
             best_val_loss = float("inf")
             patience_counter = 0

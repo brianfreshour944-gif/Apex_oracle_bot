@@ -127,7 +127,14 @@ class FastExchange:
 async def generate_history_for_symbol(symbol: str, bars: pl.DataFrame):
     logger.info(f"Generating trades for {symbol}...")
     exchange = FastExchange(bars)
-    strategy = TradingStrategy(exchange, cache_ttl=300.0, backtest=True)
+    # cache_ttl must be ~0 for replay generation: the regime cache is keyed
+    # to wall-clock time (time.monotonic), but this loop simulates thousands
+    # of bars in under a second. With the default 300s TTL every bar after
+    # the first reused the first bar's frozen regime features (RSI constant,
+    # e.g. 45.66), the strategy never fired buy/sell, and the generator
+    # produced 0 records (observed 2026-09-27). cache_ttl=0 disables the
+    # freeze so each bar is evaluated on its own features.
+    strategy = TradingStrategy(exchange, cache_ttl=0.0, backtest=True)
     risk = RiskManager(exchange)
     
     open_pos = None
@@ -139,12 +146,22 @@ async def generate_history_for_symbol(symbol: str, bars: pl.DataFrame):
     batch_records = []
     BATCH_SIZE = 500
     STEP_SIZE = 1
-    
+
+    # add_features() caches its result per symbol keyed on df.index[-1].
+    # FastExchange bars convert to pandas with a RangeIndex, so the cache key
+    # is always 99 regardless of which window is being evaluated -- every bar
+    # after the first returned the first bar's frozen features (RSI pinned at
+    # one value, e.g. 45.66/54.78), the strategy never fired, and generation
+    # produced 0 records (observed 2026-09-27). Clear the cache per simulated
+    # bar so each step recomputes on its own window.
+    from src import feature_engineering as _fe
+
     for i in range(100, len(bars), STEP_SIZE):
         row = bars.row(i, named=True)
         ts = str(row["t"])
         current_price = float(row["close"])
         exchange.current_time = ts
+        _fe._FEATURE_CACHE.pop(symbol, None)
         
         position = None
         if open_pos is not None:
