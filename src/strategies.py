@@ -54,6 +54,7 @@ class TradingStrategy:
         # (never spuriously closes) and is strictly better than the previous
         # behaviour of never firing at all.
         self._position_first_seen: dict[str, datetime] = {}
+        self._pending_close: dict[str, tuple[str, int]] = {}
 
     def get_cached_feature_dfs(self) -> dict[str, pd.DataFrame]:
         """
@@ -88,6 +89,9 @@ class TradingStrategy:
         for k in stale_first_seen:
             del self._position_first_seen[k]
         cleaned["position_first_seen"] = len(stale_first_seen)
+        stale_pending = [k for k in list(self._pending_close) if k not in active_symbols]
+        for k in stale_pending:
+            del self._pending_close[k]
 
         stale_peaks = [k for k in self._trailing_peaks if k not in active_symbols]
         for k in stale_peaks:
@@ -663,17 +667,58 @@ class TradingStrategy:
 
                 # Strategy-based exit
                 if action == "close":
-                    self._active_strategy.pop(symbol, None)  # position is closing
-                    return {
-                        "symbol": symbol,
-                        "action": "close",
-                        "reason": reason,
-                        "regime": regime,
-                        "rsi": rsi,
-                        "atr": regime_data.get("atr", 0.0),
-                        "features": regime_data,
-                        "selected_strategy": best_strategy_name
-                    }
+                    # Min-hold gate: real fills showed 47-60s round trips that
+                    # bleed slippage on every churn cycle. Price-based exits
+                    # (checked above) always fire regardless. A close signal
+                    # that persists on consecutive scans overrides the gate so
+                    # a genuine reversal is not trapped. In backtests there is
+                    # no wall-clock entry timestamp, so fail open (allow the
+                    # close) rather than distort historical validation.
+                    allowed = False
+                    if self.backtest:
+                        allowed = True
+                    else:
+                        entry_raw = next(
+                            (position[k] for k in ("created_at", "entry_time", "opened_at") if position.get(k) is not None),
+                            None,
+                        )
+                        created = self._parse_entry_time(entry_raw) if entry_raw is not None else self._position_first_seen.get(symbol)
+                        if created is None:
+                            if symbol not in self._position_first_seen:
+                                self._position_first_seen[symbol] = datetime.now(UTC)
+                            allowed = True  # first sighting: can't gate on unknown age
+                        else:
+                            held_minutes = (datetime.now(UTC) - created).total_seconds() / 60.0
+                            if held_minutes >= settings.MIN_HOLD_MINUTES:
+                                allowed = True
+                                self._pending_close.pop(symbol, None)
+                            else:
+                                reason_key = strat_signal.get("reason", "")
+                                prev = self._pending_close.get(symbol, ("", 0))
+                                count = prev[1] + 1 if prev[0] == reason_key else 1
+                                self._pending_close[symbol] = (reason_key, count)
+                                if count >= settings.MIN_HOLD_CONSECUTIVE_SIGNALS:
+                                    allowed = True
+                                else:
+                                    logger.info(
+                                        f"[{symbol}] Min-hold gate: close '{reason_key}' held back "
+                                        f"({held_minutes:.1f} min < {settings.MIN_HOLD_MINUTES} min, "
+                                        f"signal streak {count}/{settings.MIN_HOLD_CONSECUTIVE_SIGNALS})"
+                                    )
+                    if allowed:
+                        self._pending_close.pop(symbol, None)
+                        self._active_strategy.pop(symbol, None)  # position is closing
+                        return {
+                            "symbol": symbol,
+                            "action": "close",
+                            "reason": reason,
+                            "regime": regime,
+                            "rsi": rsi,
+                            "atr": regime_data.get("atr", 0.0),
+                            "features": regime_data,
+                            "selected_strategy": best_strategy_name
+                        }
+                    action = "hold"  # gated: fall through to hold signal
 
             if action in ["buy", "sell"]:
                 self._active_strategy[symbol] = best_strategy_name  # remember who's opening this

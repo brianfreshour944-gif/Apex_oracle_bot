@@ -67,6 +67,21 @@ class TradingBotSettings(BaseSettings):
     GROQ_SENTIMENT_MODEL: str = Field(default="", description="Groq chat model for sentiment extraction (live Groq model; empty => heuristic fallback)")
     GROQ_ATTRIBUTION_MODEL: str = Field(default="", description="Groq chat model for attribution (live Groq model; empty => skip Groq)")
 
+    # --- OpenRouter (optional, single-key router in front of 400+ models) ---
+    # OpenRouter exposes an OpenAI-compatible /chat/completions endpoint, so
+    # llm_brain.py calls it with the same request shape it already uses for
+    # Groq. One key replaces the Groq-then-Gemini chain: pick the model by ID
+    # string instead of branching on provider. Append ":free" to a model ID for
+    # a zero-cost tier (e.g. "qwen/qwen3.8-27b:free").
+    # NOTE: like the Groq/Gemini keys, empty => the caller takes its documented
+    # fallback path (heuristic for sentiment, rule-assisted stub for the LLM
+    # brain). Every field defaults to "" so an unset key is behaviourally
+    # identical to the pre-OpenRouter code.
+    OPENROUTER_API_KEY: str = Field(default="", description="OpenRouter API key (single key routing to 400+ models)")
+    OPENROUTER_LLM_MODEL: str = Field(default="", description="OpenRouter model ID for the LLM brain (empty => no OpenRouter)")
+    OPENROUTER_SENTIMENT_MODEL: str = Field(default="", description="OpenRouter model ID for sentiment extraction (empty => heuristic fallback)")
+    OPENROUTER_ATTRIBUTION_MODEL: str = Field(default="", description="OpenRouter model ID for attribution (empty => skip OpenRouter)")
+
 
 
     # --- Trading Configurations ---
@@ -200,6 +215,26 @@ class TradingBotSettings(BaseSettings):
         default=8.0,
         description="Time limit to hold open positions in hours",
         gt=0
+    )
+    MIN_HOLD_MINUTES: int = Field(
+        default=30,
+        description="Minimum time a position is held before a strategy-based "
+                    "exit (momentum flip, regime flip, mean-reversion target) "
+                    "is allowed to close it. Real fills showed 47-60s round "
+                    "trips paying ~10-20bps slippage each against ~5bps/minute "
+                    "of price movement in sideways regimes -- structurally "
+                    "guaranteed losses. Price-based exits (stop loss, take "
+                    "profit, trailing stop, max hold) are NOT gated by this "
+                    "and always fire. An identical close signal persisting "
+                    "for MIN_HOLD_CONSECUTIVE_SIGNALS consecutive scans also "
+                    "overrides the gate, so a genuine reversal is not trapped.",
+        ge=0
+    )
+    MIN_HOLD_CONSECUTIVE_SIGNALS: int = Field(
+        default=3,
+        description="Consecutive scans the same strategy-based close signal "
+                    "must persist to override the min-hold gate.",
+        ge=1
     )
     DUST_VALUE_USD: float = Field(
         default=1.50,
