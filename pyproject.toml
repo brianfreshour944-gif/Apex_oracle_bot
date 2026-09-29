@@ -100,6 +100,10 @@ ignore = ["E501"]
 # Importable `src/` modules are unaffected and must keep imports at the top.
 [tool.ruff.lint.per-file-ignores]
 "scripts/*" = ["T201", "E402"]
+# Console-output CLI: printing a diagnosis, the executed verifier evidence, and
+# a proposed diff is this file's entire job. T201 is disabled for the same
+# reason as the other CLI surfaces above.
+"crews/*" = ["T201", "E402"]
 "tests/*" = ["T201"]
 "kaggle_llm_pipeline/*" = ["T201", "E402"]
 "audit_*.py" = ["T201", "E402"]
