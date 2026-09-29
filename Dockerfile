@@ -58,16 +58,6 @@ RUN mkdir -p /app/seed && \
         cp /app/data/historical_experiences.jsonl /app/seed/; \
     fi
 
-# Deployed-bot settings that differ from the code defaults in src/config.py.
-# Until 2026-09-29 these were only in the local .env, so the VM ran with the
-# defaults: ADAPTIVE_ML_ENABLED=False switched every ML component off (the
-# transformer voted stand_aside, no trade was ever recorded for retraining,
-# no online learning), and HIGH_VOLATILITY_PCT=12 labelled ordinary 1.5-2%
-# ATR bars "low_volatility", so momentum stood aside too. Environment
-# variables set in Coolify still override these.
-ENV ADAPTIVE_ML_ENABLED=true \
-    HIGH_VOLATILITY_PCT=5.0
-
 USER botuser
 
 EXPOSE 8000
