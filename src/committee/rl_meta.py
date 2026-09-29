@@ -9,6 +9,7 @@ from typing import Any
 
 import numpy as np
 
+from src import model_store
 from src.logging_config import get_logger
 
 from .adaptive_meta import AdaptiveDecision
@@ -40,8 +41,7 @@ def get_ppo_model():
         return _model
     _model_load_attempted = True
 
-    models_dir = os.path.join(os.path.dirname(__file__), '..', '..', 'models')
-    save_path = os.path.join(models_dir, 'ppo_meta_weights.zip')
+    save_path = model_store.bundle_path("ppo", "ppo_meta_weights.zip")
 
     if os.path.exists(save_path):
         try:
@@ -55,6 +55,13 @@ def get_ppo_model():
         _model = None
 
     return _model
+
+
+def reset_ppo_model():
+    """Clear the cached PPO model so the next call reloads the active weights."""
+    global _model, _model_load_attempted
+    _model = None
+    _model_load_attempted = False
 
 
 class RLMetaLearner:

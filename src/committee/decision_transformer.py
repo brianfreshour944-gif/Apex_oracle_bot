@@ -18,6 +18,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.nn.utils import spectral_norm
 
+from src import model_store
 from src.config import settings
 from src.logging_config import get_logger
 
@@ -62,10 +63,10 @@ CQL_WEIGHT = getattr(settings, 'CQL_WEIGHT', 0.1)
 # Temporal Action Smoothing (EMA)
 TEMPORAL_EMA_ALPHA = getattr(settings, 'TEMPORAL_EMA_ALPHA', 0.3)
 
-# Paths
-MODEL_DIR = os.path.join(os.path.dirname(__file__), '..', '..', 'models')
-DT_MODEL_PATH = os.path.join(MODEL_DIR, 'decision_transformer.pth')
-DT_CONFIG_PATH = os.path.join(MODEL_DIR, 'decision_transformer_config.json')
+# File names; the directory is resolved through src.model_store so trained
+# models persist in the data volume across redeploys.
+DT_MODEL_NAME = 'decision_transformer.pth'
+DT_CONFIG_NAME = 'decision_transformer_config.json'
 
 
 def _get_device() -> torch.device:
@@ -677,12 +678,14 @@ def get_decision_transformer() -> DecisionTransformer | None:
     if _DT_MODEL is not None:
         return _DT_MODEL
 
-    if not os.path.exists(DT_MODEL_PATH) or not os.path.exists(DT_CONFIG_PATH):
+    dt_model_path = model_store.bundle_path("decision_transformer", DT_MODEL_NAME)
+    dt_config_path = model_store.bundle_path("decision_transformer", DT_CONFIG_NAME)
+    if not os.path.exists(dt_model_path) or not os.path.exists(dt_config_path):
         logger.info("Decision Transformer model not found. Run training script first.")
         return None
 
     try:
-        _DT_CONFIG = DTConfig.load(DT_CONFIG_PATH)
+        _DT_CONFIG = DTConfig.load(dt_config_path)
         device = _get_device()
 
         _DT_MODEL = DecisionTransformer(
@@ -695,7 +698,7 @@ def get_decision_transformer() -> DecisionTransformer | None:
             dropout=_DT_CONFIG.dropout,
         ).to(device)
 
-        state_dict = torch.load(DT_MODEL_PATH, map_location=device, weights_only=True)
+        state_dict = torch.load(dt_model_path, map_location=device, weights_only=True)
         _DT_MODEL.load_state_dict(state_dict)
         _DT_MODEL.eval()
 
@@ -1239,9 +1242,12 @@ def train_decision_transformer(
             logger.info(f"DT Epoch {epoch}/{epochs}: loss={avg_loss:.4f}")
 
     # Save model
-    os.makedirs(MODEL_DIR, exist_ok=True)
-    torch.save(model.state_dict(), DT_MODEL_PATH)
-    _DT_CONFIG.save(DT_CONFIG_PATH)
+    with model_store.staging("decision_transformer") as staged:
+        staged_model = os.path.join(staged, DT_MODEL_NAME)
+        staged_config = os.path.join(staged, DT_CONFIG_NAME)
+        torch.save(model.state_dict(), staged_model)
+        _DT_CONFIG.save(staged_config)
+        model_store.promote("decision_transformer", {DT_MODEL_NAME: staged_model, DT_CONFIG_NAME: staged_config})
 
     # Update global cache
     global _DT_MODEL

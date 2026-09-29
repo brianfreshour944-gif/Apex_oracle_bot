@@ -23,13 +23,16 @@ from typing import Any
 
 import numpy as np
 
+from src import model_store
 from src.config import settings
 from src.logging_config import get_logger
 
 logger = get_logger("pbt")
 
 # Paths
-PBT_DIR = os.path.join(os.path.dirname(__file__), '..', '..', 'models', 'pbt')
+# Persistent store (data volume). This used to be '..', '..', 'models', which
+# from src/ resolves OUTSIDE the repo (/models on the VM, wiped on redeploy).
+PBT_DIR = os.path.join(model_store.store_dir(), 'pbt')
 PBT_STATE_PATH = os.path.join(PBT_DIR, 'pbt_state.json')
 PBT_HISTORY_PATH = os.path.join(PBT_DIR, 'pbt_history.jsonl')
 

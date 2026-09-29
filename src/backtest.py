@@ -288,7 +288,11 @@ async def run_backtest(
         if open_pos is not None:
             position = {
                 "symbol": symbol,
-                "qty": open_pos["qty"],
+                # Signed, like a live position: every strategy exit check
+                # infers direction from the sign of qty and ignores "side",
+                # so an unsigned short was managed with the LONG rules (a
+                # -4.42% short loss closed as "profit_target_reached").
+                "qty": open_pos["qty"] if open_pos["side"] == "long" else -open_pos["qty"],
                 "avg_entry_price": entry_price,
                 "side": open_pos["side"],
             }

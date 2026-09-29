@@ -19,6 +19,7 @@ import polars as pl
 
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 
+from src import model_store
 from src.backtest import BacktestResult, BacktestTrade, run_monte_carlo_analysis
 from src.config import settings
 from src.logging_config import get_logger
@@ -124,7 +125,8 @@ async def simulate_candidate(bars: pl.DataFrame, symbol: str, config: dict[str, 
             if open_pos is not None:
                 position = {
                     "symbol": symbol,
-                    "qty": open_pos["qty"],
+                    # Signed like a live position -- see src/backtest.py.
+                    "qty": open_pos["qty"] if open_pos["side"] == "long" else -open_pos["qty"],
                     "side": open_pos["side"],
                     "avg_entry_price": entry_price,
                     "current_price": current_price
@@ -380,9 +382,8 @@ async def main() -> int:
         from src.committee.rl_env import MetaDecisionEnv
         
         env = MetaDecisionEnv(surviving_snapshots)
-        models_dir = os.path.join(os.path.dirname(__file__), '..', 'models')
-        os.makedirs(models_dir, exist_ok=True)
-        save_path = os.path.join(models_dir, 'ppo_meta_weights.zip')
+        # Active champion: persistent model store first, baked models/ otherwise
+        save_path = model_store.bundle_path("ppo", "ppo_meta_weights.zip")
         
         def evaluate_ppo(test_model, test_env):
             obs, _ = test_env.reset()
@@ -416,9 +417,23 @@ async def main() -> int:
         logger.info(f"⚔️ PPO Challenger Reward: {challenger_reward:.2f}")
         
         # 4. Champion vs Challenger
-        if challenger_reward > champion_reward:
-            challenger.save(save_path)
-            logger.info(f"✅ PPO Challenger WINS! Saved updated meta-learner to {save_path}")
+        # The live learner (rl_meta.RLMetaLearner._build_obs) and the training
+        # env (rl_env.MetaDecisionEnv) build different observation vectors
+        # (26 vs 17 dims as of 2026-09-29). A model trained on the wrong one
+        # raises on every live call, and because the champion then fails to
+        # load here too, every later challenger would "win" by default.
+        from src.committee.rl_meta import RLMetaLearner
+        live_obs_shape = RLMetaLearner()._build_obs([], "default", {}).shape
+        if challenger.observation_space.shape != live_obs_shape:
+            logger.error(f"PPO Challenger NOT promoted: it takes observations of shape "
+                         f"{challenger.observation_space.shape} but the live meta-learner builds "
+                         f"{live_obs_shape}. MetaDecisionEnv and RLMetaLearner._build_obs must be aligned first.")
+        elif challenger_reward > champion_reward:
+            with model_store.staging("ppo") as staged:
+                staged_path = os.path.join(staged, 'ppo_meta_weights.zip')
+                challenger.save(staged_path)
+                store = model_store.promote("ppo", {'ppo_meta_weights.zip': staged_path})
+            logger.info(f"✅ PPO Challenger WINS! Saved updated meta-learner to {store}")
         else:
             logger.info("❌ PPO Challenger FAILED to beat Champion. Discarding new weights.")
     else:

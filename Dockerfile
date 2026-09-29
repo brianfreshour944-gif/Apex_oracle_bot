@@ -49,6 +49,15 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 # Copy source code (venv stays root-owned/read-only for botuser)
 COPY --chown=botuser:botuser . .
 
+# Keep a copy of the git-tracked replay buffer outside /app/data. The
+# bot_data volume hides the image's /app/data after the volume is first
+# created, so src/seed_data.py installs this copy at startup when the
+# volume's buffer has no usable records.
+RUN mkdir -p /app/seed && \
+    if [ -f /app/data/historical_experiences.jsonl ]; then \
+        cp /app/data/historical_experiences.jsonl /app/seed/; \
+    fi
+
 USER botuser
 
 EXPOSE 8000

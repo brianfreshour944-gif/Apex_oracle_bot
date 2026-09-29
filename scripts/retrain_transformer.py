@@ -8,6 +8,7 @@ Grok GQA model using experience replay.
 """
 
 import asyncio
+import datetime
 import json
 import os
 import sys
@@ -15,8 +16,8 @@ import traceback
 from collections import Counter
 
 import joblib
-import pandas as pd
 import numpy as np
+import pandas as pd
 import polars as pl
 import torch
 import torch.nn as nn
@@ -25,6 +26,7 @@ import yfinance as yf
 from torch.utils.data import DataLoader, Dataset
 
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
+from src import model_store
 from src.backtest import run_backtest
 from src.committee.transformer_brain import GrokGQA_Transformer, reset_ml_predictor, set_ml_predictor_override
 from src.logging_config import get_logger, set_correlation_id
@@ -34,7 +36,6 @@ logger = get_logger("transformer_replay")
 
 HISTORICAL_BUFFER_PATH = "data/historical_experiences.jsonl"
 LIVE_BUFFER_PATH = "data/live_experiences.jsonl"
-MODEL_PATH = "models/grok_gqa_v9_best.pth"
 EPOCHS = 10
 BATCH_SIZE = 32
 LR = 1e-4
@@ -43,25 +44,91 @@ WEIGHT_DECAY = 1e-4
 GRAD_CLIP_NORM = 1.0
 PATIENCE = 5  # Early stopping patience
 
+def _parse_entry_time(value):
+    if not value:
+        return None
+    try:
+        dt = datetime.datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return dt if dt.tzinfo else dt.replace(tzinfo=datetime.UTC)
+
+
 class ReplayBufferDataset(Dataset):
     def __init__(self, data_paths, max_size_per_file=100000):
         self.samples = []
         self.labels = []
+        # (sort_key, tensor, label). Records are ordered chronologically before
+        # the train/holdout split below: the historical buffer is written one
+        # symbol at a time (all BTC, then ETH, then SOL), so taking its tail
+        # as the "temporal" holdout actually held out one whole coin -- train
+        # on BTC+ETH, test on SOL -- rather than the most recent trades.
+        # Live-buffer records carry no timestamp; they are the newest trades
+        # and keep their file order after every timestamped record.
+        staged = []
+        file_index = 0
         for data_path in data_paths:
-            if os.path.exists(data_path):
-                with open(data_path) as f:
+            if not os.path.exists(data_path):
+                continue
+            # Explicit, tolerant decoding: the tracked live buffer was committed
+            # as a UTF-16 file (FF FE BOM, from a Windows PowerShell redirect),
+            # and a bare open() -- UTF-8 on Linux and in this repo's Windows
+            # env -- raised UnicodeDecodeError from readlines(), OUTSIDE the
+            # per-line try below. That aborted this whole constructor, so every
+            # nightly retrain failed and the 6k+ valid historical records were
+            # discarded along with the unreadable file. errors="replace" turns
+            # undecodable bytes into lines json.loads rejects individually, and
+            # the per-file try keeps one bad file from losing the others.
+            loaded = skipped = 0
+            try:
+                with open(data_path, encoding="utf-8-sig", errors="replace") as f:
                     lines = f.readlines()
-                    # Keep only the last `max_size_per_file` trades
-                    for line in lines[-max_size_per_file:]:
-                        try:
-                            record = json.loads(line)
-                            tensor_state = np.array(record["tensor"], dtype=np.float32)
-                            label = float(record["label"])
-                            self.samples.append((tensor_state, label))
-                            self.labels.append(label)
-                        except Exception:
-                            pass
-                             
+            except OSError as e:
+                logger.warning(f"Could not read replay buffer {data_path}: {e}")
+                continue
+            # Keep only the last `max_size_per_file` trades
+            for line_index, line in enumerate(lines[-max_size_per_file:]):
+                # A UTF-16 newline leaves a stray NUL that glues onto the next
+                # (UTF-8-appended) record; raw NUL is never valid in JSON text.
+                line = line.replace("\x00", "").strip()
+                if not line:
+                    continue
+                try:
+                    record = json.loads(line)
+                    tensor_state = np.array(record["tensor"], dtype=np.float32)
+                    label = float(record["label"])
+                    ts = _parse_entry_time(record.get("entry_time"))
+                    key = (0, ts.timestamp(), 0, 0) if ts else (1, 0.0, file_index, line_index)
+                    staged.append((key, tensor_state, label))
+                    loaded += 1
+                except Exception:
+                    skipped += 1
+            if skipped:
+                logger.warning(f"Replay buffer {data_path}: skipped {skipped} unreadable record(s)")
+            logger.info(f"Replay buffer {data_path}: loaded {loaded} record(s)")
+            file_index += 1
+
+        # Keep only records matching the model's input shape (sequence x
+        # features, e.g. 32x11). The tracked historical buffer once held
+        # 6,312 flat 128-value random-noise vectors from the generator's old
+        # fast mode, which crashed training at `seq_len, input_dim =
+        # sample_x.shape`; mixed shapes would also break DataLoader batching.
+        # The expected shape is the most common 2-D shape present.
+        two_d = Counter(t.shape for _, t, _ in staged if t.ndim == 2)
+        expected = two_d.most_common(1)[0][0] if two_d else None
+        kept = [(k, t, y) for k, t, y in staged if t.shape == expected]
+        wrong = len(staged) - len(kept)
+        if wrong:
+            other = Counter(t.shape for _, t, _ in staged if t.shape != expected)
+            logger.warning(
+                f"Replay buffers: skipped {wrong} record(s) not shaped {expected} "
+                f"(found {dict(other)}) -- likely stale fast-mode noise or a model-shape change"
+            )
+        kept.sort(key=lambda item: item[0])
+        for _, tensor_state, label in kept:
+            self.samples.append((tensor_state, label))
+            self.labels.append(label)
+
     def __len__(self):
         return len(self.samples)
         
@@ -250,9 +317,19 @@ def retrain_model() -> int:
         seq_len, input_dim = sample_x.shape
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         
-        # 1. Load and Evaluate Champion
+        # Loss of always predicting the training set's win rate. A model that
+        # can't beat this on the holdout has learned nothing usable.
+        train_labels = np.array([float(dataset[i][1]) for i in range(train_size)])
+        val_labels = np.array([float(dataset[i][1]) for i in range(train_size, len(dataset))])
+        base_rate = float(np.clip(train_labels.mean(), 1e-6, 1 - 1e-6))
+        no_skill_loss = float(-np.mean(val_labels * np.log(base_rate) + (1 - val_labels) * np.log(1 - base_rate)))
+        logger.info(f"No-skill baseline holdout loss (constant {base_rate:.3f}): {no_skill_loss:.4f}")
+
+        # 1. Load and Evaluate Champion (the active model: persistent store
+        # first, baked models/ otherwise -- see src/model_store.py)
         champion_loss = float("inf")
-        config_path = os.path.join(os.path.dirname(MODEL_PATH), "transformer_config.json")
+        champion_model = None
+        model_path, scaler_path, config_path = model_store.transformer_paths()
         
         champ_layers = 4
         champ_embed = 128
@@ -263,16 +340,17 @@ def retrain_model() -> int:
                 champ_layers = arch.get("num_layers", 4)
                 champ_embed = arch.get("embed_dim", 128)
                 
-        if os.path.exists(MODEL_PATH):
+        if os.path.exists(model_path):
             champ_q_heads = arch.get("num_q_heads", 8) if os.path.exists(config_path) else 8
             champ_kv_heads = arch.get("num_kv_heads", 2) if os.path.exists(config_path) else 2
             champion_model = GrokGQA_Transformer(input_dim=input_dim, num_layers=champ_layers, embed_dim=champ_embed, num_q_heads=champ_q_heads, num_kv_heads=champ_kv_heads, seq_len=seq_len).to(device)
             try:
-                champion_model.load_state_dict(torch.load(MODEL_PATH, map_location=device))
+                champion_model.load_state_dict(torch.load(model_path, map_location=device))
                 champion_loss = evaluate_loss(champion_model, val_loader, nn.BCEWithLogitsLoss(), device)
                 logger.info(f"Champion [{champ_layers}L, {champ_embed}D] Baseline Holdout Loss: {champion_loss:.4f}")
             except Exception as e:
                 logger.warning(f"Failed to load Champion: {e}")
+                champion_model = None
                 
         # 2. Define NAS Candidates
         candidates = [
@@ -355,7 +433,12 @@ def retrain_model() -> int:
         # 4. Champion vs Best Challenger (Holdout Loss)
         logger.info(f"Best Challenger [{best_challenger_arch['num_layers']}L, {best_challenger_arch['embed_dim']}D] Loss: {best_challenger_loss:.4f}")
         
-        if best_challenger_loss < champion_loss:
+        if champion_model is None:
+            logger.warning("No loadable champion to validate against -- vetoing promotion as a precaution.")
+        elif best_challenger_loss >= no_skill_loss:
+            logger.info(f"Best challenger holdout loss {best_challenger_loss:.4f} does not beat the no-skill "
+                        f"baseline {no_skill_loss:.4f} -- no learnable signal, keeping current Champion.")
+        elif best_challenger_loss < champion_loss:
             logger.info("Challenger beat Champion on Holdout Loss. Running real walk-forward validation before promoting...")
 
             challenger_model = GrokGQA_Transformer(
@@ -370,7 +453,6 @@ def retrain_model() -> int:
             challenger_model.eval()
             champion_model.eval()
 
-            scaler_path = os.path.join(os.path.dirname(MODEL_PATH), "feature_scaler.pkl")
             val_scaler = joblib.load(scaler_path)
 
             try:
@@ -398,24 +480,38 @@ def retrain_model() -> int:
                     # a single-metric win is exactly the kind of thin margin
                     # that curve-fits to one lucky window (see
                     # ADVERSARIAL_AUDIT_2026-09-20.md §1 on edge verification).
+                    # Beating the champion is not enough on its own: on
+                    # 2026-09-29 a challenger that lost -1.49% per window was
+                    # promoted because the champion lost -2.84%. It must also
+                    # make money on its own.
                     challenger_wins_validation = (
                         challenger_summary["mean_return_pct"] > champ_summary["mean_return_pct"]
                         and challenger_summary["mean_sharpe"] > champ_summary["mean_sharpe"]
+                        and challenger_summary["mean_return_pct"] > 0
                     )
 
                 if challenger_wins_validation:
-                    os.makedirs("models", exist_ok=True)
-                    torch.save(best_challenger_state, MODEL_PATH)
-                    import json
-                    with open(config_path, "w") as f:
-                        json.dump(best_challenger_arch, f)
+                    # Written to the persistent store (data volume), not the
+                    # image's models/ dir, so the promotion survives a redeploy.
+                    with model_store.staging("transformer") as staged:
+                        staged_model = os.path.join(staged, "grok_gqa_v9_best.pth")
+                        staged_config = os.path.join(staged, "transformer_config.json")
+                        torch.save(best_challenger_state, staged_model)
+                        with open(staged_config, "w") as f:
+                            json.dump(best_challenger_arch, f)
+                        store = model_store.promote("transformer", {
+                            "grok_gqa_v9_best.pth": staged_model,
+                            "transformer_config.json": staged_config,
+                            "feature_scaler.pkl": scaler_path,
+                        })
                     logger.info(f"Challenger PASSED validation (holdout loss AND multi-symbol walk-forward, "
-                                f"beating champion on both mean return and mean Sharpe). "
-                                f"Promoted. Saved new NAS architecture to {config_path}")
+                                f"beating champion on both mean return and mean Sharpe, with positive mean return). "
+                                f"Promoted to {store}")
                 else:
                     logger.info("Challenger beat Champion on holdout loss but FAILED walk-forward validation "
                                 "(did not beat champion on both mean return and mean Sharpe across all "
-                                "symbols/windows). Vetoing promotion, keeping current Champion.")
+                                "symbols/windows, or its mean return was not positive). Vetoing promotion, "
+                                "keeping current Champion.")
             except Exception as e:
                 logger.error("Walk-forward validation failed to run", error=str(e), traceback=traceback.format_exc())
                 logger.info("Vetoing promotion as a precaution (cannot confirm the challenger is actually better).")

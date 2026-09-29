@@ -167,7 +167,8 @@ async def generate_history_for_symbol(symbol: str, bars: pl.DataFrame):
         if open_pos is not None:
             position = {
                 "symbol": symbol,
-                "qty": open_pos["qty"],
+                # Signed like a live position -- see src/backtest.py.
+                "qty": open_pos["qty"] if open_pos["side"] == "long" else -open_pos["qty"],
                 "side": open_pos["side"],
                 "avg_entry_price": entry_price,
                 "current_price": current_price
@@ -271,7 +272,7 @@ async def generate_history_for_symbol(symbol: str, bars: pl.DataFrame):
                 
                 if len(batch_records) >= BATCH_SIZE:
                     os.makedirs("data", exist_ok=True)
-                    with open(BUFFER_PATH, "a") as f:
+                    with open(BUFFER_PATH, "a", encoding="utf-8") as f:
                         for rec in batch_records:
                             f.write(json.dumps(rec) + "\n")
                     batch_records.clear()
@@ -281,7 +282,7 @@ async def generate_history_for_symbol(symbol: str, bars: pl.DataFrame):
             
     if batch_records:
         os.makedirs("data", exist_ok=True)
-        with open(BUFFER_PATH, "a") as f:
+        with open(BUFFER_PATH, "a", encoding="utf-8") as f:
             for rec in batch_records:
                 f.write(json.dumps(rec) + "\n")
     

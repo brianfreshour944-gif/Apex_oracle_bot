@@ -13,6 +13,7 @@ import numpy as np
 from tenacity import RetryError
 
 from scripts.deployment_registry import cleanup_stale, heartbeat_process, register_process
+from src import model_store
 from src.alerting import get_alerting_engine
 from src.api import start_fastapi_server_async
 from src.committee.transformer_brain import _model_inference_lock
@@ -81,6 +82,13 @@ class StructuredLogger:
 
 logger = get_logger("bot")
 structured_logger = StructuredLogger("bot")
+
+# Real closed trades for the transformer's replay retrain. Overridable so the
+# test suite (tests/conftest.py) can point it at a temp file instead of the
+# bot's real buffer.
+LIVE_BUFFER_PATH = _os.environ.get("APEX_LIVE_BUFFER_PATH") or _os.path.join(
+    _os.path.dirname(__file__), "..", "data", "live_experiences.jsonl"
+)
 
 
 async def _record_committee_outcome(
@@ -218,15 +226,19 @@ async def _record_committee_outcome(
             import os
             tensor_state = snap.get("tensor_state")
             if tensor_state is not None:
-                live_buffer_path = os.path.join(
-                    os.path.dirname(__file__), "..", "data", "live_experiences.jsonl"
-                )
+                live_buffer_path = LIVE_BUFFER_PATH
                 os.makedirs(os.path.dirname(live_buffer_path), exist_ok=True)
                 label = 1.0 if realized_pnl > 0 else 0.0
-                record = json.dumps({"tensor": tensor_state, "label": label})
+                entry = {"tensor": tensor_state, "label": label}
+                # Entry time lets retrain_transformer.py order live trades
+                # chronologically with the historical buffer.
+                created = snap.get("created_at")
+                if created is not None:
+                    entry["entry_time"] = created.isoformat() if hasattr(created, "isoformat") else str(created)
+                record = json.dumps(entry)
 
                 def _append_live_experience():
-                    with open(live_buffer_path, "a") as f:
+                    with open(live_buffer_path, "a", encoding="utf-8") as f:
                         f.write(record + "\n")
 
                 await asyncio.to_thread(_append_live_experience)
@@ -254,18 +266,19 @@ async def _record_committee_outcome(
                          model = predictor["model"]
                          scaler = predictor["scaler"]
                          device = predictor["device"]
-                         
-                         # Prepare single sample
+
+                         # tensor_state is ALREADY scaled: transformer_brain.py
+                         # stores data_scaled.tolist(), the exact model input at
+                         # prediction time, and retrain_transformer.py trains on
+                         # it as-is. This used to call scaler.transform() on it
+                         # again, which on a real stored record pushed values
+                         # from about [-3, 4] out to about -285, so every
+                         # online step trained the live model on inputs it
+                         # never sees when predicting.
                          data = np.array(tensor_state, dtype=np.float32)
-                         if hasattr(scaler, "feature_names_in_"):
-                             cols = list(scaler.feature_names_in_)
-                         else:
-                             from src.feature_engineering import get_active_features
-                             cols = get_active_features()
-                         
-                         if len(data) > 0 and len(data[0]) == len(cols):
-                             data_scaled = scaler.transform(data).astype(np.float32)
-                             data_scaled = np.nan_to_num(data_scaled, nan=0.0, posinf=0.0, neginf=0.0)
+                         n_features = getattr(scaler, "n_features_in_", None)
+                         if data.ndim == 2 and len(data) > 0 and (n_features is None or data.shape[1] == n_features):
+                             data_scaled = np.nan_to_num(data, nan=0.0, posinf=0.0, neginf=0.0)
                              
                              x = torch.tensor(data_scaled).unsqueeze(0).to(device)
                              label_tensor = torch.tensor([[1.0 if realized_pnl > 0 else 0.0]], dtype=torch.float32).to(device)
@@ -2184,6 +2197,37 @@ async def monitor_killswitch(risk_manager: RiskManager) -> None:
             logger.error(f"Killswitch monitor error: {e}")
             await asyncio.sleep(settings.KILLSWITCH_CHECK_INTERVAL_SEC)
 
+def _promotion_marks() -> dict[str, str | None]:
+    return {bundle: model_store.promoted_at(bundle) for bundle in model_store.BUNDLES}
+
+
+def _reload_promoted_models(before: dict[str, str | None]) -> None:
+    """Trainers run as subprocesses and promote into src.model_store; the
+    brains cache their model in this process. Drop the cache of any bundle
+    that was promoted so the next decision uses the new model instead of
+    waiting for a restart. Untouched bundles keep their cache (and the live
+    transformer keeps its online-learning updates)."""
+    for bundle, mark in _promotion_marks().items():
+        if mark == before.get(bundle):
+            continue
+        try:
+            if bundle == "transformer":
+                from src.committee.bayesian_transformer import reset_bayesian_transformer
+                from src.committee.transformer_brain import reset_fast_ensemble_predictor, reset_ml_predictor
+                reset_ml_predictor()
+                reset_fast_ensemble_predictor()
+                reset_bayesian_transformer()
+            elif bundle == "decision_transformer":
+                from src.committee.decision_transformer import reset_decision_transformer
+                reset_decision_transformer()
+            elif bundle == "ppo":
+                from src.committee.rl_meta import reset_ppo_model
+                reset_ppo_model()
+            logger.info(f"New '{bundle}' model promoted; it will be loaded on the next decision.")
+        except Exception as e:
+            logger.error(f"Failed to reload promoted '{bundle}' model (restart will pick it up): {e}")
+
+
 async def run_periodic_analyzer() -> None:
     """Background task to run the analyzer script periodically."""
     import os
@@ -2277,12 +2321,14 @@ async def run_periodic_cull() -> None:
             await asyncio.sleep(sleep_seconds)
             
             logger.info("Running Evolution Cull pipeline...")
+            marks = _promotion_marks()
             process = await asyncio.create_subprocess_exec(
                 sys.executable, script_path,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE
             )
             stdout, stderr = await process.communicate()
+            _reload_promoted_models(marks)
             
             if process.returncode == 0:
                 logger.info(f"Evolution Cull completed successfully:\n{stdout.decode().strip()}")
@@ -2364,12 +2410,14 @@ async def run_periodic_transformer_replay() -> None:
             await asyncio.sleep(sleep_seconds)
 
             logger.info("Running Transformer replay fine-tune...")
+            marks = _promotion_marks()
             process = await asyncio.create_subprocess_exec(
                 sys.executable, script_path,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE
             )
             stdout, stderr = await process.communicate()
+            _reload_promoted_models(marks)
 
             if process.returncode == 0:
                 logger.info(f"Transformer replay fine-tune completed successfully:\n{stdout.decode().strip()}")
@@ -2414,12 +2462,14 @@ async def run_periodic_ppo_retrain() -> None:
             await asyncio.sleep(sleep_seconds)
 
             logger.info("Running Evolutionary PPO Trainer...")
+            marks = _promotion_marks()
             process = await asyncio.create_subprocess_exec(
                 sys.executable, script_path,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE
             )
             stdout, stderr = await process.communicate()
+            _reload_promoted_models(marks)
 
             if process.returncode == 0:
                 logger.info(f"PPO Meta-Learner retraining completed successfully:\n{stdout.decode().strip()}")
@@ -2460,12 +2510,14 @@ async def run_periodic_decision_transformer_retrain() -> None:
             await asyncio.sleep(sleep_seconds)
 
             logger.info("Running Decision Transformer retraining...")
+            marks = _promotion_marks()
             process = await asyncio.create_subprocess_exec(
                 sys.executable, script_path,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE
             )
             stdout, stderr = await process.communicate()
+            _reload_promoted_models(marks)
 
             if process.returncode == 0:
                 logger.info(f"Decision Transformer retraining completed successfully:\n{stdout.decode().strip()}")
@@ -2718,6 +2770,14 @@ async def run_trading_bot() -> None:
         model_warmup_task = asyncio.create_task(
             asyncio.to_thread(get_ml_predictor), name="model_warmup"
         )
+
+        # Replace an untrainable replay buffer in the data volume with the one
+        # shipped in the image (see src/seed_data.py). Never blocks startup.
+        try:
+            from src.seed_data import bootstrap_replay_buffer
+            await asyncio.to_thread(bootstrap_replay_buffer)
+        except Exception as e:
+            logger.error(f"Replay buffer seed check failed (non-fatal): {e}")
 
         # Initialize database (handle connection failures gracefully)
         try:

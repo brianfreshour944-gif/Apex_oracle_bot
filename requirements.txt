@@ -24,4 +24,8 @@ joblib>=1.3.0
 scikit-learn>=1.4.0
 groq>=0.14.0
 torch>=2.2.0
+# PPO meta-learner (src/committee/rl_meta.py, scripts/evolutionary_ppo_trainer.py).
+# Without these the PPO model silently never loads and the weekly retrain fails.
+stable-baselines3==2.9.0
+gymnasium==1.3.0
 scipy>=1.11.0

@@ -94,6 +94,93 @@ class TestFullTradingLoop:
         rm.record_fill_costs = MagicMock()
         return rm
 
+    async def _run_buy(self, mock_exchange, mock_strategy, mock_risk_manager):
+        import pandas as pd
+        import polars as pl
+
+        mock_exchange.get_latest_bar = AsyncMock(return_value=pl.DataFrame({
+            "t": [pd.Timestamp.now(tz="UTC")], "open": [50000.0], "high": [50100.0],
+            "low": [49900.0], "close": [50050.0], "volume": [100.0], "vwap": [50025.0],
+            "trade_count": [100],
+        }))
+        await process_signal_for_symbol(
+            symbol="BTC/USD", current_price=50050.0, risk_manager=mock_risk_manager,
+            strategy=mock_strategy, ex=mock_exchange, positions=[], regime_flag=None,
+            banned_symbols=set(),
+        )
+
+    @pytest.mark.asyncio
+    async def test_unresolved_order_blocks_new_entry(self, mock_exchange, mock_strategy, mock_risk_manager):
+        """A stale order still open on the exchange (e.g. submitted before a
+        crash) must block a second entry for that symbol -- otherwise the
+        next signal re-fetches still-empty positions and doubles exposure.
+        Same flow as test_full_buy_signal_flow, which does place an order."""
+        import src.bot as bot_mod
+        bot_mod._state.symbols_with_unresolved_orders = {"BTCUSD"}
+        try:
+            await self._run_buy(mock_exchange, mock_strategy, mock_risk_manager)
+        finally:
+            bot_mod._state.symbols_with_unresolved_orders = set()
+        mock_exchange.create_order.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_incomplete_reconciliation_blocks_new_entry(self, mock_exchange, mock_strategy, mock_risk_manager):
+        """If startup reconciliation couldn't read positions, the exchange
+        state is unknown: new entries must wait for a successful retry."""
+        import src.bot as bot_mod
+        bot_mod._state.reconciliation_incomplete = True
+        try:
+            await self._run_buy(mock_exchange, mock_strategy, mock_risk_manager)
+        finally:
+            bot_mod._state.reconciliation_incomplete = False
+        mock_exchange.create_order.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_order_never_exceeds_max_single_trade(self, mock_exchange, mock_strategy, mock_risk_manager):
+        """Sizing asks for ~$500k and the exposure check approves whatever is
+        requested, so only the MAX_SINGLE_TRADE_USD cap (including the re-cap
+        after the committee confidence multiplier) stands between the signal
+        and the order."""
+        from src.config import settings
+        mock_risk_manager.calculate_position_size = MagicMock(return_value=(10.0, "ok"))
+        mock_risk_manager.check_and_reserve_exposure = AsyncMock(
+            side_effect=lambda notional, *a, **k: (notional, "ok"))
+        await self._run_buy(mock_exchange, mock_strategy, mock_risk_manager)
+        mock_exchange.create_order.assert_called_once()
+        qty = mock_exchange.create_order.call_args.kwargs["qty"]
+        assert qty * 50050.0 <= settings.MAX_SINGLE_TRADE_USD * 1.0001
+
+    @pytest.mark.asyncio
+    async def test_filled_order_is_written_to_order_ledger(self, mock_exchange, mock_strategy, mock_risk_manager):
+        """Startup reconciliation re-attaches a crash-gap fill instead of
+        liquidating it only if the order ledger has a record of it; the ledger
+        write had zero callers before 2026-09-22."""
+        from src.db import get_recent_order_records
+        await self._run_buy(mock_exchange, mock_strategy, mock_risk_manager)
+        records = get_recent_order_records("BTCUSD")
+        assert any(r["order_id"] == "test_order_123" and r["side"] == "buy" for r in records)
+
+    @pytest.mark.asyncio
+    async def test_trailing_stop_uses_fresh_position_not_cycle_snapshot(
+        self, mock_exchange, mock_strategy, mock_risk_manager
+    ):
+        """The main loop passes a cycle-start positions snapshot (up to one
+        full loop interval old). The trailing-stop check must decide on a
+        fresh fetch, like the buy path does."""
+        stale = [{"symbol": "BTCUSD", "qty": "0.1", "avg_entry_price": 40000.0}]
+        fresh = [{"symbol": "BTCUSD", "qty": "0.2", "avg_entry_price": 45000.0}]
+        mock_exchange.get_positions = AsyncMock(return_value=fresh)
+        mock_strategy.generate_trading_signal = AsyncMock(return_value={
+            "action": "hold", "confidence": 0.5, "regime": "trending", "rsi": 50.0, "atr": 500.0,
+        })
+        await process_signal_for_symbol(
+            symbol="BTC/USD", current_price=50050.0, risk_manager=mock_risk_manager,
+            strategy=mock_strategy, ex=mock_exchange, positions=stale, regime_flag=None,
+            banned_symbols=set(),
+        )
+        args = mock_risk_manager.check_trailing_stop.call_args.args
+        assert args[2] == 45000.0 and args[3] == 0.2
+
     @pytest.mark.asyncio
     async def test_full_buy_signal_flow(self, mock_exchange, mock_strategy, mock_risk_manager):
         """Test complete buy signal processing flow."""

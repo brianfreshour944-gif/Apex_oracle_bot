@@ -55,6 +55,10 @@ dependencies = [
     # clean `pip install .` produced an ImportError at import time.
     "pandas>=2.2.0",
     "torch>=2.2.0",
+    # PPO meta-learner (rl_meta.py loads it, rl_env.py imports gymnasium);
+    # missing from both manifests, so PPO never loaded in the container.
+    "stable-baselines3==2.9.0",
+    "gymnasium==1.3.0",
 ]
 
 [project.scripts]

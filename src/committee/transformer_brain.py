@@ -18,13 +18,13 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from src import model_store
 from src.config import settings
 
 from .models import BrainVote
 
-# Path to PyTorch model & feature scaler
-MODEL_PATH = settings.TRANSFORMER_MODEL_PATH
-SCALER_PATH = settings.TRANSFORMER_SCALER_PATH
+# Model & feature scaler paths are resolved at load time through
+# src.model_store (persistent store first, baked models/ fallback).
 
 # Ensemble settings
 USE_BAYESIAN_TRANSFORMER = getattr(settings, 'USE_BAYESIAN_TRANSFORMER', False)
@@ -128,17 +128,19 @@ def get_ml_predictor():
         return _predictor_instance
 
     _predictor_initialized = True
-    if os.path.exists(MODEL_PATH) and os.path.exists(SCALER_PATH):
+    # Resolved per load (not at import) so a model promoted into the
+    # persistent store by a trainer is picked up on the next reload.
+    model_path, scaler_path, config_path = model_store.transformer_paths()
+    if os.path.exists(model_path) and os.path.exists(scaler_path):
         try:
             import joblib
             device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-            scaler = joblib.load(SCALER_PATH)
+            scaler = joblib.load(scaler_path)
 
             # Determine feature dimension from scaler
             input_dim = scaler.n_features_in_ if hasattr(scaler, "n_features_in_") else 11
             
             # Load dynamic architecture config if it exists
-            config_path = os.path.join(os.path.dirname(MODEL_PATH), "transformer_config.json")
             if os.path.exists(config_path):
                 import json
                 with open(config_path) as f:
@@ -152,7 +154,7 @@ def get_ml_predictor():
                 ).to(device)
             else:
                 model = GrokGQA_Transformer(input_dim=input_dim).to(device)
-            state_dict = torch.load(MODEL_PATH, map_location=device, weights_only=True)
+            state_dict = torch.load(model_path, map_location=device, weights_only=True)
             model.load_state_dict(state_dict)
             model.eval()
 
@@ -188,7 +190,7 @@ def set_ml_predictor_override(model, scaler, device, input_dim):
 
 def reset_ml_predictor():
     """Clear the cached predictor override so the next call to
-    get_ml_predictor() reloads normally from MODEL_PATH/SCALER_PATH."""
+    get_ml_predictor() reloads normally from the active model files."""
     global _predictor_instance, _predictor_initialized
     _predictor_instance = None
     _predictor_initialized = False
@@ -198,6 +200,13 @@ _fast_ensemble_instance = None
 _fast_ensemble_initialized = False
 
 
+def reset_fast_ensemble_predictor():
+    """Clear the cached BatchEnsemble so the next call reloads the active model files."""
+    global _fast_ensemble_instance, _fast_ensemble_initialized
+    _fast_ensemble_instance = None
+    _fast_ensemble_initialized = False
+
+
 def get_fast_ensemble_predictor():
     """Lazily loads the BatchEnsemble wrapped transformer model."""
     global _fast_ensemble_instance, _fast_ensemble_initialized
@@ -205,17 +214,19 @@ def get_fast_ensemble_predictor():
         return _fast_ensemble_instance
 
     _fast_ensemble_initialized = True
-    if os.path.exists(MODEL_PATH) and os.path.exists(SCALER_PATH):
+    # Resolved per load (not at import) so a model promoted into the
+    # persistent store by a trainer is picked up on the next reload.
+    model_path, scaler_path, config_path = model_store.transformer_paths()
+    if os.path.exists(model_path) and os.path.exists(scaler_path):
         try:
             import joblib
             device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-            scaler = joblib.load(SCALER_PATH)
+            scaler = joblib.load(scaler_path)
 
             # Determine feature dimension from scaler
             input_dim = scaler.n_features_in_ if hasattr(scaler, "n_features_in_") else 11
             
             # Load dynamic architecture config if it exists
-            config_path = os.path.join(os.path.dirname(MODEL_PATH), "transformer_config.json")
             if os.path.exists(config_path):
                 import json
                 with open(config_path) as f:
@@ -230,7 +241,7 @@ def get_fast_ensemble_predictor():
             else:
                 base_model = GrokGQA_Transformer(input_dim=input_dim).to(device)
             
-            state_dict = torch.load(MODEL_PATH, map_location=device, weights_only=True)
+            state_dict = torch.load(model_path, map_location=device, weights_only=True)
             base_model.load_state_dict(state_dict)
             base_model.eval()
 

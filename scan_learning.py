@@ -13,11 +13,17 @@ print("=" * 60)
 print("\n[1] REPLAY BUFFERS")
 for f in ['data/historical_experiences.jsonl', 'data/live_experiences.jsonl']:
     if os.path.exists(f):
-        with open(f) as fp:
-            lines = fp.readlines()
+        # Explicit, tolerant decoding -- see ReplayBufferDataset in
+        # scripts/retrain_transformer.py for why a bare open() crashed here.
+        with open(f, encoding="utf-8-sig", errors="replace") as fp:
+            lines = [ln for ln in fp.readlines() if ln.strip()]
             print(f"  {f}: {len(lines)} records")
             if lines:
-                rec = json.loads(lines[0])
+                try:
+                    rec = json.loads(lines[0])
+                except json.JSONDecodeError as e:
+                    print(f"    UNREADABLE first record ({e}) -- buffer may be corrupt or mis-encoded")
+                    continue
                 print(f"    Keys: {list(rec.keys())}")
                 tensor = rec.get('tensor') or []
                 if tensor and isinstance(tensor[0], (list, tuple)):
@@ -100,8 +106,8 @@ issues = []
 # Check historical buffer size
 hist_path = 'data/historical_experiences.jsonl'
 if os.path.exists(hist_path):
-    with open(hist_path) as fp:
-        n_hist = len(fp.readlines())
+    with open(hist_path, encoding="utf-8-sig", errors="replace") as fp:
+        n_hist = sum(1 for ln in fp if ln.strip())
     if n_hist < 1000:
         issues.append(f"Historical buffer small ({n_hist} records) - may need more backtest data")
     else:

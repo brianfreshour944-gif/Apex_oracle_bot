@@ -94,7 +94,8 @@ async def run_adaptive_simulation(symbol: str = "BTC-USD", n_days: int = 180):
         if open_pos is not None:
             position = {
                 "symbol": symbol,
-                "qty": open_pos["qty"],
+                # Signed like a live position -- see src/backtest.py.
+                "qty": open_pos["qty"] if open_pos["side"] == "long" else -open_pos["qty"],
                 "avg_entry_price": entry_price,
                 "side": open_pos["side"],
             }
@@ -208,7 +209,7 @@ async def run_adaptive_simulation(symbol: str = "BTC-USD", n_days: int = 180):
                         "label": t_label
                     }
                     
-                    with open(buffer_path, "a") as f:
+                    with open(buffer_path, "a", encoding="utf-8") as f:
                         f.write(json.dumps(record) + "\n")
                 
                 label = "WIN" if pnl > 0 else "LOSS"

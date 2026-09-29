@@ -22,12 +22,14 @@ from typing import Any
 
 import numpy as np
 
+from src import model_store
 from src.logging_config import get_logger
 
 logger = get_logger("bayes_opt")
 
 # Paths
-OPT_DIR = os.path.join(os.path.dirname(__file__), '..', '..', 'models', 'bayes_opt')
+# Persistent store (data volume); '..', '..' from src/ used to point outside the repo.
+OPT_DIR = os.path.join(model_store.store_dir(), 'bayes_opt')
 OPT_STATE_PATH = os.path.join(OPT_DIR, 'bayes_opt_state.json')
 OPT_HISTORY_PATH = os.path.join(OPT_DIR, 'bayes_opt_history.jsonl')
 

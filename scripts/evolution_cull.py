@@ -4,9 +4,9 @@ scripts/evolution_cull.py — The Monthly Cull (Level 4)
 Evaluates all shadow models against the production model based on live paper-trading PnL.
 """
 
+import json
 import logging
 import os
-import shutil
 import sys
 from datetime import UTC, datetime, timedelta
 
@@ -17,6 +17,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')
 
 import asyncio
 
+from src import model_store
 from src.db import Base, DecisionSnapshot, ShadowTrade, get_db_session, get_engine
 from src.telegram_alerts import send_telegram_alert
 
@@ -25,8 +26,6 @@ log = logging.getLogger(__name__)
 
 DATA_DIR = os.path.join(os.path.dirname(__file__), '..', 'data')
 CANDIDATES_DIR = os.path.join(DATA_DIR, "candidates")
-PROD_MODEL_OUT = os.path.join(DATA_DIR, "grok_gqa_v9_best.pth")
-PROD_SCALER_OUT = os.path.join(DATA_DIR, "feature_scaler.pkl")
 
 def evaluate_and_cull() -> int:
     Base.metadata.create_all(get_engine())
@@ -74,11 +73,34 @@ def evaluate_and_cull() -> int:
         
         cand_pth = os.path.join(CANDIDATES_DIR, f"{best_candidate}.pth")
         cand_scaler = os.path.join(CANDIDATES_DIR, "feature_scaler.pkl")
-        
-        if os.path.exists(cand_pth):
-            shutil.copy(cand_pth, PROD_MODEL_OUT)
-        if os.path.exists(cand_scaler):
-            shutil.copy(cand_scaler, PROD_SCALER_OUT)
+        cand_config = os.path.join(CANDIDATES_DIR, f"{best_candidate}_config.json")
+
+        # Promote weights, scaler AND architecture as one bundle into the
+        # persistent model store. This used to copy only weights + scaler
+        # into data/, which the live brain never reads -- and even there a
+        # different-sized candidate would not have loaded against the old
+        # transformer_config.json.
+        if all(os.path.exists(p) for p in (cand_pth, cand_scaler, cand_config)):
+            with open(cand_config) as f:
+                cand_arch = json.load(f)
+            with model_store.staging("transformer") as staged:
+                arch_path = os.path.join(staged, "transformer_config.json")
+                with open(arch_path, "w") as f:
+                    # automl_pipeline trains every candidate with 8 query / 2 KV heads
+                    json.dump({
+                        "num_layers": cand_arch.get("layers", 4),
+                        "embed_dim": cand_arch.get("embed", 128),
+                        "num_q_heads": 8,
+                        "num_kv_heads": 2,
+                    }, f)
+                model_store.promote("transformer", {
+                    "grok_gqa_v9_best.pth": cand_pth,
+                    "feature_scaler.pkl": cand_scaler,
+                    "transformer_config.json": arch_path,
+                })
+        else:
+            log.error(f"{best_candidate} is missing its weights, scaler or config in {CANDIDATES_DIR} -- not promoting.")
+            msg_lines.append("\n⚠️ Promotion skipped: candidate files incomplete.")
     else:
         log.info("🛡️ Production model defended its title. No promotion.")
         msg_lines.append("\n🛡️ Production defended its title. No promotion.")

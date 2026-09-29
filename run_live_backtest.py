@@ -81,7 +81,8 @@ async def run_live_data_backtest(symbol: str = "BTC-USD", n_bars: int = 400):
         if open_pos is not None:
             position = {
                 "symbol": symbol,
-                "qty": open_pos["qty"],
+                # Signed like a live position -- see src/backtest.py.
+                "qty": open_pos["qty"] if open_pos["side"] == "long" else -open_pos["qty"],
                 "avg_entry_price": entry_price,
                 "side": open_pos["side"],
             }

@@ -33,6 +33,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')
 import asyncio
 import uuid
 
+from src import model_store
 from src.committee.transformer_brain import GrokGQA_Transformer
 from src.db import save_experiment_record
 from src.feature_engineering import MASTER_FEATURE_COLS, add_features, get_active_features
@@ -51,17 +52,11 @@ VAL_FRAC       = 0.15
 DAYS_HISTORY   = 180
 PATIENCE       = 5
 
-# Paths
-# NOTE: model/scaler outputs MUST match settings.TRANSFORMER_MODEL_PATH /
-# TRANSFORMER_SCALER_PATH (src/config.py, both default to "models/...") -
-# transformer_brain.py loads from there. This previously pointed at
-# DATA_DIR ("data/...") instead, a different directory that
-# transformer_brain.py never reads from, so a "winning" retrain here
-# silently never reached the live model.
+# Paths. This pipeline only writes shadow candidates (data/candidates);
+# promotion to production is evolution_cull.py's job. The production model it
+# compares against is resolved through src.model_store, the same place
+# transformer_brain.py loads it from.
 DATA_DIR       = os.path.join(os.path.dirname(__file__), '..', 'data')
-MODELS_DIR     = os.path.join(os.path.dirname(__file__), '..', 'models')
-PROD_MODEL_OUT = os.path.join(MODELS_DIR, "grok_gqa_v9_best.pth")
-PROD_SCALER_OUT= os.path.join(MODELS_DIR, "feature_scaler.pkl")
 
 TRAIN_SYMBOLS = [
     "BTC/USD", "ETH/USD", "SOL/USD", "DOGE/USD",
@@ -237,11 +232,20 @@ def main() -> int:
         
     # Evaluate Production Model
     prod_acc = 0.0
-    if os.path.exists(PROD_MODEL_OUT):
+    prod_model_path, _prod_scaler_path, prod_config_path = model_store.transformer_paths()
+    if os.path.exists(prod_model_path):
         log.info("Evaluating Production Model...")
-        prod_model = GrokGQA_Transformer(input_dim=n_feat, seq_len=SEQ_LEN, embed_dim=128, num_layers=4).to(device)
         try:
-            prod_model.load_state_dict(torch.load(PROD_MODEL_OUT, map_location=device))
+            prod_arch = {}
+            if os.path.exists(prod_config_path):
+                with open(prod_config_path) as f:
+                    prod_arch = json.load(f)
+            prod_model = GrokGQA_Transformer(
+                input_dim=n_feat, seq_len=SEQ_LEN,
+                embed_dim=prod_arch.get("embed_dim", 128), num_layers=prod_arch.get("num_layers", 4),
+                num_q_heads=prod_arch.get("num_q_heads", 8), num_kv_heads=prod_arch.get("num_kv_heads", 2),
+            ).to(device)
+            prod_model.load_state_dict(torch.load(prod_model_path, map_location=device))
             _, prod_acc = evaluate_model(prod_model, holdout_loader, device, criterion)
         except Exception as e:
             log.warning(f"Failed to load production model: {e}")

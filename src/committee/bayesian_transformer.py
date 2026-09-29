@@ -19,6 +19,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from src import model_store
 from src.config import settings
 from src.logging_config import get_logger
 
@@ -305,8 +306,7 @@ def get_bayesian_transformer(
     )
     
     # Try to load ensemble
-    base_path = settings.TRANSFORMER_MODEL_PATH
-    scaler_path = settings.TRANSFORMER_SCALER_PATH
+    base_path, scaler_path, _config_path = model_store.transformer_paths()
     
     if not _bayesian_brain.load_ensemble(base_path, scaler_path):
         _bayesian_brain = None
