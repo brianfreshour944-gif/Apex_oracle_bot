@@ -130,3 +130,16 @@ async def test_same_day_baseline_still_restored_and_trips(async_state):
     status = await async_state.risk_manager.update_account_status()
     assert status["status"] == "killswitch_activated"
     assert status["reason"] == "daily_loss_limit_exceeded"
+
+
+def test_drawdown_tripped_at_restored(live_state):
+    """The flat-book cooldown clock must survive a restart."""
+    from datetime import UTC, datetime, timedelta
+    tripped = datetime.now(UTC) - timedelta(hours=5)
+    bot_mod.apply_crash_recovery_state({"risk_drawdown_tripped_at": tripped.isoformat()})
+    assert live_state.risk_manager._drawdown_tripped_at == tripped
+
+
+def test_malformed_drawdown_tripped_at_is_ignored(live_state):
+    bot_mod.apply_crash_recovery_state({"risk_drawdown_tripped_at": "not-a-date"})
+    assert live_state.risk_manager._drawdown_tripped_at is None

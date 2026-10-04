@@ -656,6 +656,12 @@ async def flush_crash_recovery_state(force: bool = False) -> None:
             # UTC day the baseline above belongs to (last_check_time advances
             # at each day reset) -- restore discards a baseline from another day.
             "risk_start_of_day_date": _state.risk_manager.last_check_time.date().isoformat() if _state.risk_manager else "",
+            # First max-drawdown breach time, so a restart doesn't restart the
+            # flat-book cooldown clock (frequent redeploys would block forever).
+            "risk_drawdown_tripped_at": (
+                _state.risk_manager._drawdown_tripped_at.isoformat()
+                if _state.risk_manager and _state.risk_manager._drawdown_tripped_at else ""
+            ),
         }
         if _state.risk_manager is not None:
             _state.risk_manager.consume_peaks_dirty()
@@ -692,6 +698,13 @@ def apply_crash_recovery_state(recovery: dict[str, Any] | None) -> dict[str, int
             #  equity is at peak and won't trip at 10% drawdown)
             if recovery.get("risk_peak_equity", 0) > 0:
                 _state.risk_manager.peak_equity = recovery["risk_peak_equity"]
+            if recovery.get("risk_drawdown_tripped_at"):
+                try:
+                    _state.risk_manager._drawdown_tripped_at = datetime.fromisoformat(
+                        recovery["risk_drawdown_tripped_at"]
+                    )
+                except (TypeError, ValueError):
+                    pass  # malformed -> breach re-stamps on the next status update
             # Daily-loss baseline: only valid for the UTC day it was taken.
             # RiskManager.last_check_time starts at "now", so a restored
             # baseline from an earlier day would never hit the day reset and

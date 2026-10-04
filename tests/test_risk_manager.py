@@ -210,44 +210,91 @@ async def test_daily_loss_killswitch_still_clears_on_new_day(monkeypatch):
 
 
 
-@pytest.mark.asyncio
-@pytest.mark.xfail(
-    strict=True,
-    reason="KNOWN BUG: drawdown killswitch deadlocks once the book is flat. "
-    "The breach liquidates everything and blocks new entries, so equity can "
-    "no longer move toward the -5% recovery line; new days and restarts "
-    "(peak_equity restored from bot_state.json) don't clear it either. "
-    "Remove this marker when a recovery path is added.",
-)
-async def test_drawdown_killswitch_recovers_after_liquidation_while_flat(monkeypatch):
-    monkeypatch.setattr(settings, "DAILY_LOSS_LIMIT", -50.0)  # isolate drawdown logic
-    ex = AsyncMock()
-    ex.get_positions.return_value = []
-    rm = RiskManager(ex)
+# ── Drawdown killswitch: flat-book cooldown recovery ──────────────────────────
+# Regression: once a max-drawdown breach liquidated the book, equity was frozen
+# (all cash, entries blocked), so it could never climb back to the -5% recovery
+# line; new days didn't clear it and a restart re-tripped (peak_equity restored
+# from bot_state.json). Now: once FLAT for DRAWDOWN_KILLSWITCH_COOLDOWN_HOURS
+# after the breach, peak_equity is re-based to current equity and the
+# killswitch clears -- future drawdowns are measured from the new base.
 
+async def _breach(monkeypatch, positions=None):
+    monkeypatch.setattr(settings, "DAILY_LOSS_LIMIT", -50.0)  # isolate drawdown logic
+    monkeypatch.setattr(settings, "DRAWDOWN_KILLSWITCH_COOLDOWN_HOURS", 24.0)
+    ex = AsyncMock()
+    ex.get_positions.return_value = positions or []
+    rm = RiskManager(ex)
     ex.get_account.return_value = _account(10_000.0)
     await rm.update_account_status()
-
-    # -12% breach -> killswitch + liquidate_all.
-    ex.get_account.return_value = _account(8_800.0)
+    ex.get_account.return_value = _account(8_800.0)  # -12% breach
     status = await rm.update_account_status()
     assert status["action"] == "liquidate_all"
+    return rm, ex
 
-    # Liquidated: all cash, no positions, entries blocked -> equity is frozen
-    # at the post-breach level. Many cycles across several days:
-    for _day in range(7):
-        rm.last_check_time = datetime.now(UTC) - timedelta(days=1)
-        for _ in range(10):
-            await rm.update_account_status()
-    assert rm.is_killswitch_active() is True  # still latched after a week flat
 
-    # Restart: bot.py restores peak_equity from bot_state.json into a fresh
-    # RiskManager; the first status update re-trips on the same frozen equity.
+@pytest.mark.asyncio
+async def test_drawdown_killswitch_stays_latched_during_cooldown(monkeypatch):
+    rm, _ = await _breach(monkeypatch)
+    rm._drawdown_tripped_at = datetime.now(UTC) - timedelta(hours=23)
+    for _ in range(10):
+        await rm.update_account_status()
+    assert rm.is_killswitch_active() is True
+    assert rm.peak_equity == 10_000.0
+
+
+@pytest.mark.asyncio
+async def test_drawdown_killswitch_tripped_at_not_extended_by_repeat_breaches(monkeypatch):
+    """Every cycle while breached re-enters the breach branch; the cooldown
+    must run from the FIRST breach, not restart each cycle."""
+    rm, _ = await _breach(monkeypatch)
+    first = rm._drawdown_tripped_at
+    assert first is not None
+    await rm.update_account_status()
+    assert rm._drawdown_tripped_at == first
+
+
+@pytest.mark.asyncio
+async def test_drawdown_killswitch_clears_after_cooldown_when_flat(monkeypatch):
+    rm, _ = await _breach(monkeypatch)
+    rm._drawdown_tripped_at = datetime.now(UTC) - timedelta(hours=25)
+    status = await rm.update_account_status()
+    assert status["status"] == "risk_ok", status
+    assert rm.is_killswitch_active() is False
+    assert rm.killswitch_reason == ""
+    assert rm.peak_equity == 8_800.0  # re-based
+    assert rm._drawdown_tripped_at is None
+
+
+@pytest.mark.asyncio
+async def test_drawdown_killswitch_rebased_peak_still_trips_on_new_drawdown(monkeypatch):
+    rm, ex = await _breach(monkeypatch)
+    rm._drawdown_tripped_at = datetime.now(UTC) - timedelta(hours=25)
+    await rm.update_account_status()  # clears, peak -> 8800
+    ex.get_account.return_value = _account(7_900.0)  # -10.2% from 8800
+    status = await rm.update_account_status()
+    assert status["status"] == "killswitch_activated"
+    assert status["reason"] == "max_drawdown_exceeded"
+
+
+@pytest.mark.asyncio
+async def test_drawdown_killswitch_does_not_clear_with_open_positions(monkeypatch):
+    """Positions still open (liquidation failed/partial) -> not flat -> stay latched."""
+    rm, _ = await _breach(monkeypatch, positions=[{"symbol": "BTC/USD", "qty": "0.01"}])
+    rm._drawdown_tripped_at = datetime.now(UTC) - timedelta(hours=25)
+    await rm.update_account_status()
+    assert rm.is_killswitch_active() is True
+    assert rm.peak_equity == 10_000.0
+
+
+@pytest.mark.asyncio
+async def test_drawdown_cooldown_survives_restart(monkeypatch):
+    """bot.py restores peak_equity and the breach time; a restart must not
+    restart the cooldown clock, or frequent redeploys would block forever."""
+    rm, ex = await _breach(monkeypatch)
+    tripped = datetime.now(UTC) - timedelta(hours=25)
     restarted = RiskManager(ex)
     restarted.peak_equity = rm.peak_equity
-    await restarted.update_account_status()
-
-    # Desired: some path back to trading without a manual state edit.
-    assert restarted.is_killswitch_active() is False, (
-        f"still latched after restart: {restarted.killswitch_reason}"
-    )
+    restarted._drawdown_tripped_at = tripped  # restored by bot.py
+    status = await restarted.update_account_status()
+    assert status["status"] == "risk_ok", status
+    assert restarted.is_killswitch_active() is False

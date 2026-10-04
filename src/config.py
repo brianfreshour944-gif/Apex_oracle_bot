@@ -180,6 +180,12 @@ class TradingBotSettings(BaseSettings):
         description="Killswitch at -10% equity drawdown",
         lt=0
     )
+    DRAWDOWN_KILLSWITCH_COOLDOWN_HOURS: float = Field(
+        default=24.0,
+        description="Hours the book must stay flat after a max-drawdown breach "
+        "before peak_equity is re-based to current equity and the killswitch clears",
+        gt=0
+    )
     DAILY_LOSS_LIMIT: float = Field(
         default=-3.0,
         description="Daily stop loss limit",

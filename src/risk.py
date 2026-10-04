@@ -102,11 +102,17 @@ class RiskManager:
         self.peak_prices: dict[str, float] = {}  # Tracks highest price seen while in position
         self.last_check_time = datetime.now(UTC)
         # Hard killswitch flag: set True when drawdown or daily loss limit is
-        # breached. Cleared only on a new calendar day (daily loss resets) or
-        # when equity recovers above the drawdown threshold. While active the
+        # breached. Cleared only on a new calendar day (daily loss resets),
+        # when equity recovers above the drawdown threshold, or after a
+        # max-drawdown breach once the book has been flat for
+        # DRAWDOWN_KILLSWITCH_COOLDOWN_HOURS (peak re-based). While active the
         # trading loop MUST block all new entries and flatten open positions.
         self.killswitch_active = False
         self._killswitch_reason: str = ""
+        # First max-drawdown breach time; drives the flat-book cooldown
+        # recovery in update_account_status. Persisted by bot.py so a restart
+        # doesn't restart the clock.
+        self._drawdown_tripped_at: datetime | None = None
         # Protects against a race condition where multiple symbols are evaluated
         # concurrently (asyncio tasks) and could each independently pass an
         # exposure-cap check before any of their sibling orders have actually
@@ -463,9 +469,39 @@ class RiskManager:
                 # Calculate drawdown from peak
                 drawdown_pct = ((equity - self.peak_equity) / self.peak_equity) * 100 if self.peak_equity > 0 else 0
 
+            # Flat-book cooldown recovery for a max-drawdown breach. After the
+            # breach liquidates everything and blocks entries, equity is frozen
+            # and can never reach the equity-recovery line below, and a restart
+            # re-trips (peak_equity is restored) -- a permanent halt. Once the
+            # book has been flat for the cooldown, re-base peak_equity to
+            # current equity: the loss is realized, and future drawdowns are
+            # measured from the new base. Requires an empty book so a failed or
+            # partial liquidation can't re-enable trading over open risk.
+            # Keyed on _drawdown_tripped_at (not killswitch_active) because a
+            # fresh process restores the breach time before the flag re-trips.
+            if self._drawdown_tripped_at is not None and not positions:
+                elapsed_h = (datetime.now(UTC) - self._drawdown_tripped_at).total_seconds() / 3600
+                cooldown_h = settings.DRAWDOWN_KILLSWITCH_COOLDOWN_HOURS
+                if elapsed_h >= cooldown_h:
+                    async with self._equity_lock:
+                        old_peak = self.peak_equity
+                        self.peak_equity = equity
+                    drawdown_pct = 0.0
+                    self._drawdown_tripped_at = None
+                    if self.killswitch_active and "max_drawdown" in self._killswitch_reason:
+                        self.killswitch_active = False
+                        self._killswitch_reason = ""
+                    logger.critical(
+                        f"Killswitch cleared: flat for {elapsed_h:.1f}h after max-drawdown breach "
+                        f"(cooldown {cooldown_h:.1f}h). peak_equity re-based ${old_peak:.2f} -> "
+                        f"${equity:.2f} -- new entries re-enabled."
+                    )
+
             # Check if we've hit max drawdown limit
             if drawdown_pct < settings.MAX_DRAWDOWN_STOP:
                 logger.critical(f"MAX DRAWDOWN LIMIT HIT: {drawdown_pct:.2f}%")
+                if self._drawdown_tripped_at is None:
+                    self._drawdown_tripped_at = datetime.now(UTC)
                 self.killswitch_active = True
                 self._killswitch_reason = f"max_drawdown_exceeded ({drawdown_pct:.2f}%)"
                 return {
@@ -501,6 +537,7 @@ class RiskManager:
                     )
                     self.killswitch_active = False
                     self._killswitch_reason = ""
+                    self._drawdown_tripped_at = None
 
             # Reset daily PnL if new day -- also clear the daily-loss
             # killswitch since the loss counter resets at the calendar day
