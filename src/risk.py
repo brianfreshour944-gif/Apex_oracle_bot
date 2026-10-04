@@ -785,11 +785,18 @@ class RiskManager:
                     from src.onchain_data import fetch_derivatives_data_sync
                     deriv_data = fetch_derivatives_data_sync(symbol)
                 notional_usd = position_size * current_price  # approximate notional
-                # Estimate impact based on L2 depth and imbalance (same logic as _estimate_market_impact_bps)
+                # Estimate impact based on L2 depth and imbalance. Same depth
+                # model and USD units (OI is base-asset qty, so depth * price)
+                # and no-data handling as _estimate_market_impact_bps.
                 imbalance = float(deriv_data.get("bid_ask_imbalance", 0.0))
                 oi = float(deriv_data.get("open_interest", 0.0))
+                if oi <= 0:
+                    # No OI data: degrade to a no-op like the fetch-failure
+                    # path. A fixed default depth in base-asset units meant
+                    # ~$50M for BTC but ~$150 for DOGE (phantom rejections).
+                    raise ValueError("no open_interest data")
                 # Approximate visible depth ~10% of OI
-                visible_depth = oi * 0.1 if oi > 0 else 1000.0  # default 1000 contracts
+                visible_depth = oi * 0.1
                 # Split by imbalance
                 if side == "buy":
                     relevant_depth = visible_depth * (1.0 - imbalance) / 2.0
@@ -952,6 +959,8 @@ class RiskManager:
         notional_usd: float,
         side: str,  # "buy" or "sell"
         deriv_data: dict[str, float] | None = None,
+        current_price: float | None = None,
+        max_bps: float | None = 200.0,
     ) -> float:
         """
         Estimate market impact in basis points based on order book depth.
@@ -972,6 +981,13 @@ class RiskManager:
             deriv_data: already-fetched derivatives data to reuse instead of
                 making another blocking fetch_derivatives_data_sync() call.
                 Falls back to a live fetch only if not supplied.
+            current_price: asset price, used to convert depth to USD.
+                Binance open_interest is in base-asset units (BTC, DOGE...),
+                so USD depth = depth * price. Falls back to the legacy flat
+                $100/contract approximation only if not supplied.
+            max_bps: upper cap on the returned estimate; None returns the
+                uncapped value (needed when scaling size, since impact is
+                linear in notional and a capped value under-scales).
 
         Returns:
             Estimated impact in basis points
@@ -1013,15 +1029,21 @@ class RiskManager:
                 relevant_depth = bid_depth
             
             if relevant_depth <= 0:
-                return 50.0  # High impact if no depth on our side
+                # No depth on our side: worst case, matching the L2 veto's
+                # 200bps cap. 50.0 here equalled the size cap's threshold, so
+                # the order passed through unscaled.
+                return 200.0
             
             # Impact = notional / depth * factor
             # Factor ~ 0.5 for crypto (empirical)
             impact_factor = 0.5
-            impact_ratio = notional_usd / (relevant_depth * 100)  # Convert contracts to USD approx
+            usd_per_unit = current_price if current_price and current_price > 0 else 100.0
+            impact_ratio = notional_usd / (relevant_depth * usd_per_unit)  # Convert base-asset depth to USD
             
             # Cap impact at reasonable levels
-            impact_bps = min(impact_ratio * impact_factor * 10000, 200.0)  # Max 200 bps
+            impact_bps = impact_ratio * impact_factor * 10000
+            if max_bps is not None:
+                impact_bps = min(impact_bps, max_bps)
             
             return max(0.0, impact_bps)
             
@@ -1058,7 +1080,10 @@ class RiskManager:
         notional = position_size * current_price
 
         # Estimate impact
-        impact_bps = self._estimate_market_impact_bps(symbol, notional, side, deriv_data=deriv_data)
+        impact_bps = self._estimate_market_impact_bps(
+            symbol, notional, side, deriv_data=deriv_data, current_price=current_price,
+            max_bps=None,  # uncapped: scale below must reflect true impact
+        )
         
         if impact_bps <= 0:
             return position_size
