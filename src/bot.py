@@ -653,6 +653,9 @@ async def flush_crash_recovery_state(force: bool = False) -> None:
             "risk_peak_equity": _state.risk_manager.peak_equity if _state.risk_manager else 0.0,
             "risk_daily_pnl": _state.risk_manager.daily_pnl if _state.risk_manager else 0.0,
             "risk_start_of_day_equity": _state.risk_manager.start_of_day_equity if _state.risk_manager else 0.0,
+            # UTC day the baseline above belongs to (last_check_time advances
+            # at each day reset) -- restore discards a baseline from another day.
+            "risk_start_of_day_date": _state.risk_manager.last_check_time.date().isoformat() if _state.risk_manager else "",
         }
         if _state.risk_manager is not None:
             _state.risk_manager.consume_peaks_dirty()
@@ -689,10 +692,19 @@ def apply_crash_recovery_state(recovery: dict[str, Any] | None) -> dict[str, int
             #  equity is at peak and won't trip at 10% drawdown)
             if recovery.get("risk_peak_equity", 0) > 0:
                 _state.risk_manager.peak_equity = recovery["risk_peak_equity"]
-            if "risk_daily_pnl" in recovery:
-                _state.risk_manager.daily_pnl = recovery["risk_daily_pnl"]
-            if recovery.get("risk_start_of_day_equity", 0) > 0:
-                _state.risk_manager.start_of_day_equity = recovery["risk_start_of_day_equity"]
+            # Daily-loss baseline: only valid for the UTC day it was taken.
+            # RiskManager.last_check_time starts at "now", so a restored
+            # baseline from an earlier day would never hit the day reset and
+            # multi-day losses would count as today's (tripped the daily-loss
+            # killswitch 1s after a 2026-10-04 restart with no trades). Undated
+            # legacy snapshots can't prove they're from today, so skip them;
+            # the first status update re-baselines to current equity.
+            today = datetime.now(UTC).date().isoformat()
+            if recovery.get("risk_start_of_day_date") == today:
+                if "risk_daily_pnl" in recovery:
+                    _state.risk_manager.daily_pnl = recovery["risk_daily_pnl"]
+                if recovery.get("risk_start_of_day_equity", 0) > 0:
+                    _state.risk_manager.start_of_day_equity = recovery["risk_start_of_day_equity"]
         if _state.strategy is not None:
             if "trailing_peaks" in recovery:
                 _state.strategy._trailing_peaks.update(recovery["trailing_peaks"])

@@ -68,3 +68,65 @@ def test_restore_is_fail_safe(live_state, bad):
     counts = bot_mod.apply_crash_recovery_state(bad)
     assert counts == {"peak_prices": 0, "trailing_peaks": 0, "trailing_troughs": 0,
                       "cooldowns": 0, "position_adds": 0}
+
+
+# ── Daily-loss baseline must not survive a day boundary across a restart ──────
+# Regression (2026-10-04 deploy log): the bot tripped the daily-loss killswitch
+# 1s after startup with no trades -- "DAILY LOSS LIMIT HIT: $-2.92" on a ~$97
+# account whose restored peak_equity was 100.00. start_of_day_equity was
+# persisted without its date and RiskManager.last_check_time is reset to "now"
+# at construction, so a baseline from an earlier day was compared against
+# today's equity and cumulative multi-day losses counted as "today".
+
+@pytest.fixture
+def async_state():
+    from unittest.mock import AsyncMock
+    ex = AsyncMock()
+    ex.get_positions.return_value = []
+    ex.get_account.return_value = {"equity": 97.08, "cash": 97.08, "portfolio_value": 97.08}
+    bot_mod._state.risk_manager = RiskManager(ex)
+    yield bot_mod._state
+    bot_mod._state.risk_manager = None
+
+
+def _today(offset_days: int = 0) -> str:
+    from datetime import UTC, datetime, timedelta
+    return (datetime.now(UTC) - timedelta(days=offset_days)).date().isoformat()
+
+
+@pytest.mark.asyncio
+async def test_stale_day_baseline_is_not_restored(async_state):
+    bot_mod.apply_crash_recovery_state({
+        "risk_peak_equity": 100.0,
+        "risk_start_of_day_equity": 100.0,
+        "risk_daily_pnl": -2.5,
+        "risk_start_of_day_date": _today(offset_days=1),
+    })
+    status = await async_state.risk_manager.update_account_status()
+    assert status["status"] != "killswitch_activated", status
+    assert async_state.risk_manager.is_killswitch_active() is False
+
+
+@pytest.mark.asyncio
+async def test_undated_legacy_baseline_is_not_restored(async_state):
+    """State files written before the date field existed can't prove the
+    baseline is from today, so it must not be trusted."""
+    bot_mod.apply_crash_recovery_state({
+        "risk_peak_equity": 100.0,
+        "risk_start_of_day_equity": 100.0,
+    })
+    status = await async_state.risk_manager.update_account_status()
+    assert status["status"] != "killswitch_activated", status
+
+
+@pytest.mark.asyncio
+async def test_same_day_baseline_still_restored_and_trips(async_state):
+    """A same-day crash/restart must keep today's losses: no loophole."""
+    bot_mod.apply_crash_recovery_state({
+        "risk_peak_equity": 100.0,
+        "risk_start_of_day_equity": 100.0,
+        "risk_start_of_day_date": _today(),
+    })
+    status = await async_state.risk_manager.update_account_status()
+    assert status["status"] == "killswitch_activated"
+    assert status["reason"] == "daily_loss_limit_exceeded"

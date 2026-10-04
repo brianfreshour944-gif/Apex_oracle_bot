@@ -208,3 +208,46 @@ async def test_daily_loss_killswitch_still_clears_on_new_day(monkeypatch):
     assert rm.is_killswitch_active() is False
     assert rm.killswitch_reason == ""
 
+
+
+@pytest.mark.asyncio
+@pytest.mark.xfail(
+    strict=True,
+    reason="KNOWN BUG: drawdown killswitch deadlocks once the book is flat. "
+    "The breach liquidates everything and blocks new entries, so equity can "
+    "no longer move toward the -5% recovery line; new days and restarts "
+    "(peak_equity restored from bot_state.json) don't clear it either. "
+    "Remove this marker when a recovery path is added.",
+)
+async def test_drawdown_killswitch_recovers_after_liquidation_while_flat(monkeypatch):
+    monkeypatch.setattr(settings, "DAILY_LOSS_LIMIT", -50.0)  # isolate drawdown logic
+    ex = AsyncMock()
+    ex.get_positions.return_value = []
+    rm = RiskManager(ex)
+
+    ex.get_account.return_value = _account(10_000.0)
+    await rm.update_account_status()
+
+    # -12% breach -> killswitch + liquidate_all.
+    ex.get_account.return_value = _account(8_800.0)
+    status = await rm.update_account_status()
+    assert status["action"] == "liquidate_all"
+
+    # Liquidated: all cash, no positions, entries blocked -> equity is frozen
+    # at the post-breach level. Many cycles across several days:
+    for _day in range(7):
+        rm.last_check_time = datetime.now(UTC) - timedelta(days=1)
+        for _ in range(10):
+            await rm.update_account_status()
+    assert rm.is_killswitch_active() is True  # still latched after a week flat
+
+    # Restart: bot.py restores peak_equity from bot_state.json into a fresh
+    # RiskManager; the first status update re-trips on the same frozen equity.
+    restarted = RiskManager(ex)
+    restarted.peak_equity = rm.peak_equity
+    await restarted.update_account_status()
+
+    # Desired: some path back to trading without a manual state edit.
+    assert restarted.is_killswitch_active() is False, (
+        f"still latched after restart: {restarted.killswitch_reason}"
+    )
