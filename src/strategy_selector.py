@@ -14,13 +14,70 @@ logger = get_logger("strategy_selector")
 # Singleton instance
 _STRATEGY_LEARNER = None
 
+# Default logical priors by market regime (all other strategies: min_weight).
+_REGIME_PRIORS: dict[str, dict[str, float]] = {
+    "trending": {"trend_following": 0.5, "momentum": 0.3},
+    "bull": {"trend_following": 0.5, "momentum": 0.3},
+    "bear": {"trend_following": 0.5, "momentum": 0.3},
+    "sideways": {"mean_reversion": 0.5, "grid": 0.3},
+    "high_volatility": {"breakout": 0.5, "scalping": 0.3},
+    "low_volatility": {"grid": 0.5, "mean_reversion": 0.3},
+}
+_NEUTRAL_PRIOR = {"trend_following": 0.2, "mean_reversion": 0.2, "momentum": 0.2}
+
+# Committee brain names that only ever got into strategy state via the base
+# class's brain-name seeding ("momentum" is both, so it isn't listed).
+_BRAIN_ONLY_NAMES = {"transformer", "quant", "sentinel", "llm"}
+
+
+def _prior_weights(regime: str, min_weight: float) -> dict[str, float]:
+    weights = dict.fromkeys(STRATEGIES, min_weight)
+    for name, w in _REGIME_PRIORS.get(regime, _NEUTRAL_PRIOR).items():
+        if name in weights:
+            weights[name] = w
+    return weights
+
+
+class StrategyMetaLearner(AdaptiveMetaLearner):
+    """AdaptiveMetaLearner keyed by execution STRATEGIES, not committee brains.
+
+    The base class seeds a new regime with equal weights for the committee
+    brains (transformer/quant/momentum/sentinel/llm). Used as the strategy
+    learner that meant the weights were never empty, so the regime priors in
+    select_best_strategy never ran, and "momentum" -- the one name that is
+    both a brain and a strategy -- kept the brain's weight while every real
+    strategy sat at min_weight: momentum was selected in every regime
+    (backtest probe 2026-10-04: 4,320/4,320 hours). Seed from the regime
+    priors instead, and reset any regime whose saved weights were
+    brain-seeded (its "momentum" value can't be trusted).
+    """
+
+    def _regime_weights(self, regime: str) -> dict[str, float]:
+        weights = self.weights.get(regime)
+        if not weights or _BRAIN_ONLY_NAMES & set(weights):
+            if weights:
+                logger.warning(f"Strategy learner: regime '{regime}' had brain-seeded weights; reset to strategy priors")
+            weights = _prior_weights(regime, self.min_weight)
+        else:
+            weights = {k: v for k, v in weights.items() if k in STRATEGIES}
+            for s in STRATEGIES:
+                weights.setdefault(s, self.min_weight)
+        self.weights[regime] = weights
+        return weights
+
+    def _clamp_normalize(self, weights: dict[str, float]) -> dict[str, float]:
+        if sum(weights.values()) <= 0:
+            return dict.fromkeys(STRATEGIES, 1.0 / len(STRATEGIES))
+        return super()._clamp_normalize(weights)
+
+
 def get_strategy_learner() -> AdaptiveMetaLearner:
     """Returns the singleton adaptive learner for strategy selection."""
     global _STRATEGY_LEARNER
     if _STRATEGY_LEARNER is None:
         state_path = os.path.join("data", "strategy_meta_state.json")
         try:
-            _STRATEGY_LEARNER = AdaptiveMetaLearner(
+            _STRATEGY_LEARNER = StrategyMetaLearner(
                 state_path=state_path,
                 learning_rate=0.10,
                 min_weight=0.01,
@@ -83,30 +140,8 @@ def select_best_strategy(regime: str, features: dict[str, Any] | None = None) ->
     close_price = (features.get("close") or 1.0) if features else 1.0
     atr_pct = features.get("atr", 0.0) / close_price * 100 if features else 1.0
     in_transition = features.get("in_transition", False) if features else False
-    
-    # Default logical priors based on market regime
-    if not weights:
-        strategies = list(STRATEGIES.keys())
-        for s in strategies:
-            weights[s] = learner.min_weight
-            
-        if regime in ["trending", "bull", "bear"]:
-            weights["trend_following"] = 0.5
-            weights["momentum"] = 0.3
-        elif regime == "sideways":
-            weights["mean_reversion"] = 0.5
-            weights["grid"] = 0.3
-        elif regime == "high_volatility":
-            weights["breakout"] = 0.5
-            weights["scalping"] = 0.3
-        elif regime == "low_volatility":
-            weights["grid"] = 0.5
-            weights["mean_reversion"] = 0.3
-        else: # neutral
-            weights["trend_following"] = 0.2
-            weights["mean_reversion"] = 0.2
-            weights["momentum"] = 0.2
-            
+
+    # Regime priors are the learner's starting weights (StrategyMetaLearner).
     # Always include all available strategies in the pool
     for s in STRATEGIES.keys():
         if s not in weights:

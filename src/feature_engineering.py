@@ -146,8 +146,33 @@ def _z_score(series: pd.Series, window: int = 20, fill: float = 0.0) -> pd.Serie
 
 # ── Main feature function ──────────────────────────────────────────────────────
 
-# Per-symbol feature cache: maps symbol -> (last_bar_timestamp, feature_df)
+# Per-symbol feature cache: maps symbol -> (window_key, feature_df)
 _FEATURE_CACHE: dict[str, tuple] = {}
+
+_TIMESTAMP_COLS = ("timestamp", "t")
+
+
+def _feature_cache_key(df: pd.DataFrame) -> tuple | None:
+    """Identify the bar window: row count, last bar timestamp, last bar OHLCV.
+
+    This used to be df.index[-1] -- but bars arrive via polars .to_pandas()
+    with a RangeIndex, so the key was always 99 and every call after the
+    first returned the first call's features: RSI/ATR/roll_autocorr froze at
+    process start, live and in backtests (2026-10-04). The last bar's values
+    are part of the key because a live daily window ends with today's
+    in-progress bar, whose timestamp stays fixed while its close moves.
+    Returns None (don't cache) when there's no real timestamp to key on.
+    """
+    if isinstance(df.index, pd.DatetimeIndex):
+        ts = df.index[-1]
+    else:
+        col = next((c for c in _TIMESTAMP_COLS if c in df.columns), None)
+        if col is None:
+            return None
+        ts = df[col].iloc[-1]
+    last = df.iloc[-1]
+    ohlcv = tuple(float(last[c]) if c in df.columns else None for c in ("open", "high", "low", "close", "volume"))
+    return (len(df), str(ts), ohlcv)
 
 
 def add_features(df: pd.DataFrame, symbol: str = "") -> pd.DataFrame:
@@ -180,6 +205,12 @@ def add_features(df: pd.DataFrame, symbol: str = "") -> pd.DataFrame:
             {col: pd.Series(dtype="float64") for col in MASTER_FEATURE_COLS},
             index=idx,
         )
+
+    cache_key = _feature_cache_key(df) if symbol else None
+    if cache_key is not None:
+        cached_key, cached_df = _FEATURE_CACHE.get(symbol, (None, None))
+        if cached_key == cache_key:
+            return cached_df
 
     d = df.copy()
 
@@ -354,18 +385,10 @@ def add_features(df: pd.DataFrame, symbol: str = "") -> pd.DataFrame:
             d[col] = FEATURE_DEFAULTS.get(col, 0.0)
         d[col] = _sanitize(d[col], fill=FEATURE_DEFAULTS.get(col, 0.0))
 
-    # Cache the result per symbol so subsequent calls with the same
-    # latest bar timestamp return the cached DataFrame instead of
-    # recomputing all 19 rolling-window features.
-    if symbol and not df.empty:
-        latest_ts = df.index[-1] if hasattr(df.index, "__getitem__") else None
-        if latest_ts is not None:
-            cached_ts, cached_df = _FEATURE_CACHE.get(symbol, (None, None))
-            if cached_ts is not None and cached_ts == latest_ts:
-                return cached_df
-            _FEATURE_CACHE[symbol] = (latest_ts, d[MASTER_FEATURE_COLS])
-
-    return d[MASTER_FEATURE_COLS]
+    result = d[MASTER_FEATURE_COLS]
+    if cache_key is not None:
+        _FEATURE_CACHE[symbol] = (cache_key, result)
+    return result
 
 # Cross-asset functions will be added here
 
