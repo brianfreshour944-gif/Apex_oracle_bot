@@ -641,6 +641,17 @@ class TradingBotSettings(BaseSettings):
         ge=0.0,
         le=1.0,
     )
+    ADVERSARIAL_SCORE_FLOOR: float = Field(
+        default=0.55,
+        description="HIGH-disagreement adversarial veto floor: an entry whose DIRECTIONAL "
+                    "disagreement level is HIGH and whose committee score is below this "
+                    "floor is rejected. Keep near the historical 0.55 for maximum "
+                    "conviction; lower it (e.g. 0.30) to let weaker-consensus entries "
+                    "through so the paper account generates real trade experiences "
+                    "for the nightly retrain. Read by src/trade_decision.py.",
+        ge=0.0,
+        le=1.0,
+    )
     ADAPTIVE_MIN_VALIDATION_TRADES: int = Field(
         default=10,
         description="Minimum realized trades required before a regime's adaptive weights pass validation",
@@ -852,6 +863,7 @@ ADAPTIVE_MIN_WEIGHT = settings.ADAPTIVE_MIN_WEIGHT
 ADAPTIVE_MAX_WEIGHT = settings.ADAPTIVE_MAX_WEIGHT
 ADAPTIVE_MIN_TRADES_BEFORE_LIVE = settings.ADAPTIVE_MIN_TRADES_BEFORE_LIVE
 DEFAULT_SCORE_THRESHOLD = settings.DEFAULT_SCORE_THRESHOLD
+ADVERSARIAL_SCORE_FLOOR = settings.ADVERSARIAL_SCORE_FLOOR
 ADAPTIVE_MIN_VALIDATION_TRADES = settings.ADAPTIVE_MIN_VALIDATION_TRADES
 ADAPTIVE_MIN_SHARPE = settings.ADAPTIVE_MIN_SHARPE
 ADAPTIVE_MIN_WIN_RATE = settings.ADAPTIVE_MIN_WIN_RATE

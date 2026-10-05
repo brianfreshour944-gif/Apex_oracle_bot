@@ -22,7 +22,13 @@ from src.risk import apply_uncertainty_scaling
 # applies to the DIRECTIONAL disagreement level -- see
 # src/committee/models.py:calculate_directional_entropy for why abstentions
 # must not count as disagreement here.
-ADVERSARIAL_SCORE_FLOOR = 0.55
+# Configurable via settings (ADVERSARIAL_SCORE_FLOOR, default 0.55) so the
+# deployed paper account can lower it (e.g. 0.30) without a code change:
+# with live committee scores typically 0.12-0.28, the historical 0.55 floor
+# vetoed every entry and starved the nightly retrain of real trade outcomes
+# (verified 2026-10-05 from Coolify container logs: 137 adversarial vetoes,
+# zero executed trades in 111 cycles).
+ADVERSARIAL_SCORE_FLOOR = settings.ADVERSARIAL_SCORE_FLOOR
 
 # Base edge by regime, used to estimate expected return for sizing.
 REGIME_EDGE = {
