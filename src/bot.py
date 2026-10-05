@@ -29,7 +29,7 @@ from src.exchange import AlpacaExchange
 from src.logging_config import get_logger
 from src.persistent_state import PersistentBotState
 from src.population_trainer import get_pbt_trainer
-from src.risk import RiskManager, apply_uncertainty_scaling
+from src.risk import RiskManager
 from src.strategies import TradingStrategy
 from src.telegram_alerts import send_telegram_alert
 
@@ -610,14 +610,15 @@ class BotState:
 # Global state instance (single instance for the process)
 _state = BotState()
 
-# Score floor for the HIGH-disagreement adversarial veto in
-# process_signal_for_symbol(): genuine directional disagreement paired with a
-# weak conviction score (< this) is rejected. Named (it was a bare 0.55
-# literal) so the gate is greppable and tunable, and it applies to the
-# DIRECTIONAL disagreement level -- see
-# src/committee/models.py:calculate_directional_entropy for why abstentions
-# must not count as disagreement here.
-ADVERSARIAL_SCORE_FLOOR = 0.55
+# ADVERSARIAL_SCORE_FLOOR (the HIGH-disagreement veto floor) now lives in
+# src/trade_decision.py with the rest of the entry rules shared with the
+# backtester; re-exported here for existing references.
+from src.trade_decision import (  # noqa: E402
+    ADVERSARIAL_SCORE_FLOOR,
+    adversarial_veto_reasons,
+    apply_entry_size_multipliers,
+    estimate_expected_return,
+)
 
 # Paths for config files
 _REGIME_FLAG_PATH = "data/regime_flag.txt"
@@ -1441,16 +1442,10 @@ async def process_signal_for_symbol(symbol: str, current_price: float, risk_mana
 
                 # ADVERARIAL BRAIN VETO — Brain B (execution/risk) + Brain C (validation/anti-overfit)
                 # Don't optimize toward consensus; require each brain's domain to pass
-                adversarial_veto = False
-                veto_reasons = []
-                
-                # Brain B veto: execution cost > expected edge (hard constraint)
-                signal_edge = signal.get("expected_edge_bps", 0)
-                execution_cost = signal.get("execution_cost_bps", 0) + (signal.get("final_edge_bps", 0) - signal_edge)
-                if execution_cost > signal_edge:
-                    adversarial_veto = True
-                    veto_reasons.append(f"Brain B veto: execution_cost ({execution_cost:.1f}bps) > expected_edge ({signal_edge:.1f}bps)")
-                
+                # Brain B (execution cost > edge), Brain C (regime validation)
+                # and the HIGH-disagreement floor -- shared with the backtester
+                # via src/trade_decision.adversarial_veto_reasons().
+                #
                 # Brain C veto: statistical validity / anti-overfit.
                 # This used to call _state.strategy.is_regime_validated(...) -- a
                 # method that only exists on AdaptiveMetaLearner. TradingStrategy
@@ -1464,38 +1459,27 @@ async def process_signal_for_symbol(symbol: str, current_price: float, risk_mana
                 # forever -- the learner legitimately starts at 0 validated
                 # regimes (see the "Insufficient regime samples: 0 < 10" gate
                 # reason in the logs).
+                learner = None
+                validation_min_trades = None
                 try:
                     from src.committee.adaptive_meta import VALIDATION_MIN_TRADES
                     from src.committee.committee import get_meta_learner
 
                     learner = get_meta_learner()
-                    if learner is not None:
-                        regime_for_gate = signal.get("regime", "neutral")
-                        gate_metrics = learner.get_regime_validation_metrics(regime_for_gate) or {}
-                        n_trades = int(gate_metrics.get("n_trades", 0) or 0)
-                        if n_trades >= VALIDATION_MIN_TRADES and not gate_metrics.get("validated", False):
-                            adversarial_veto = True
-                            veto_reasons.append(
-                                f"Brain C veto: regime '{regime_for_gate}' not validated (OOS Sharpe "
-                                f"{gate_metrics.get('sharpe', 0.0):.2f} < 0.5 or win rate "
-                                f"{gate_metrics.get('win_rate', 0.0):.2f} < 52%, n={n_trades})"
-                            )
+                    validation_min_trades = VALIDATION_MIN_TRADES
                 except Exception as brain_c_err:
                     logger.debug(f"Brain C validation gate unavailable (non-fatal): {brain_c_err}")
-                
-                # Brain disagreement check: genuine directional conflict paired
-                # with a weak conviction score. Both sides of this comparison now
-                # cover the same votes (buy/sell), which is what makes the
-                # score floor meaningful -- see the directional entropy comment
-                # above. Abstentions (HOLD/PASS) no longer count as disagreement.
-                brain_disagreement = signal.get("brain_disagreement", "LOW")
-                if brain_disagreement == "HIGH" and committee_result.score < ADVERSARIAL_SCORE_FLOOR:
-                    adversarial_veto = True
-                    veto_reasons.append(
-                        f"Brain disagreement HIGH (directional) + score "
-                        f"{committee_result.score:.2f} < {ADVERSARIAL_SCORE_FLOOR:.2f}"
+                try:
+                    veto_reasons = adversarial_veto_reasons(
+                        signal, committee_result, learner, validation_min_trades
                     )
-                
+                except Exception as brain_c_err:
+                    # A learner that raises mid-check must not take down the
+                    # cheap Brain B / disagreement checks with it.
+                    logger.debug(f"Brain C validation gate unavailable (non-fatal): {brain_c_err}")
+                    veto_reasons = adversarial_veto_reasons(signal, committee_result)
+                adversarial_veto = bool(veto_reasons)
+
                 if adversarial_veto:
                     dashboard.append("FINAL.......... NO TRADE")
                     dashboard.append(f"Reason......... Adversarial veto: {'; '.join(veto_reasons)}")
@@ -1643,34 +1627,12 @@ async def process_signal_for_symbol(symbol: str, current_price: float, risk_mana
     
                 # Calculate position size
                 # Estimate expected return using committee score, regime, and consensus
-                # Score represents P(win), regime provides base edge, entropy measures consensus
-                regime_edge = {
-                    "trending": 0.015,      # 1.5% edge in trending
-                    "bull": 0.015,
-                    "bear": 0.015,
-                    "mean_reverting": 0.01,  # 1% edge in mean reversion
-                    "sideways": 0.01,
-                    "high_volatility": 0.0,  # No edge in high vol
-                    "low_volatility": 0.005, # 0.5% edge in low vol
-                    "neutral": 0.0
-                }
-                regime_edge = regime_edge.get(signal.get("regime", "neutral"), 0.0)
-                
-                # Committee score represents P(win), map to edge
-                # Score > 0.5 means bullish, < 0.5 means bearish
-                score_edge = (committee_result.score - 0.5) * 2.0  # maps [0,1] -> [-1, 1]
-                
-                # Entropy penalty: high disagreement reduces confidence
-                entropy_penalty = max(0.0, committee_result.entropy - 0.5) * 0.5
-                
-                # Combined edge estimate (capped at reasonable bounds)
-                raw_edge = regime_edge + score_edge * 0.02 - entropy_penalty  # scale score edge to ~2%
-                # calculate_position_size() expects this as a fraction (its own
-                # PROFIT_TARGET_PCT fallback is 0.03, not 3.0) and converts it to
-                # bps internally via `* 10000`. Do NOT also multiply by 100 here --
-                # that produced a 100x-inflated "expected edge", which silently
-                # defeated the min-edge-after-costs rejection gate below.
-                expected_return_pct = max(-0.02, min(0.05, raw_edge))  # cap at -2% to +5% (fraction, e.g. 0.03 = 3%)
+                # Score represents P(win), regime provides base edge, entropy
+                # measures consensus. Shared with the backtester; returns a
+                # fraction (0.03 = 3%), capped to [-2%, +5%].
+                expected_return_pct = estimate_expected_return(
+                    signal.get("regime", "neutral"), committee_result.score, committee_result.entropy
+                )
                 position_size, sizing_status = risk_manager.calculate_position_size(
                     symbol,
                     current_price,
@@ -1708,31 +1670,31 @@ async def process_signal_for_symbol(symbol: str, current_price: float, risk_mana
                 # Uncertainty framework: transition-risk conviction + position-scale cap.
                 # "transition probability ↑ → conviction ↓ → position size ↓"
                 # (apply_uncertainty_scaling is fail-safe: degrades to a no-op on bad input)
+                # Then the oracle regime multiplier (buys), the committee
+                # confidence multiplier, and the MAX_SINGLE_TRADE_USD re-cap --
+                # all in src/trade_decision.apply_entry_size_multipliers(),
+                # shared with the backtester.
                 _pre_uncertainty_qty = position_size
-                position_size, uncertainty_mult = apply_uncertainty_scaling(
+                position_size, uncertainty_mult = apply_entry_size_multipliers(
                     position_size,
-                    transition_risk_pct=float(signal.get("transition_risk_pct", 0.0) or 0.0),
-                    position_scale=float(signal.get("position_scale", 1.0) or 1.0),
+                    signal,
+                    committee_result,
+                    current_price,
+                    oracle_multiplier=regime_flag.get("oracle_multiplier", 1.0) if signal["action"] == "buy" else 1.0,
                 )
                 if uncertainty_mult < 0.999:
                     logger.info(
                         f"📉 Uncertainty scaling applied for {symbol}: {uncertainty_mult:.2f}x "
                         f"(transition_risk={signal.get('transition_risk_pct', 0.0):.0f}%, "
-                        f"position_scale={signal.get('position_scale', 1.0):.2f}) → Qty: {position_size} (was {_pre_uncertainty_qty})"
+                        f"position_scale={signal.get('position_scale', 1.0):.2f})"
                     )
-
-                # Apply Regime Switch Multiplier if buying
-                if signal["action"] == "buy":
-                    multiplier = regime_flag.get("oracle_multiplier", 1.0)
-                    position_size = position_size * multiplier
-    
-                # Apply Committee Confidence Sizing Multiplier (Higher confidence = Larger trade size)
                 committee_mult = getattr(committee_result, "size_multiplier", 1.0)
-                position_size = position_size * committee_mult
-                position_size = round(position_size, 6)
-                logger.info(f"📊 Applied Committee Sizing Multiplier ({committee_mult:.2f}x based on score {committee_result.score:.2f}) → Final Qty: {position_size}")
+                logger.info(
+                    f"📊 Sizing multipliers applied (committee {committee_mult:.2f}x, score "
+                    f"{committee_result.score:.2f}) → Final Qty: {position_size} (was {_pre_uncertainty_qty})"
+                )
 
-                # Re-apply the MAX_SINGLE_TRADE_USD hard cap after the multipliers
+                # The MAX_SINGLE_TRADE_USD re-cap after the multipliers
                 # above (uncertainty scaling, oracle regime multiplier, committee
                 # confidence multiplier). calculate_position_size() already
                 # enforces this cap on ITS OWN output (risk.py:844), but nothing
@@ -1745,16 +1707,7 @@ async def process_signal_for_symbol(symbol: str, current_price: float, risk_mana
                 # 1.75x committee multiplier, with no re-check anywhere before
                 # create_order. Found via an external financial-correctness
                 # audit, independently reproduced with the exact same numbers.
-                if signal["action"] == "buy":
-                    _pre_cap_recheck_qty = position_size
-                    max_qty_at_cap = settings.MAX_SINGLE_TRADE_USD / current_price
-                    if position_size > max_qty_at_cap:
-                        position_size = round(max_qty_at_cap, 6)
-                        logger.warning(
-                            f"[{symbol}] Post-multiplier size exceeded MAX_SINGLE_TRADE_USD "
-                            f"(${_pre_cap_recheck_qty * current_price:.2f} > ${settings.MAX_SINGLE_TRADE_USD:.2f}) "
-                            f"-- re-capped {_pre_cap_recheck_qty} -> {position_size}"
-                        )
+                # (Now applied inside apply_entry_size_multipliers above.)
 
                 # Fix #1: Cap sell qty to available position (prevents 403 insufficient balance loop)
                 if signal["action"] == "sell":

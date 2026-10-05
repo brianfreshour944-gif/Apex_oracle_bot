@@ -10,13 +10,13 @@ from __future__ import annotations
 import datetime
 from dataclasses import dataclass, field
 from datetime import UTC
-from decimal import Decimal
 from typing import Any
 
 import numpy as np
 import polars as pl
 
 from src.committee.committee import run_committee
+from src.config import settings
 from src.logging_config import get_logger
 from src.risk import RiskManager
 from src.strategies import TradingStrategy
@@ -73,6 +73,54 @@ class BacktestResult:
     # comparison without re-fetching/re-generating them. None until set by
     # run_backtest() below (wired in 2026-09-20).
     bars_used: Any = None
+    # Where would-be entries were stopped (signal -> committee -> vetoes ->
+    # account gates -> sizing -> opened). Set by run_portfolio_backtest().
+    entry_funnel: dict[str, int] = field(default_factory=dict)
+
+
+_TF_UNITS = {"min": 60, "t": 60, "h": 3600, "hour": 3600, "d": 86400, "day": 86400, "w": 604800, "week": 604800}
+
+
+def _timeframe_seconds(timeframe: str) -> int | None:
+    """'5Min' / '1Hour' / '4Hour' / '1D' / '1Day' -> seconds (None if unparseable)."""
+    s = str(timeframe).strip().lower()
+    num = "".join(ch for ch in s if ch.isdigit()) or "1"
+    unit = s[len(num):] if s.startswith(num) else s.lstrip("0123456789")
+    mult = _TF_UNITS.get(unit)
+    return int(num) * mult if mult else None
+
+
+def _to_datetime_col(df: pl.DataFrame) -> pl.Series:
+    t = df["t"]
+    if t.dtype == pl.Utf8:
+        t = t.str.to_datetime(time_zone="UTC")
+    elif isinstance(t.dtype, pl.Datetime) and t.dtype.time_zone is None:
+        t = t.dt.replace_time_zone("UTC")
+    return t
+
+
+def _base_bar_seconds(df: pl.DataFrame) -> int | None:
+    """Median spacing of the supplied bars, in seconds."""
+    if len(df) < 2 or "t" not in df.columns:
+        return None
+    diffs = _to_datetime_col(df.head(50)).diff().drop_nulls().dt.total_seconds()
+    return int(diffs.median()) if len(diffs) else None
+
+
+def _resample_bars(df: pl.DataFrame, tf_seconds: int) -> pl.DataFrame:
+    """Aggregate base OHLCV bars into tf_seconds buckets (start-labelled), keeping `t`'s type."""
+    was_str = df["t"].dtype == pl.Utf8
+    out = (
+        df.with_columns(_to_datetime_col(df).alias("_dt"))
+        .sort("_dt")
+        .group_by_dynamic("_dt", every=f"{tf_seconds}s")
+        .agg(
+            pl.col("open").first(), pl.col("high").max(), pl.col("low").min(),
+            pl.col("close").last(), pl.col("volume").sum(),
+        )
+    )
+    t = out["_dt"].dt.strftime("%Y-%m-%dT%H:%M:%S+00:00") if was_str else out["_dt"]
+    return out.with_columns(t.alias("t")).select(["t", "open", "high", "low", "close", "volume"])
 
 
 class BacktestExchange:
@@ -81,6 +129,7 @@ class BacktestExchange:
     def __init__(self, bars: dict[str, pl.DataFrame]):
         self._bars = bars  # symbol -> DataFrame with columns [t, open, high, low, close, volume]
         self.current_time: str | None = None
+        self._base_seconds = {s: _base_bar_seconds(df) for s, df in bars.items()}
 
     async def get_bars(self, symbol: str, timeframe: str = "1D", limit: int = 100, end: datetime.datetime | None = None) -> pl.DataFrame:
         df = self._bars.get(symbol, pl.DataFrame())
@@ -91,6 +140,18 @@ class BacktestExchange:
             filter_time = end.isoformat() if isinstance(end, datetime.datetime) else str(end)
         if filter_time is not None:
             df = df.filter(pl.col("t") <= filter_time)
+        # Serve the requested timeframe. This used to ignore `timeframe` and
+        # return the base (hourly) bars for every request, so regime analysis
+        # -- live: analyze_market_regime(timeframe="1D") -- ran on hourly ATR%
+        # (~0.5%, under the 1.25% low-vol cutoff ~99% of the time) instead of
+        # daily (~3%, essentially never under it). Coarser timeframes are
+        # aggregated from base bars <= current_time, so the last bar is the
+        # in-progress one, like the live API. Finer ones can't be synthesized
+        # and fall back to the base bars.
+        tf_seconds = _timeframe_seconds(timeframe)
+        base = self._base_seconds.get(symbol)
+        if len(df) and tf_seconds and base and tf_seconds > base:
+            df = _resample_bars(df, tf_seconds)
         return df.tail(limit) if len(df) else df
 
     def invalidate_bars_cache(self, symbol: str | None = None, timeframe: str | None = None) -> int:
@@ -222,6 +283,414 @@ async def fetch_real_bars(
     return None
 
 
+def _parse_bar_time(ts: Any) -> datetime.datetime:
+    """Bar timestamp -> aware UTC datetime (the simulated clock)."""
+    if isinstance(ts, datetime.datetime):
+        d = ts
+    else:
+        d = datetime.datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
+    return d if d.tzinfo else d.replace(tzinfo=UTC)
+
+
+class SimulatedAccountGuards:
+    """Account-level risk limits on the SIMULATED clock.
+
+    Mirrors the live rules that RiskManager.update_account_status() and
+    bot.process_signal_for_symbol() enforce against the wall clock (which a
+    backtest can't use):
+
+    - max-drawdown killswitch (MAX_DRAWDOWN_STOP): liquidate + block entries;
+      clears when drawdown recovers to half the limit, or once the book has
+      been flat for DRAWDOWN_KILLSWITCH_COOLDOWN_HOURS (peak re-based).
+    - daily-loss killswitch (DAILY_LOSS_LIMIT % of equity): liquidate + block;
+      clears at the next UTC day.
+    - rolling realized-loss limit (ROLLING_LOSS_LIMIT_PCT of peak equity over
+      LOSS_LIMIT_WINDOW_HOURS): blocks new entries only.
+
+    ``update`` returns "liquidate" when a killswitch trips, else None.
+    """
+
+    def __init__(self, start_equity: float):
+        self.peak_equity = float(start_equity)
+        self.day: datetime.date | None = None
+        self.start_of_day_equity = float(start_equity)
+        self.killswitch_reason = ""
+        self.drawdown_tripped_at: datetime.datetime | None = None
+        self._closes: list[tuple[datetime.datetime, float]] = []
+        self._rolling_blocked = False
+
+    def record_close(self, when: datetime.datetime, pnl: float) -> None:
+        self._closes.append((when, float(pnl)))
+
+    def entries_blocked(self) -> bool:
+        return bool(self.killswitch_reason) or self._rolling_blocked
+
+    def update(self, now: datetime.datetime, equity: float, has_positions: bool) -> str | None:
+        if self.day != now.date():
+            self.day = now.date()
+            self.start_of_day_equity = equity
+            if self.killswitch_reason == "daily_loss_limit":
+                self.killswitch_reason = ""
+
+        self.peak_equity = max(self.peak_equity, equity)
+        drawdown_pct = (equity - self.peak_equity) / self.peak_equity * 100 if self.peak_equity > 0 else 0.0
+
+        if self.drawdown_tripped_at is not None and not has_positions:
+            elapsed_h = (now - self.drawdown_tripped_at).total_seconds() / 3600
+            if elapsed_h >= settings.DRAWDOWN_KILLSWITCH_COOLDOWN_HOURS:
+                self.peak_equity = equity
+                drawdown_pct = 0.0
+                self.drawdown_tripped_at = None
+                if self.killswitch_reason == "max_drawdown":
+                    self.killswitch_reason = ""
+
+        action = None
+        if drawdown_pct < settings.MAX_DRAWDOWN_STOP:
+            if self.drawdown_tripped_at is None:
+                self.drawdown_tripped_at = now
+            self.killswitch_reason = "max_drawdown"
+            action = "liquidate"
+        elif self.killswitch_reason == "max_drawdown" and drawdown_pct >= settings.MAX_DRAWDOWN_STOP / 2.0:
+            self.killswitch_reason = ""
+            self.drawdown_tripped_at = None
+
+        if action is None:
+            daily_pnl = equity - self.start_of_day_equity
+            if daily_pnl < settings.DAILY_LOSS_LIMIT / 100.0 * equity:
+                self.killswitch_reason = "daily_loss_limit"
+                action = "liquidate"
+
+        self._rolling_blocked = False
+        if settings.ROLLING_LOSS_LIMIT_PCT > 0:
+            cutoff = now - datetime.timedelta(hours=settings.LOSS_LIMIT_WINDOW_HOURS)
+            rolling = sum(p for t, p in self._closes if t > cutoff)
+            limit_abs = -abs(settings.ROLLING_LOSS_LIMIT_PCT) / 100.0 * self.peak_equity
+            self._rolling_blocked = self.peak_equity > 0 and rolling <= limit_abs
+        return action
+
+
+def _finalize_result(result: BacktestResult, equity: float) -> None:
+    """Compute summary metrics from result.trades / result.equity_curve."""
+    start_equity = float(result.start_equity)
+    result.end_equity = float(equity)
+    result.total_return_pct = (float(equity) - start_equity) / start_equity * 100 if start_equity else 0.0
+    result.n_trades = len(result.trades)
+    result.n_wins = sum(1 for t in result.trades if t.pnl > 0)
+    result.n_losses = sum(1 for t in result.trades if t.pnl <= 0)
+    result.win_rate = (result.n_wins / result.n_trades * 100) if result.n_trades else 0.0
+
+    eq = np.array(result.equity_curve, dtype=float)
+    if len(eq):
+        peak = np.maximum.accumulate(eq)
+        result.max_drawdown_pct = float(((eq - peak) / peak * 100).min())
+    else:
+        result.max_drawdown_pct = 0.0
+
+    if result.trades:
+        trade_rets = np.array([t.pnl_pct / 100.0 for t in result.trades])
+        trade_pnls = np.array([t.pnl for t in result.trades])
+        wins = trade_rets[trade_rets > 0]
+        losses = trade_rets[trade_rets < 0]
+        win_pnls = trade_pnls[trade_pnls > 0]
+        loss_pnls = trade_pnls[trade_pnls < 0]
+
+        result.avg_win_pct = float(wins.mean()) if len(wins) else 0.0
+        result.avg_loss_pct = float(losses.mean()) if len(losses) else 0.0
+        result.avg_win_usd = float(win_pnls.mean()) if len(win_pnls) else 0.0
+        result.avg_loss_usd = float(loss_pnls.mean()) if len(loss_pnls) else 0.0
+
+        if len(losses) > 0 and losses.mean() != 0:
+            result.payoff_ratio = float(wins.mean() / abs(losses.mean())) if len(wins) else 0.0
+        else:
+            result.payoff_ratio = float('inf') if len(wins) > 0 else 0.0
+
+        if len(loss_pnls) > 0 and loss_pnls.sum() != 0:
+            result.profit_factor = float(win_pnls.sum() / abs(loss_pnls.sum()))
+        else:
+            result.profit_factor = float('inf') if len(win_pnls) > 0 else 0.0
+
+        result.expectancy_pct = float(trade_rets.mean())
+        result.expectancy_usd = float(trade_pnls.mean())
+
+        downside_rets = trade_rets[trade_rets < 0]
+        if len(downside_rets) > 1 and downside_rets.std() > 0:
+            result.sortino = float(trade_rets.mean() / downside_rets.std() * np.sqrt(252))
+        else:
+            result.sortino = float('inf') if trade_rets.mean() > 0 else 0.0
+
+        # Calmar (annualized return / |max drawdown|). max_drawdown_pct is
+        # <= 0, so the old `> 0` check never fired and Calmar was always inf/0.
+        annual_return = float(trade_rets.mean() * 252)
+        if result.max_drawdown_pct < 0:
+            result.calmar = float(annual_return / (abs(result.max_drawdown_pct) / 100.0))
+        else:
+            result.calmar = float('inf') if annual_return > 0 else 0.0
+
+        sorted_pnls = np.sort(trade_pnls)
+        top3_pnl = float(sorted_pnls[-3:].sum()) if len(sorted_pnls) >= 3 else float(sorted_pnls.sum())
+        result.top3_contribution_pct = float(top3_pnl / float(equity) * 100) if equity > 0 else 0.0
+
+        avg_equity = float(np.mean(eq)) if len(eq) > 0 else start_equity
+        result.turnover_annualized = float(len(result.trades) / avg_equity * 252 * np.mean([abs(t.qty * t.entry_price) for t in result.trades]) / avg_equity) if avg_equity > 0 else 0.0
+
+    # total_return_pct is net of fees; gross adds them back (cost drag =
+    # gross - net).
+    result.gross_return_pct = float(result.total_return_pct) + (result.total_fees_paid / start_equity * 100 if start_equity else 0.0)
+
+    if len(eq) > 2:
+        rets = np.diff(eq) / eq[:-1]
+        result.sharpe = float(np.mean(rets) / (np.std(rets) + 1e-9) * np.sqrt(252)) if np.std(rets) > 0 else 0.0
+
+
+async def run_portfolio_backtest(
+    bars_by_symbol: dict[str, pl.DataFrame],
+    start_equity: float = 10000.0,
+    use_committee: bool = True,
+    cost_multiplier: float = 1.0,
+    enforce_account_caps: bool = True,
+    start_time: str | datetime.datetime | None = None,
+) -> BacktestResult:
+    """Simulate the live bot across several symbols on one shared account.
+
+    ``start_time``: bars before it are history only (visible to the strategy
+    through the exchange, never traded) -- live regime analysis needs ~100
+    daily bars, so pass a warm-up period before the evaluation window.
+
+    Mirrors bot.process_signal_for_symbol() on the simulated bar clock:
+    long-only entries ("sell" only closes a held long), committee veto +
+    adversarial vetoes, committee-derived expected return, post-sizing
+    multipliers, exchange-minimum bump, MAX_HOLD_HOURS, regime-scaled
+    trailing stop, post-close cooldown, killswitches and rolling-loss limit
+    (SimulatedAccountGuards). With ``enforce_account_caps`` it also applies
+    MAX_OPEN_POSITIONS and the portfolio exposure cap.
+
+    Not simulated (no historical data): live order-book impact, news
+    sentiment, LLM brain, PPO / decision-transformer votes (the committee
+    skips them when signal["backtest_df"] is set), the regime-switch oracle
+    flag, scale-in adds, and partial sells (a sell closes the whole long).
+    Fills are at the bar close; stops are checked at bar closes only.
+    """
+    from src.committee.models import calculate_directional_entropy, disagreement_from_entropy
+    from src.trade_decision import (
+        adversarial_veto_reasons,
+        apply_entry_size_multipliers,
+        estimate_expected_return,
+        min_order_bump,
+    )
+
+    symbols = list(bars_by_symbol)
+    exchange = BacktestExchange(bars_by_symbol)
+    strategy = TradingStrategy(exchange, cache_ttl=0.0, backtest=True)
+    risk = RiskManager(exchange)
+    result = BacktestResult(symbol="+".join(symbols), start_equity=start_equity, end_equity=start_equity)
+    guards = SimulatedAccountGuards(start_equity)
+
+    learner = None
+    validation_min_trades = None
+    if use_committee:
+        try:
+            from src.committee.adaptive_meta import VALIDATION_MIN_TRADES
+            from src.committee.committee import get_meta_learner
+            learner = get_meta_learner()
+            validation_min_trades = VALIDATION_MIN_TRADES
+        except Exception as e:
+            logger.debug(f"[BT] Brain C gate unavailable: {e}")
+
+    rows_by_time: dict[str, dict[str, dict[str, Any]]] = {}
+    for sym, df in bars_by_symbol.items():
+        for row in df.iter_rows(named=True):
+            rows_by_time.setdefault(str(row["t"]), {})[sym] = row
+    timeline = sorted(rows_by_time, key=_parse_bar_time)
+    if start_time is not None:
+        start_dt = _parse_bar_time(start_time)
+        timeline = [ts for ts in timeline if _parse_bar_time(ts) >= start_dt]
+    funnel = result.entry_funnel
+
+    def count(key: str) -> None:
+        funnel[key] = funnel.get(key, 0) + 1
+
+    realized = float(start_equity)
+    positions: dict[str, dict[str, Any]] = {}
+    last_price: dict[str, float] = {}
+    cooldown_until: dict[str, datetime.datetime] = {}
+
+    def mark_to_market() -> float:
+        return realized + sum((last_price[s] - p["entry_price"]) * p["qty"] for s, p in positions.items())
+
+    def close(sym: str, price: float, ts: str, now: datetime.datetime, reason: str) -> None:
+        nonlocal realized
+        pos = positions.pop(sym)
+        qty, entry = pos["qty"], pos["entry_price"]
+        gross_pnl = (price - entry) * qty
+        tx_costs = risk.get_transaction_costs(sym)
+        fee = price * qty * (2.0 * tx_costs["total_bps"] * cost_multiplier / 10000)
+        pnl = gross_pnl - fee
+        result.total_fees_paid += fee
+        realized += pnl
+        result.trades.append(BacktestTrade(
+            symbol=sym, side="long", entry_price=entry, exit_price=price, qty=qty,
+            entry_time=pos["entry_time"], exit_time=ts, pnl=pnl,
+            pnl_pct=(price - entry) / entry * 100, reason=reason,
+        ))
+        guards.record_close(now, pnl)
+        # Same post-close cleanup as live (_record_committee_outcome): stale
+        # peaks would otherwise fire the next position's trailing stop early.
+        risk.peak_prices.pop(sym, None)
+        getattr(strategy, "_trailing_peaks", {}).pop(sym, None)
+        getattr(strategy, "_trailing_troughs", {}).pop(sym, None)
+        cooldown_until[sym] = now + datetime.timedelta(seconds=settings.COOLDOWN_SECONDS_BUY)
+        logger.info(f"[BT] CLOSE {sym} @ {price:.2f} pnl={pnl:.2f} reason={reason}")
+
+    for ts in timeline:
+        now = _parse_bar_time(ts)
+        bar_rows = rows_by_time[ts]
+        # Original bar value (str or datetime) so BacktestExchange's
+        # point-in-time filter compares like with like.
+        exchange.current_time = next(iter(bar_rows.values()))["t"]
+        for sym, row in bar_rows.items():
+            last_price[sym] = float(row["close"])
+
+        if guards.update(now, mark_to_market(), has_positions=bool(positions)) == "liquidate":
+            for sym in list(positions):
+                close(sym, last_price[sym], ts, now, f"killswitch_{guards.killswitch_reason}")
+
+        for sym in symbols:
+            row = bar_rows.get(sym)
+            if row is None:
+                continue
+            price = float(row["close"])
+            pos = positions.get(sym)
+
+            if pos is not None:
+                held_h = (now - _parse_bar_time(pos["entry_time"])).total_seconds() / 3600
+                if held_h >= settings.MAX_HOLD_HOURS:
+                    close(sym, price, ts, now, "max_hold_time")
+                    continue
+                cached = strategy._regime_cache.get(sym)
+                regime_for_trailing = cached[1].get("regime") if cached else None
+                if risk.check_trailing_stop(sym, price, pos["entry_price"], pos["qty"], regime=regime_for_trailing) == "close":
+                    close(sym, price, ts, now, "trailing_stop_hit")
+                    continue
+
+            # No entry timestamp on the position dict: the strategy's own
+            # max-hold / min-hold checks run on the wall clock, so they're
+            # enforced above on the simulated clock instead.
+            position = None if pos is None else {
+                "symbol": sym, "qty": pos["qty"], "avg_entry_price": pos["entry_price"], "side": "long",
+            }
+            signal = await strategy.generate_trading_signal(sym, price, position)
+            regime = signal.get("regime", "neutral")
+            result.regimes_seen[regime] = result.regimes_seen.get(regime, 0) + 1
+
+            if pos is None:
+                count(f"signal_{signal.get('action', 'none')}")
+            if signal.get("action") == "close":
+                if pos is not None:
+                    close(sym, price, ts, now, signal.get("reason", "close"))
+                continue
+
+            committee_result = None
+            if use_committee:
+                signal["backtest_df"] = await exchange.get_bars(sym)
+                committee_result = await run_committee(sym, price, signal)
+                if committee_result.vetoed:
+                    if pos is None:
+                        count("committee_vetoed")
+                    continue
+                final_action = committee_result.action
+                if pos is None:
+                    count(f"committee_{final_action}")
+            else:
+                final_action = signal.get("action", "hold")
+
+            if pos is not None:
+                if final_action in ("sell", "close"):
+                    close(sym, price, ts, now, signal.get("reason") or f"committee_{final_action}")
+                continue  # live adds to longs (scale-in); not simulated
+            if final_action != "buy":
+                continue  # long-only: a sell with no long position is ignored
+            count("buy_signals")
+
+            if guards.killswitch_reason:
+                count(f"blocked_killswitch_{guards.killswitch_reason}")
+                continue
+            if guards.entries_blocked():
+                count("blocked_rolling_loss")
+                continue
+            if now < cooldown_until.get(sym, now):
+                count("blocked_cooldown")
+                continue
+            if enforce_account_caps and len(positions) >= settings.MAX_OPEN_POSITIONS:
+                count("blocked_max_positions")
+                continue
+
+            if committee_result is not None:
+                signal["brain_disagreement"] = disagreement_from_entropy(
+                    calculate_directional_entropy(getattr(committee_result, "votes", None) or [])
+                )
+                reasons = adversarial_veto_reasons(signal, committee_result, learner, validation_min_trades)
+                if reasons:
+                    first = reasons[0]
+                    count("veto_brain_b" if first.startswith("Brain B") else
+                          "veto_brain_c" if first.startswith("Brain C") else "veto_disagreement")
+                    continue
+                expected_return_pct = estimate_expected_return(regime, committee_result.score, committee_result.entropy)
+                confidence = committee_result.score
+            else:
+                expected_return_pct = signal.get("expected_return_pct", 0.0)
+                confidence = signal.get("confidence", 1.0)
+
+            equity_now = mark_to_market()
+            drawdown_pct = (equity_now - guards.peak_equity) / guards.peak_equity * 100 if guards.peak_equity > 0 else 0.0
+            size, status = risk.calculate_position_size(
+                symbol=sym, current_price=price, regime=regime, atr=signal.get("atr"),
+                confidence=confidence, expected_return_pct=expected_return_pct,
+                current_equity=equity_now, drawdown_pct=drawdown_pct, side="buy",
+                deriv_data=signal.get("features") or {},
+            )
+            if status != "ok" or size <= 0:
+                reason = status.split("(")[0].replace("rejected:", "").strip() if status != "ok" else "zero size"
+                count("sizing_" + "_".join(reason.split())[:48])
+                continue
+            signal["action"] = "buy"
+            size, _ = apply_entry_size_multipliers(size, signal, committee_result, price)
+
+            if enforce_account_caps:
+                exposure = sum(last_price[s] * p["qty"] for s, p in positions.items())
+                headroom = risk._get_max_portfolio_cap() - exposure
+                if headroom < 10.0:  # check_and_reserve_exposure's min_notional
+                    count("blocked_portfolio_cap")
+                    continue
+                if size * price > headroom:
+                    size = round(headroom / price, 6)
+            else:
+                headroom = float("inf")
+
+            bumped = min_order_bump(size, price)
+            if bumped is None or bumped * price > headroom:
+                count("blocked_min_order")
+                continue
+            size = bumped
+            if size <= 0:
+                continue
+            count("opened")
+            positions[sym] = {"qty": size, "entry_price": price, "entry_time": ts}
+            logger.info(f"[BT] BUY {size:.6f} {sym} @ {price:.2f} (regime={regime})")
+
+        result.equity_curve.append(mark_to_market())
+
+    if timeline:
+        final_ts = timeline[-1]
+        final_now = _parse_bar_time(final_ts)
+        for sym in list(positions):
+            close(sym, last_price[sym], final_ts, final_now, "end_of_backtest")
+        if result.equity_curve:
+            result.equity_curve[-1] = realized
+
+    _finalize_result(result, realized)
+    return result
+
+
 async def run_backtest(
     symbol: str = "BTC/USD",
     n_bars: int = 400,
@@ -234,313 +703,37 @@ async def run_backtest(
     cost_multiplier: float = 1.0,  # Multiplies the round-trip transaction cost
                                     # (fee+slippage+spread bps from risk.get_transaction_costs)
                                     # applied on every close. 1.0 = normal costs. Use 2.0/3.0 for
-                                    # a cost-stress test (was previously impossible: the old
-                                    # fee_pct/slippage_pct params here were accepted but never
-                                    # referenced anywhere in the function body -- fixed
-                                    # 2026-09-20, see ADVERSARIAL_AUDIT_2026-09-20.md §7).
+                                    # a cost-stress test.
 ) -> BacktestResult:
-    """Run a full backtest with fee and slippage execution modeling.
+    """Single-symbol backtest (promotion gate, walk-forward, research).
 
-    This uses the SAME position sizing logic as live trading:
-    - calculate_position_size() with ATR stops, regime multipliers, confidence,
-      correlation penalties, transaction cost model, gap-risk multiplier, etc.
-    - Fee and slippage from risk model's transaction cost model (not flat %),
-      scaled by `cost_multiplier` for stress-testing.
+    Runs the same live-parity engine as run_portfolio_backtest() -- long-only,
+    live vetoes, simulated-clock max-hold / cooldown / killswitches -- on one
+    symbol. Account caps (MAX_OPEN_POSITIONS, portfolio exposure cap) are
+    off here so sizing stays percent-of-equity and comparable across runs;
+    use run_portfolio_backtest() to simulate the real account.
 
     If `bars` is provided (real historical OHLCV data), it is used instead of
     synthetic data, and signal["backtest_df"] is populated per-bar so that
     transformer_brain.py uses this historical context instead of attempting
     a live Alpaca fetch.
     """
-
     if bars is None:
-        # Try to fetch real historical data first; fall back to synthetic
         days = max(n_bars // 24, 30)  # estimate days from bar count (assuming 1h bars)
         real_bars = await fetch_real_bars(symbol, days=days)
         if real_bars is not None and len(real_bars) >= n_bars:
             bars = real_bars.head(n_bars)
         else:
             bars = _generate_synthetic_bars(symbol, n=n_bars, seed=seed, regime=regime)
-    exchange = BacktestExchange({symbol: bars})
 
-    strategy = TradingStrategy(exchange, cache_ttl=0.0, backtest=True)
-    risk = RiskManager(exchange)
-
-    result = BacktestResult(symbol=symbol, start_equity=start_equity, end_equity=start_equity)
-    equity = Decimal(str(start_equity))
-    result.equity_curve.append(float(equity))
-
-    # Track open position per symbol
-    open_pos: dict[str, Any] | None = None
-    entry_price = 0.0
-    entry_time = ""
-
-    # For correlation matrix in backtest (simplified - single symbol)
-    returns_matrix = None
-
-    for row in bars.iter_rows(named=True):
-        current_price = float(row["close"])
-        ts = row["t"]
-        exchange.current_time = ts
-
-        # Build a position dict the strategy understands (only if we hold one)
-        position = None
-        if open_pos is not None:
-            position = {
-                "symbol": symbol,
-                # Signed, like a live position: every strategy exit check
-                # infers direction from the sign of qty and ignores "side",
-                # so an unsigned short was managed with the LONG rules (a
-                # -4.42% short loss closed as "profit_target_reached").
-                "qty": open_pos["qty"] if open_pos["side"] == "long" else -open_pos["qty"],
-                "avg_entry_price": entry_price,
-                "side": open_pos["side"],
-            }
-
-        # Regime-scaled trailing stop check (RiskManager.check_trailing_stop),
-        # run BEFORE signal generation -- mirrors bot.py's live order exactly
-        # (bot.py checks this first and short-circuits on a hit before ever
-        # calling generate_trading_signal). Previously this backtest loop only
-        # ever exercised strategies.py's separate FIXED-percentage trailing
-        # stop, never the regime-scaled one live trading actually uses, so a
-        # backtest could never validate the P&L contribution of the
-        # regime-scaled version live traders were getting. Fixed 2026-09-20,
-        # see ADVERSARIAL_AUDIT_2026-09-20.md §6.
-        if open_pos is not None:
-            cached_regime_entry = strategy._regime_cache.get(symbol)
-            regime_for_trailing = cached_regime_entry[1].get("regime") if cached_regime_entry else None
-            signed_qty = open_pos["qty"] if open_pos["side"] == "long" else -open_pos["qty"]
-            trailing_action = risk.check_trailing_stop(symbol, current_price, entry_price, signed_qty, regime=regime_for_trailing)
-            if trailing_action == "close":
-                qty = open_pos["qty"]
-                if open_pos["side"] == "long":
-                    gross_pnl = (current_price - entry_price) * qty
-                    pnl_pct = (current_price - entry_price) / entry_price * 100
-                else:
-                    gross_pnl = (entry_price - current_price) * qty
-                    pnl_pct = (entry_price - current_price) / entry_price * 100
-                notional = current_price * qty
-                tx_costs = risk.get_transaction_costs(symbol)
-                round_trip_cost_bps = 2.0 * tx_costs["total_bps"] * cost_multiplier
-                fee = notional * (round_trip_cost_bps / 10000)
-                pnl = gross_pnl - fee
-                result.total_fees_paid += fee
-                equity += Decimal(str(pnl))
-                result.trades.append(BacktestTrade(
-                    symbol=symbol, side=open_pos["side"], entry_price=entry_price,
-                    exit_price=current_price, qty=qty, entry_time=entry_time,
-                    exit_time=ts, pnl=pnl, pnl_pct=pnl_pct, reason="trailing_stop_hit",
-                ))
-                logger.info(f"[BT] CLOSE (regime-scaled trailing stop) {symbol} @ {current_price:.2f} pnl={pnl:.2f} ({pnl_pct:.2f}%)")
-                open_pos = None
-                result.equity_curve.append(float(equity))
-                continue
-
-        signal = await strategy.generate_trading_signal(symbol, current_price, position)
-
-        # Track regimes seen
-        regime_seen = signal.get("regime", "neutral")
-        result.regimes_seen[regime_seen] = result.regimes_seen.get(regime_seen, 0) + 1
-
-        if use_committee:
-            bars_df = await exchange.get_bars(symbol)
-            signal["backtest_df"] = bars_df
-            committee_result = await run_committee(symbol, current_price, signal)
-            final_action = committee_result.action
-            # Use committee confidence for position sizing
-            confidence = committee_result.score
-        else:
-            final_action = signal["action"]
-            confidence = signal.get("confidence", 1.0)
-
-        # Get signal features for position sizing (same as live)
-        atr = signal.get("atr")
-        expected_return_pct = signal.get("expected_return_pct", 0.0)
-        current_equity = float(equity)
-        drawdown_pct = 0.0
-        if result.equity_curve:
-            peak = max(result.equity_curve)
-            if peak > 0:
-                drawdown_pct = (float(equity) - peak) / peak * 100
-
-        if final_action == "buy" and open_pos is None:
-            # Use SAME position sizing as live trading
-            size, status = risk.calculate_position_size(
-                symbol=symbol,
-                current_price=current_price,
-                regime=regime_seen,
-                atr=atr,
-                confidence=confidence,
-                returns_matrix=returns_matrix,
-                expected_return_pct=expected_return_pct,
-                current_equity=current_equity,
-                drawdown_pct=drawdown_pct,
-                side="buy",
-            )
-            if status == "ok" and size > 0:
-                open_pos = {"qty": size, "side": "long"}
-                entry_price = current_price
-                entry_time = ts
-                logger.info(f"[BT] BUY {size:.6f} {symbol} @ {current_price:.2f} (regime={regime_seen}, size={size:.6f})")
-
-        elif final_action == "sell" and open_pos is None:
-            size, status = risk.calculate_position_size(
-                symbol=symbol,
-                current_price=current_price,
-                regime=regime_seen,
-                atr=atr,
-                confidence=confidence,
-                returns_matrix=returns_matrix,
-                expected_return_pct=expected_return_pct,
-                current_equity=current_equity,
-                drawdown_pct=drawdown_pct,
-                side="sell",
-            )
-            if status == "ok" and size > 0:
-                open_pos = {"qty": size, "side": "short"}
-                entry_price = current_price
-                entry_time = ts
-                logger.info(f"[BT] SELL/SHORT {size:.6f} {symbol} @ {current_price:.2f} (regime={regime_seen}, size={size:.6f})")
-
-        elif final_action == "close" and open_pos is not None:
-            qty = open_pos["qty"]
-            if open_pos["side"] == "long":
-                gross_pnl = (current_price - entry_price) * qty
-                pnl_pct = (current_price - entry_price) / entry_price * 100
-            else:
-                gross_pnl = (entry_price - current_price) * qty
-                pnl_pct = (entry_price - current_price) / entry_price * 100
-
-            # Use same fee/slippage model as live (from risk model)
-            notional = current_price * qty
-            tx_costs = risk.get_transaction_costs(symbol)
-            total_cost_bps = tx_costs["total_bps"]
-            round_trip_cost_bps = 2.0 * total_cost_bps * cost_multiplier
-            cost_fraction = round_trip_cost_bps / 10000
-            fee = notional * cost_fraction
-            # Slippage is already included in cost_fraction, no double-count
-            pnl = gross_pnl - fee
-            result.total_fees_paid += fee
-            equity += Decimal(str(pnl))
-            result.trades.append(BacktestTrade(
-                symbol=symbol, side=open_pos["side"], entry_price=entry_price,
-                exit_price=current_price, qty=qty, entry_time=entry_time,
-                exit_time=ts, pnl=pnl, pnl_pct=pnl_pct, reason=signal.get("reason", "close"),
-            ))
-            logger.info(f"[BT] CLOSE {symbol} @ {current_price:.2f} pnl={pnl:.2f} ({pnl_pct:.2f}%) reason={signal.get('reason')}")
-            open_pos = None
-
-        result.equity_curve.append(float(equity))
-
-    # Close any remaining position at the last price (mark-to-market)
-    if open_pos is not None:
-        last_row = bars.row(-1, named=True)
-        last_price = float(last_row["close"])
-        qty = open_pos["qty"]
-        if open_pos["side"] == "long":
-            gross_pnl = (last_price - entry_price) * qty
-            pnl_pct = (last_price - entry_price) / entry_price * 100
-        else:
-            gross_pnl = (entry_price - last_price) * qty
-            pnl_pct = (entry_price - last_price) / entry_price * 100
-        
-        # Use same transaction cost model as live
-        notional = last_price * qty
-        tx_costs = risk.get_transaction_costs(symbol)
-        total_cost_bps = tx_costs["total_bps"]
-        round_trip_cost_bps = 2.0 * total_cost_bps * cost_multiplier
-        cost_fraction = round_trip_cost_bps / 10000
-        fee = notional * cost_fraction
-        pnl = gross_pnl - fee
-        result.total_fees_paid += fee
-        equity += Decimal(str(pnl))
-        result.equity_curve[-1] = float(equity)
-
+    result = await run_portfolio_backtest(
+        {symbol: bars}, start_equity=start_equity, use_committee=use_committee,
+        cost_multiplier=cost_multiplier, enforce_account_caps=False,
+    )
+    result.symbol = symbol
     result.bars_used = bars
-    # Compute metrics
-    result.end_equity = float(equity)
-    result.total_return_pct = float((equity - Decimal(str(start_equity))) / Decimal(str(start_equity)) * 100)
-    result.n_trades = len(result.trades)
-    result.n_wins = sum(1 for t in result.trades if t.pnl > 0)
-    result.n_losses = sum(1 for t in result.trades if t.pnl <= 0)
-    result.win_rate = (result.n_wins / result.n_trades * 100) if result.n_trades else 0.0
-
-    eq = np.array(result.equity_curve)
-    peak = np.maximum.accumulate(eq)
-    drawdown = (eq - peak) / peak * 100
-    result.max_drawdown_pct = float(drawdown.min()) if len(drawdown) else 0.0
-
-    # Trade-level returns for extended metrics
-    if result.trades:
-        trade_rets = np.array([t.pnl_pct / 100.0 for t in result.trades])
-        trade_pnls = np.array([t.pnl for t in result.trades])
-        wins = trade_rets[trade_rets > 0]
-        losses = trade_rets[trade_rets < 0]
-        win_pnls = trade_pnls[trade_pnls > 0]
-        loss_pnls = trade_pnls[trade_pnls < 0]
-
-        # Basic stats
-        result.avg_win_pct = float(wins.mean()) if len(wins) else 0.0
-        result.avg_loss_pct = float(losses.mean()) if len(losses) else 0.0
-        result.avg_win_usd = float(win_pnls.mean()) if len(win_pnls) else 0.0
-        result.avg_loss_usd = float(loss_pnls.mean()) if len(loss_pnls) else 0.0
-
-        # Payoff ratio and profit factor
-        if len(losses) > 0 and losses.mean() != 0:
-            result.payoff_ratio = float(wins.mean() / abs(losses.mean()))
-        else:
-            result.payoff_ratio = float('inf') if len(wins) > 0 else 0.0
-
-        if len(loss_pnls) > 0 and loss_pnls.sum() != 0:
-            result.profit_factor = float(win_pnls.sum() / abs(loss_pnls.sum()))
-        else:
-            result.profit_factor = float('inf') if len(win_pnls) > 0 else 0.0
-
-        # Expectancy per trade
-        result.expectancy_pct = float(trade_rets.mean())
-        result.expectancy_usd = float(trade_pnls.mean())
-
-        # Sortino ratio (downside deviation only)
-        downside_rets = trade_rets[trade_rets < 0]
-        if len(downside_rets) > 1 and downside_rets.std() > 0:
-            result.sortino = float(trade_rets.mean() / downside_rets.std() * np.sqrt(252))
-        else:
-            result.sortino = float('inf') if trade_rets.mean() > 0 else 0.0
-
-        # Calmar ratio (annualized return / max drawdown)
-        annual_return = float(trade_rets.mean() * 252)
-        if result.max_drawdown_pct > 0:
-            result.calmar = float(annual_return / (result.max_drawdown_pct / 100.0))
-        else:
-            result.calmar = float('inf') if annual_return > 0 else 0.0
-
-        # Top 3 trades contribution
-        sorted_pnls = np.sort(trade_pnls)
-        top3_pnl = float(sorted_pnls[-3:].sum()) if len(sorted_pnls) >= 3 else float(sorted_pnls.sum())
-        result.top3_contribution_pct = float(top3_pnl / float(equity) * 100) if equity > 0 else 0.0
-
-        # Turnover (annualized)
-        avg_equity = float(np.mean(eq)) if len(eq) > 0 else float(start_equity)
-        result.turnover_annualized = float(len(result.trades) / avg_equity * 252 * np.mean([abs(t.qty * t.entry_price) for t in result.trades]) / avg_equity) if avg_equity > 0 and result.trades else 0.0
-
-        # total_return_pct is already net-of-fees (fee is deducted from pnl
-        # before it hits equity, above) -- the previous "cost_adjusted_return_pct"
-        # here was double-subtracting fees from an already-net figure via a
-        # placeholder that (due to a `hasattr(result, 'get')` check that's
-        # always False for a dataclass) evaluated to a hardcoded 0.0 and then
-        # crashed on a Decimal/float TypeError the moment any trade closed --
-        # found + fixed 2026-09-20 (backtest.py had zero test coverage before
-        # this). gross_return_pct is the actually-useful complementary
-        # number: what return would have been at zero transaction cost, using
-        # the real per-trade fees accumulated in total_fees_paid above.
-        result.gross_return_pct = float(result.total_return_pct) + (result.total_fees_paid / float(start_equity) * 100)
-
-    # Simple Sharpe (daily returns)
-    if len(eq) > 2:
-        rets = np.diff(eq) / eq[:-1]
-        result.sharpe = float(np.mean(rets) / (np.std(rets) + 1e-9) * np.sqrt(252)) if np.std(rets) > 0 else 0.0
-
     return result
+
 
 def run_monte_carlo_analysis(result: BacktestResult, n_simulations: int = 1000) -> dict[str, Any]:
     """
