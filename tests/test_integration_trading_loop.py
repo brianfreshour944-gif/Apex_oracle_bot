@@ -481,6 +481,76 @@ class TestFullTradingLoop:
         finally:
             _state.position_adds.pop(symbol, None)
 
+    @pytest.mark.asyncio
+    async def test_rolling_loss_limit_does_not_block_exit(self, mock_exchange, mock_strategy, mock_risk_manager):
+        """Regression (reproduced 2026-10-05): the rolling soft loss-limit was
+        a top-of-function early return, so on a losing day (exactly when it
+        trips) it also skipped the trailing-stop / SL / TP exit checks -- an
+        already-open loser was left unmanaged and bled further as the market
+        fell. It must gate NEW entries only; an open position must still exit.
+        """
+        losing = [{"symbol": "BTCUSD", "qty": 0.1, "avg_entry_price": 40000.0}]
+        mock_exchange.get_positions = AsyncMock(return_value=losing)
+        mock_risk_manager.check_trailing_stop = MagicMock(return_value="close")
+        mock_risk_manager.peak_equity = 10000.0
+
+        with patch.object(settings, "ROLLING_LOSS_LIMIT_PCT", 1.0), \
+             patch.object(settings, "LOSS_LIMIT_WINDOW_HOURS", 6.0), \
+             patch("src.bot.get_recent_realized_pnl", return_value=-500.0):
+            await process_signal_for_symbol(
+                symbol="BTC/USD", current_price=40000.0, risk_manager=mock_risk_manager,
+                strategy=mock_strategy, ex=mock_exchange, positions=losing,
+                regime_flag=None, banned_symbols=set(),
+            )
+
+        mock_exchange.create_order.assert_called_once()
+        assert mock_exchange.create_order.call_args.kwargs["side"] == "sell"
+
+    @pytest.mark.asyncio
+    async def test_rolling_loss_limit_still_blocks_new_entry(self, mock_exchange, mock_strategy, mock_risk_manager):
+        """The limit must still refuse NEW entries while it is tripped -- the
+        fix relocates the gate, it does not disable it."""
+        mock_risk_manager.peak_equity = 10000.0
+        with patch.object(settings, "ROLLING_LOSS_LIMIT_PCT", 1.0), \
+             patch.object(settings, "LOSS_LIMIT_WINDOW_HOURS", 6.0), \
+             patch("src.bot.get_recent_realized_pnl", return_value=-500.0):
+            await self._run_buy(mock_exchange, mock_strategy, mock_risk_manager)
+
+        mock_exchange.create_order.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_rolling_loss_limit_does_not_block_sell_exit(self, mock_exchange, mock_strategy, mock_risk_manager):
+        """A committee-overridden 'sell' while holding a long is an EXIT (the
+        backtester closes the held long on sell/close, applying entries_blocked
+        only to new buys). It must not be trapped by the rolling loss-limit."""
+        from src.committee.models import CommitteeResult
+        losing = [{"symbol": "BTCUSD", "qty": 0.1, "avg_entry_price": 40000.0}]
+        mock_exchange.get_positions = AsyncMock(return_value=losing)
+        mock_strategy.generate_trading_signal = AsyncMock(return_value={
+            "action": "hold", "confidence": 0.5, "regime": "trending",
+            "rsi": 50.0, "atr": 500.0, "features": {},
+        })
+        mock_risk_manager.peak_equity = 10000.0
+
+        async def _sell_committee(symbol, price, signal):
+            return CommitteeResult(
+                action="sell", score=0.62, size_multiplier=1.0, entropy=0.0,
+                votes=[], decision_id="sell-exit",
+            )
+
+        with patch.object(settings, "ROLLING_LOSS_LIMIT_PCT", 1.0), \
+             patch.object(settings, "LOSS_LIMIT_WINDOW_HOURS", 6.0), \
+             patch("src.bot.get_recent_realized_pnl", return_value=-500.0), \
+             patch("src.committee.committee.run_committee", new=_sell_committee):
+            await process_signal_for_symbol(
+                symbol="BTC/USD", current_price=40000.0, risk_manager=mock_risk_manager,
+                strategy=mock_strategy, ex=mock_exchange, positions=losing,
+                regime_flag=None, banned_symbols=set(),
+            )
+
+        mock_exchange.create_order.assert_called_once()
+        assert mock_exchange.create_order.call_args.kwargs["side"] == "sell"
+
 
 class TestCommitteeErrorHandling:
     """Tests for committee error handling."""
