@@ -62,6 +62,20 @@ docker run -d --name apex-bot --env-file .env apex-oracle-bot
 
 ---
 
+## 🧭 Agent Commands
+
+The repository ships a fail-closed 5-stage audit and fix pipeline that runs in
+OpenCode. Start it with a bounded task:
+
+```text
+/apex <bounded task>
+```
+
+See [COMMAND_REFERENCE.md](COMMAND_REFERENCE.md) for the full command list, the
+available skills, and how the pipeline stages hand off.
+
+---
+
 ## ⚙️ Risk Management Parameters
 
 The bot features layered risk protection managed dynamically by `src/risk.py`:
