@@ -298,3 +298,59 @@ async def test_drawdown_cooldown_survives_restart(monkeypatch):
     status = await restarted.update_account_status()
     assert status["status"] == "risk_ok", status
     assert restarted.is_killswitch_active() is False
+
+
+@pytest.mark.asyncio
+async def test_liquidate_all_positions_cancels_protective_stops():
+    """The killswitch flatten path must cancel resting protective stops before
+    closing, or a dangling sell lingers after the position is gone."""
+    ex = AsyncMock()
+    ex.get_positions = AsyncMock(return_value=[
+        {"symbol": "BTC/USD", "qty": "0.1", "market_value": "5000"},
+    ])
+    ex.create_order = AsyncMock(return_value={"id": "close_1", "filled_avg_price": 50000.0})
+    ex.cancel_order = AsyncMock(return_value=True)
+    rm = RiskManager(ex)
+    rm.protective_stops["BTCUSD"] = "stop_1"
+
+    await rm.liquidate_all_positions()
+
+    ex.cancel_order.assert_awaited_once_with("stop_1")
+    assert "BTCUSD" not in rm.protective_stops
+
+
+@pytest.mark.asyncio
+async def test_reduce_exposure_cancels_protective_stops(monkeypatch):
+    """The exposure-cap reduction path also closes positions, so it must
+    cancel the resting stops for the symbols it closes."""
+    ex = AsyncMock()
+    ex.get_positions = AsyncMock(return_value=[
+        {"symbol": "BTC/USD", "qty": "0.1", "market_value": "9000", "unrealized_pl": "-10"},
+    ])
+    ex.create_order = AsyncMock(return_value={
+        "id": "close_1", "filled_avg_price": 50000.0, "filled_qty": 0.1,
+    })
+    ex.cancel_order = AsyncMock(return_value=True)
+    rm = RiskManager(ex)
+    rm.protective_stops["BTCUSD"] = "stop_9"
+    monkeypatch.setattr(settings, "MAX_PORTFOLIO_PCT", 0.01)  # cap $100 < $9000 held
+    rm.peak_equity = 1000.0
+
+    result = await rm.reduce_exposure_to_cap()
+
+    assert result["status"] == "exposure_reduced", result
+    ex.cancel_order.assert_awaited_once_with("stop_9")
+    assert "BTCUSD" not in rm.protective_stops
+
+
+@pytest.mark.asyncio
+async def test_cancel_protective_stop_is_failsafe():
+    """A failed cancel must not raise out of an emergency flatten -- the
+    position is the real risk, not the leftover order."""
+    ex = AsyncMock()
+    ex.cancel_order = AsyncMock(side_effect=RuntimeError("network down"))
+    rm = RiskManager(ex)
+    rm.protective_stops["BTCUSD"] = "stop_1"
+
+    await rm._cancel_protective_stop("BTC/USD")  # must not raise
+    assert "BTCUSD" not in rm.protective_stops

@@ -97,6 +97,12 @@ class RiskManager:
     def __init__(self, exchange: AlpacaExchange):
         self.exchange = exchange
         self.peak_equity = 0.0
+        # Protective stop_limit order ids (slash-less symbol -> order id).
+        # bot.py points this at the same dict as BotState.protective_stops so
+        # the emergency flatten paths below cancel resting sells they close
+        # out from under. Empty by default (and unused unless
+        # PROTECTIVE_STOPS_ENABLED armed them).
+        self.protective_stops: dict[str, str] = {}
         self.daily_pnl = 0.0
         self.open_positions = []
         self.peak_prices: dict[str, float] = {}  # Tracks highest price seen while in position
@@ -1627,6 +1633,27 @@ class RiskManager:
         async with self._exposure_lock:
             self._reserved_new_position_symbols.pop(symbol, None)
 
+    async def _cancel_protective_stop(self, symbol: str) -> None:
+        """Cancel a resting protective stop for a symbol this manager is
+        about to close, so the sell doesn't linger after the position is gone.
+
+        Shares bot.py's registry (see __init__). Fail-safe: a failed cancel
+        must never block the emergency close itself.
+        """
+        order_id = self.protective_stops.pop(symbol.replace("/", ""), None)
+        if not order_id:
+            return
+        cancel = getattr(self.exchange, "cancel_order", None)
+        if cancel is None:
+            return
+        try:
+            await cancel(order_id)
+        except Exception as cancel_err:
+            logger.warning(
+                f"Failed to cancel protective stop {order_id} for {symbol} "
+                f"during flatten (manual check advised): {cancel_err!r}"
+            )
+
     async def reduce_exposure_to_cap(self) -> dict[str, Any]:
         """Close positions, worst unrealized P&L first, until exposure is
         back under the cap. Targeted/incremental, unlike liquidate_all_positions."""
@@ -1650,6 +1677,7 @@ class RiskManager:
                 qty_abs = abs(float(qty))
                 market_value = float(position.get("market_value", 0))
                 client_order_id = f"emergency_{symbol}_{side}_{qty_abs}_{int(time.time())}"
+                await self._cancel_protective_stop(symbol)
                 order_result = await self.exchange.create_order(symbol=symbol, qty=qty_abs, side=side, type="market", client_order_id=client_order_id, bypass_circuit_breaker=True)
                 filled_price = order_result.get("filled_avg_price", 0.0)
                 filled_qty = order_result.get("filled_qty", qty_abs)
@@ -1694,6 +1722,7 @@ class RiskManager:
                 qty_abs = abs(float(qty))
 
                 client_order_id = f"emergency_{symbol}_{side}_{qty_abs}_{int(time.time())}"
+                await self._cancel_protective_stop(symbol)
                 order_result = await self.exchange.create_order(
                     symbol=symbol,
                     qty=qty_abs,

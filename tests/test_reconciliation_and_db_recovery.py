@@ -22,6 +22,7 @@ class FakeExchange:
         self.price = price
         self.fail_positions = fail_positions
         self.submitted = []
+        self.cancelled = []
 
     async def get_positions(self, *a, **k):
         if self.fail_positions:
@@ -37,6 +38,10 @@ class FakeExchange:
     async def create_order(self, symbol, qty, side, **kwargs):
         self.submitted.append((symbol, qty, side))
         return {"id": f"ord-{len(self.submitted)}", "symbol": symbol, "qty": qty, "status": "filled"}
+
+    async def cancel_order(self, order_id, *a, **k):
+        self.cancelled.append(order_id)
+        return True
 
 
 @pytest.fixture
@@ -199,3 +204,57 @@ def test_corruption_after_engine_exists_is_rebuilt_and_reported(tmp_path):
         db._engine = None
         db._tables_ensured = False
         settings.DATABASE_URL = original
+
+
+@pytest.mark.asyncio
+async def test_restart_readopts_stop_for_held_position(fresh_db, clean_state, monkeypatch):
+    """A restart loses the in-memory stop registry; a resting stop_limit sell
+    for a still-held symbol must be re-adopted so a later exit cancels it."""
+    monkeypatch.setattr(settings, "PROTECTIVE_STOPS_ENABLED", True)
+    bot._state.protective_stops = {}
+    ex = FakeExchange(
+        positions=[{"symbol": "BTCUSD", "qty": "0.1", "avg_entry_price": 100.0}],
+        orders=[{"id": "stop-held", "symbol": "BTC/USD", "type": "stop_limit",
+                 "side": "sell", "status": "new", "qty": "0.1"}],
+    )
+
+    await bot.reconcile_open_snapshots(ex)
+
+    assert bot._state.protective_stops.get("BTCUSD") == "stop-held"
+    assert ex.cancelled == []
+
+
+@pytest.mark.asyncio
+async def test_restart_cancels_dangling_stop_without_position(fresh_db, clean_state, monkeypatch):
+    """A stop_limit sell whose position was closed while the bot was down is
+    dangling -- cancel it rather than leaving a resting sell forever."""
+    monkeypatch.setattr(settings, "PROTECTIVE_STOPS_ENABLED", True)
+    bot._state.protective_stops = {}
+    ex = FakeExchange(
+        positions=[],
+        orders=[{"id": "stop-orphan", "symbol": "ETH/USD", "type": "stop_limit",
+                 "side": "sell", "status": "new", "qty": "1"}],
+    )
+
+    await bot.reconcile_open_snapshots(ex)
+
+    assert ex.cancelled == ["stop-orphan"]
+    assert "ETHUSD" not in bot._state.protective_stops
+
+
+@pytest.mark.asyncio
+async def test_restart_ignores_stops_when_feature_disabled(fresh_db, clean_state, monkeypatch):
+    """With the flag OFF the bot never armed stops, so it must not touch
+    (or cancel) resting stop_limit orders it did not create."""
+    monkeypatch.setattr(settings, "PROTECTIVE_STOPS_ENABLED", False)
+    bot._state.protective_stops = {}
+    ex = FakeExchange(
+        positions=[{"symbol": "BTCUSD", "qty": "0.1"}],
+        orders=[{"id": "stop-held", "symbol": "BTC/USD", "type": "stop_limit",
+                 "side": "sell", "status": "new", "qty": "0.1"}],
+    )
+
+    await bot.reconcile_open_snapshots(ex)
+
+    assert ex.cancelled == []
+    assert bot._state.protective_stops == {}

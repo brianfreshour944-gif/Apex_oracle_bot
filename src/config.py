@@ -217,6 +217,25 @@ class TradingBotSettings(BaseSettings):
         description="ATR multiple used for position sizing",
         gt=0
     )
+    PROTECTIVE_STOPS_ENABLED: bool = Field(
+        default=False,
+        description=(
+            "Arm an exchange-side protective stop_limit sell after each new "
+            "entry, so a position is capped even between the bot's 60s exit "
+            "scans. Default OFF: enabling it places resting live orders and "
+            "changes live behavior."
+        )
+    )
+    PROTECTIVE_STOP_LIMIT_OFFSET_PCT: float = Field(
+        default=0.01,
+        description=(
+            "How far BELOW the protective stop price the resting limit sits "
+            "(1%). Wider = more likely to fill in a violent gap, at the cost "
+            "of a worse worst-case fill."
+        ),
+        gt=0,
+        le=0.2
+    )
     MAX_HOLD_HOURS: float = Field(
         default=8.0,
         description="Time limit to hold open positions in hours",
@@ -802,6 +821,11 @@ class TradingBotSettings(BaseSettings):
             raise ValueError("PROFIT_TARGET_PCT must be positive")
         if self.STOP_LOSS_PCT <= 0:
             raise ValueError("STOP_LOSS_PCT must be positive")
+        if self.PROTECTIVE_STOP_LIMIT_OFFSET_PCT >= self.STOP_LOSS_PCT:
+            raise ValueError(
+                "PROTECTIVE_STOP_LIMIT_OFFSET_PCT must be smaller than "
+                "STOP_LOSS_PCT, or the resting limit would be at/below zero"
+            )
         if self.STOP_LOSS_PCT >= abs(self.MAX_DRAWDOWN_STOP):
             raise ValueError("STOP_LOSS_PCT should be smaller than MAX_DRAWDOWN_STOP")
         if self.MAX_HOLD_HOURS <= 0:

@@ -48,8 +48,10 @@ class TestFullTradingLoop:
         one test must not veto the next test's entry via ENTRY_RACE_GUARD."""
         import src.bot as bot_mod
         bot_mod._state.last_fill_times = {}
+        bot_mod._state.protective_stops = {}
         yield
         bot_mod._state.last_fill_times = {}
+        bot_mod._state.protective_stops = {}
 
     async def _run_buy_with_patched_committee(self, mock_exchange, mock_strategy,
                                               mock_risk_manager, action="buy",
@@ -550,6 +552,176 @@ class TestFullTradingLoop:
 
         mock_exchange.create_order.assert_called_once()
         assert mock_exchange.create_order.call_args.kwargs["side"] == "sell"
+
+
+class TestProtectiveStops:
+    """Exchange-side protective stop_limit orders.
+
+    Alpaca crypto has no plain `stop`, no trailing stop and no bracket/OCO
+    (simple order class only), so the bot arms a standalone stop_limit sell
+    at -STOP_LOSS_PCT from the real fill. Gated behind the default-OFF
+    PROTECTIVE_STOPS_ENABLED flag.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _reset_protective_stops(self):
+        import src.bot as bot_mod
+        bot_mod._state.last_fill_times = {}
+        bot_mod._state.protective_stops = {}
+        # Earlier trailing-stop tests leave a BTCUSD entry cooldown behind;
+        # without clearing it the entry path returns before placing anything.
+        bot_mod._state.cooldowns = {}
+        bot_mod._state.position_adds = {}
+        yield
+        bot_mod._state.last_fill_times = {}
+        bot_mod._state.protective_stops = {}
+        bot_mod._state.cooldowns = {}
+        bot_mod._state.position_adds = {}
+
+    @pytest.fixture
+    def ex(self):
+        from src.exchange import AlpacaExchange
+        ex = AsyncMock(spec=AlpacaExchange)
+        ex.get_positions = AsyncMock(return_value=[])
+        ex.create_order = AsyncMock(return_value={
+            "id": "entry_1", "filled_avg_price": 50000.0, "filled_qty": 0.1,
+            "commission": 5.0, "status": "filled",
+        })
+        ex.submit_protective_stop = AsyncMock(return_value={"id": "stop_1", "type": "stop_limit"})
+        ex.cancel_order = AsyncMock(return_value=True)
+        ex.get_account = AsyncMock(return_value={"equity": 10000.0, "cash": 10000.0, "portfolio_value": 10000.0})
+        ex.load = AsyncMock()
+        ex.close = AsyncMock()
+        return ex
+
+    @pytest.fixture
+    def strategy(self):
+        from src.strategies import TradingStrategy
+        s = AsyncMock(spec=TradingStrategy)
+        s.generate_trading_signal = AsyncMock(return_value={
+            "action": "buy", "confidence": 0.75, "regime": "trending",
+            "rsi": 55.0, "atr": 500.0, "features": {"hurst": 0.65, "atr": 500.0},
+        })
+        return s
+
+    @pytest.fixture
+    def rm(self):
+        from src.risk import RiskManager
+        rm = AsyncMock(spec=RiskManager)
+        rm.update_account_status = AsyncMock(return_value={
+            "status": "risk_ok", "equity": 10000.0, "cash": 10000.0,
+            "portfolio_value": 10000.0, "drawdown_pct": -2.0, "daily_pnl": 100.0,
+            "open_positions": 0, "current_exposure": 0.0,
+        })
+        rm.is_killswitch_active = MagicMock(return_value=False)
+        rm.check_killswitch_conditions = AsyncMock(return_value=False)
+        rm.check_trailing_stop = MagicMock(return_value="hold")
+        rm.calculate_position_size = MagicMock(return_value=(0.1, "ok"))
+        rm.check_and_reserve_exposure = AsyncMock(return_value=(1000.0, "ok"))
+        rm.reserve_position_slot = AsyncMock(return_value=(True, "ok"))
+        rm.release_position_slot = AsyncMock()
+        rm.peak_prices = {}
+        rm.record_fill_costs = MagicMock()
+        return rm
+
+    async def _buy(self, ex, strategy, rm):
+        import pandas as pd
+        import polars as pl
+        ex.get_latest_bar = AsyncMock(return_value=pl.DataFrame({
+            "t": [pd.Timestamp.now(tz="UTC")], "open": [50000.0], "high": [50100.0],
+            "low": [49900.0], "close": [50050.0], "volume": [100.0], "vwap": [50025.0],
+            "trade_count": [100],
+        }))
+        await process_signal_for_symbol(
+            symbol="BTC/USD", current_price=50050.0, risk_manager=rm,
+            strategy=strategy, ex=ex, positions=[], regime_flag=None, banned_symbols=set(),
+        )
+
+    @pytest.mark.asyncio
+    async def test_stop_not_armed_when_flag_disabled(self, ex, strategy, rm):
+        """Default OFF: no resting order, so existing behaviour is unchanged."""
+        await self._buy(ex, strategy, rm)
+        ex.submit_protective_stop.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_stop_armed_at_stop_loss_pct_from_real_fill(self, ex, strategy, rm):
+        with patch.object(settings, "PROTECTIVE_STOPS_ENABLED", True):
+            await self._buy(ex, strategy, rm)
+
+        import src.bot as bot_mod
+        ex.submit_protective_stop.assert_called_once()
+        kwargs = ex.submit_protective_stop.call_args.kwargs
+        assert kwargs["symbol"] == "BTC/USD"
+        # Covers exactly what the entry actually ordered (sizing multipliers
+        # may shrink the requested size).
+        assert kwargs["qty"] == pytest.approx(ex.create_order.call_args.kwargs["qty"])
+        # 4% below the REAL fill (50000), not the signal-time price (50050).
+        assert kwargs["stop_price"] == pytest.approx(50000.0 * (1 - settings.STOP_LOSS_PCT))
+        assert kwargs["limit_price"] < kwargs["stop_price"]
+        assert bot_mod._state.protective_stops["BTCUSD"] == "stop_1"
+
+    @pytest.mark.asyncio
+    async def test_stop_failure_does_not_undo_entry(self, ex, strategy, rm):
+        """A rejected stop must not raise out of the entry path -- the fill
+        already happened and the bot's polled exits still cover the position."""
+        ex.submit_protective_stop = AsyncMock(side_effect=RuntimeError("insufficient qty"))
+        with patch.object(settings, "PROTECTIVE_STOPS_ENABLED", True):
+            await self._buy(ex, strategy, rm)
+        ex.create_order.assert_called_once()  # the buy still went through
+
+    @pytest.mark.asyncio
+    async def test_stop_cancelled_before_committee_close(self, ex, strategy, rm):
+        """A close must cancel the resting stop first, or a dangling sell
+        lingers after the position is flat."""
+        import src.bot as bot_mod
+        bot_mod._state.protective_stops["BTCUSD"] = "stop_1"
+        ex.get_positions = AsyncMock(return_value=[
+            {"symbol": "BTC/USD", "qty": "0.1", "side": "long", "avg_entry_price": 50000.0, "market_value": 5000.0}
+        ])
+        strategy.generate_trading_signal = AsyncMock(return_value={
+            "action": "close", "confidence": 1.0, "regime": "trending", "atr": 500.0,
+        })
+        import pandas as pd
+        import polars as pl
+        ex.get_latest_bar = AsyncMock(return_value=pl.DataFrame({
+            "t": [pd.Timestamp.now(tz="UTC")], "open": [51000.0], "high": [51100.0],
+            "low": [50900.0], "close": [51050.0], "volume": [100.0], "vwap": [51025.0],
+            "trade_count": [100],
+        }))
+
+        await process_signal_for_symbol(
+            symbol="BTC/USD", current_price=51050.0, risk_manager=rm, strategy=strategy,
+            ex=ex, positions=[{"symbol": "BTC/USD", "qty": "0.1", "side": "long", "avg_entry_price": 50000.0}],
+            regime_flag=None, banned_symbols=set(),
+        )
+
+        ex.cancel_order.assert_awaited_once_with("stop_1")
+        assert "BTCUSD" not in bot_mod._state.protective_stops
+
+    @pytest.mark.asyncio
+    async def test_stop_cancelled_before_trailing_close(self, ex, strategy, rm):
+        import src.bot as bot_mod
+        bot_mod._state.protective_stops["BTCUSD"] = "stop_2"
+        ex.get_positions = AsyncMock(return_value=[
+            {"symbol": "BTC/USD", "qty": "0.1", "side": "long", "avg_entry_price": 50000.0, "market_value": 5400.0}
+        ])
+        rm.check_trailing_stop = MagicMock(return_value="close")
+        import pandas as pd
+        import polars as pl
+        ex.get_latest_bar = AsyncMock(return_value=pl.DataFrame({
+            "t": [pd.Timestamp.now(tz="UTC")], "open": [54000.0], "high": [54100.0],
+            "low": [53900.0], "close": [54050.0], "volume": [100.0], "vwap": [54025.0],
+            "trade_count": [100],
+        }))
+
+        await process_signal_for_symbol(
+            symbol="BTC/USD", current_price=54050.0, risk_manager=rm, strategy=strategy,
+            ex=ex, positions=[{"symbol": "BTC/USD", "qty": "0.1", "side": "long", "avg_entry_price": 50000.0}],
+            regime_flag=None, banned_symbols=set(),
+        )
+
+        ex.cancel_order.assert_awaited_once_with("stop_2")
+        assert "BTCUSD" not in bot_mod._state.protective_stops
 
 
 class TestCommitteeErrorHandling:

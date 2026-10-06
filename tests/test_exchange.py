@@ -350,3 +350,66 @@ class TestCreateOrderIdempotencyRace:
             "pending claim was left in the cache after a genuine failure -- "
             "a legitimate retry would be wrongly blocked as 'in flight'"
         )
+
+
+class TestProtectiveStopLimit:
+    """Exchange-side protective stops (stop_limit sells) for crypto.
+
+    Alpaca crypto supports only market/limit/stop_limit and the `simple`
+    order class -- no plain `stop`, no trailing stop, no bracket/OCO -- so a
+    standalone stop_limit sell is the only protective order available.
+    """
+
+    @pytest.mark.asyncio
+    async def test_submits_gtc_sell_stop_limit(self, exchange):
+        fake_order = MagicMock()
+        fake_order.id = "stop_1"
+        fake_order.symbol = "BTC/USD"
+        fake_order.qty = "0.5"
+        fake_order.status = "new"
+        exchange.trading_client = MagicMock()
+        exchange.trading_client.submit_order = MagicMock(return_value=fake_order)
+
+        info = await exchange.submit_protective_stop(
+            "BTC/USD", qty=0.5, stop_price=48000.0, limit_price=47520.0
+        )
+
+        request = exchange.trading_client.submit_order.call_args[0][0]
+        assert request.side.value == "sell"
+        assert request.time_in_force.value == "gtc"  # ioc would not rest
+        assert float(request.stop_price) == 48000.0
+        assert float(request.limit_price) == 47520.0
+        assert info["id"] == "stop_1"
+        assert info["type"] == "stop_limit"
+
+    @pytest.mark.asyncio
+    async def test_rejects_nonpositive_inputs(self, exchange):
+        exchange.trading_client = MagicMock()
+        with pytest.raises(ValueError):
+            await exchange.submit_protective_stop("BTC/USD", qty=0.0, stop_price=1.0, limit_price=0.9)
+
+    @pytest.mark.asyncio
+    async def test_cancel_order_calls_sdk(self, exchange):
+        exchange.trading_client = MagicMock()
+        exchange.trading_client.cancel_order_by_id = MagicMock(return_value=None)
+        assert await exchange.cancel_order("stop_1") is True
+        exchange.trading_client.cancel_order_by_id.assert_called_once_with("stop_1")
+
+    @pytest.mark.asyncio
+    async def test_cancel_order_treats_already_gone_as_done(self, exchange):
+        from alpaca.common.exceptions import APIError
+
+        exchange.trading_client = MagicMock()
+        http_err = MagicMock()
+        http_err.response.status_code = 404
+        err = APIError('{"code": 40410000, "message": "order not found"}', http_error=http_err)
+        exchange.trading_client.cancel_order_by_id = MagicMock(side_effect=err)
+        # A 404/422 means the order already filled or was cancelled -- the
+        # caller must not treat it as a failure and retry forever.
+        assert await exchange.cancel_order("stop_gone") is True
+
+    @pytest.mark.asyncio
+    async def test_cancel_order_reports_real_failure(self, exchange):
+        exchange.trading_client = MagicMock()
+        exchange.trading_client.cancel_order_by_id = MagicMock(side_effect=RuntimeError("network down"))
+        assert await exchange.cancel_order("stop_2") is False

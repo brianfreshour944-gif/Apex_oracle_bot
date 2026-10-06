@@ -453,6 +453,11 @@ class BotState:
         # this guards against (ENTRY_RACE_GUARD_SECONDS) resets naturally.
         # See the ENTRY_RACE_GUARD check in process_signal_for_symbol.
         self.last_fill_times: dict[str, float] = {}
+        # Protective stop_limit order ids (resting exchange-side sells) keyed
+        # by slash-less symbol. Armed on new entries when
+        # PROTECTIVE_STOPS_ENABLED; every exit path cancels the entry here
+        # first, or a dangling sell would linger after the position is gone.
+        self.protective_stops: dict[str, str] = {}
 
     def get_regime_flag(self) -> dict[str, Any]:
         """Read the regime flag file, cached and only re-read when the file's mtime changes."""
@@ -635,6 +640,71 @@ _BANNED_SYMBOLS_PATH = _os.path.join(_os.path.dirname(__file__), '..', 'data', '
 def read_regime_flag():
     """Read the regime flag file, cached and only re-read when the file's mtime changes."""
     return _state.get_regime_flag()
+
+
+def _stop_key(symbol: str) -> str:
+    """Protective-stop bookkeeping is keyed by slash-less symbol (BTCUSD)."""
+    return symbol.replace("/", "")
+
+
+async def _arm_protective_stop(ex, symbol: str, qty: float, stop_price: float) -> None:
+    """Place an exchange-side protective stop_limit sell for a fresh long.
+
+    Fully fail-safe: a rejected stop (bad distance, exchange hiccup) must not
+    undo a fill that already happened -- it logs and returns, leaving the
+    position to the bot's normal polled exits.
+
+    No-op unless PROTECTIVE_STOPS_ENABLED, and requires an exchange adapter
+    that implements submit_protective_stop (older fakes in tests may not).
+    """
+    if not getattr(settings, "PROTECTIVE_STOPS_ENABLED", False):
+        return
+    submit = getattr(ex, "submit_protective_stop", None)
+    if submit is None:
+        return
+    key = _stop_key(symbol)
+    # Replace any stale stop for this symbol before arming a new one, so a
+    # scale-in or a re-entry never leaves two resting sells for one position.
+    await _cancel_protective_stop(ex, symbol)
+    try:
+        limit_price = stop_price * (1.0 - float(settings.PROTECTIVE_STOP_LIMIT_OFFSET_PCT))
+        info = await submit(
+            symbol=symbol,
+            qty=qty,
+            stop_price=stop_price,
+            limit_price=limit_price,
+            client_order_id=f"{key}_protstop_{int(time.time())}",
+        )
+        if info and info.get("id"):
+            _state.protective_stops[key] = str(info["id"])
+    except Exception as stop_err:
+        logger.warning(
+            f"[PROTECTIVE_STOP] failed to arm for {symbol} qty={qty} "
+            f"stop={stop_price:.2f} (position still managed by polled exits): {stop_err!r}"
+        )
+
+
+async def _cancel_protective_stop(ex, symbol: str) -> None:
+    """Cancel and forget the resting protective stop for a symbol, if any.
+
+    Called on EVERY exit path before/around the close order. Fail-safe: a
+    failed cancel must not block the exit itself (the position is the real
+    risk); it logs and clears local bookkeeping so we don't retry forever.
+    """
+    key = _stop_key(symbol)
+    order_id = _state.protective_stops.pop(key, None)
+    if not order_id:
+        return
+    cancel = getattr(ex, "cancel_order", None)
+    if cancel is None:
+        return
+    try:
+        await cancel(order_id)
+    except Exception as cancel_err:
+        logger.warning(
+            f"[PROTECTIVE_STOP] failed to cancel {order_id} for {symbol} "
+            f"before exit (manual check advised): {cancel_err!r}"
+        )
 
 
 # ── Crash-recovery state persistence (audit F1-F3) ───────────────────────────
@@ -1007,6 +1077,43 @@ async def reconcile_open_snapshots(exchange: AlpacaExchange) -> None:
     except Exception as e:
         logger.debug(f"[RECONCILE] Could not fetch open orders (non-fatal): {e}")
 
+    # Protective-stop reconciliation. A restart loses _state.protective_stops,
+    # so two things must be fixed up or the bot silently loses its tail-risk
+    # protection (and can leak resting sells):
+    #   1. Re-adopt resting stop_limit sells for still-held symbols (the
+    #      process may have restarted between arming and the position's exit)
+    #      so a later exit can cancel them -- otherwise they linger forever.
+    #   2. Cancel a stop_limit sell that has NO matching position (its
+    #      position was closed while we were down) -- a dangling sell.
+    # Only active when PROTECTIVE_STOPS_ENABLED; fail-safe on any error.
+    if getattr(settings, "PROTECTIVE_STOPS_ENABLED", False) and not positions_fetch_failed:
+        try:
+            open_orders = await exchange.get_orders(status="new", limit=100)
+            for order in open_orders:
+                o_sym = str(order.get("symbol", "?")).replace("/", "")
+                if order.get("type") != "stop_limit" or order.get("side") != "sell":
+                    continue
+                if o_sym in held_symbols:
+                    _state.protective_stops[o_sym] = str(order["id"])
+                    logger.info(
+                        f"[RECONCILE] Re-adopted resting protective stop "
+                        f"{order['id']} for held position {o_sym}"
+                    )
+                else:
+                    logger.warning(
+                        f"[RECONCILE] Dangling protective stop {order['id']} for "
+                        f"{o_sym} with no open position -- cancelling."
+                    )
+                    try:
+                        await exchange.cancel_order(str(order["id"]))
+                    except Exception as cancel_err:
+                        logger.warning(
+                            f"[RECONCILE] Could not cancel dangling stop "
+                            f"{order['id']} for {o_sym}: {cancel_err!r}"
+                        )
+        except Exception as e:
+            logger.debug(f"[RECONCILE] Protective-stop reconciliation skipped (non-fatal): {e}")
+
 
 def _persist_order_record(order_result: dict, symbol: str, side: str, client_order_id: str | None, decision_id: str | None = None) -> None:
     """Fire-and-forget write to the order ledger (CR-3). save_order_record()
@@ -1278,6 +1385,9 @@ async def process_signal_for_symbol(symbol: str, current_price: float, risk_mana
                 if trailing_action == "close":
                     side = "sell" if qty > 0 else "buy"
                     qty_abs = abs(qty)
+                    # Cancel the resting protective stop before closing, or it
+                    # would linger against a position that no longer exists.
+                    await _cancel_protective_stop(ex, symbol)
                     client_order_id = f"{symbol}_{side}_{qty_abs}_{int(time.time())}"
                     order_result = await ex.create_order(
                         symbol=symbol,
@@ -1995,6 +2105,11 @@ async def process_signal_for_symbol(symbol: str, current_price: float, risk_mana
                             return
 
                 # Place order
+                # A sell while holding is an EXIT (committee-overridden), not an
+                # entry -- cancel the protective stop before it closes, so the
+                # resting sell never lingers after the position is flat.
+                if signal["action"] == "sell":
+                    await _cancel_protective_stop(ex, symbol)
                 client_order_id = f"{symbol}_{signal['action']}_{position_size}_{int(time.time())}"
                 try:
                     order_result = await ex.create_order(
@@ -2076,6 +2191,11 @@ async def process_signal_for_symbol(symbol: str, current_price: float, risk_mana
                 # snapshot as a ghost. Instead update the existing snapshot's
                 # entry price (weighted average) and total qty so the exit math
                 # in _record_committee_outcome is correct (audit finding F-A).
+                # Basis/qty for the exchange-side protective stop (armed below).
+                # A scale-in overrides these with the weighted-average entry
+                # and combined qty so the stop covers the whole position.
+                stop_basis = filled_price if filled_price > 0 else current_price
+                stop_qty = float(position_size)
                 try:
                     if is_new_entry:
                         from src.db import save_decision_snapshot
@@ -2125,12 +2245,26 @@ async def process_signal_for_symbol(symbol: str, current_price: float, risk_mana
                                     qty=new_qty,
                                 )
                                 logger.info(f"[SCALE-IN] Snapshot {snap['decision_id']} updated: entry ${prev_entry:.2f} -> ${new_avg:.2f} (weighted by real fill), qty {prev_qty} -> {new_qty}")
+                                stop_basis = new_avg
+                                stop_qty = new_qty
                 except Exception as db_e:
                     logger.warning(f"Decision snapshot persist failed for {symbol} (non-fatal): {db_e}")
-    
+
+                # Arm/replace the exchange-side protective stop so the position
+                # is capped even between the bot's 60s exit scans. Fail-safe and
+                # a no-op unless PROTECTIVE_STOPS_ENABLED.
+                await _arm_protective_stop(
+                    ex, symbol, stop_qty, stop_basis * (1.0 - settings.STOP_LOSS_PCT)
+                )
+
             elif signal["action"] == "close" and current_position:
-    
+
                 # Close existing position
+                # Cancel the resting protective stop FIRST: once the position is
+                # flat a leftover stop_limit sell could open a short (crypto is
+                # long-only, so it would just be rejected -- but it must never
+                # be left resting against a position that no longer exists).
+                await _cancel_protective_stop(ex, symbol)
                 qty = float(current_position["qty"])
                 side = "sell" if qty > 0 else "buy"
                 qty_abs = abs(qty)
@@ -2979,6 +3113,10 @@ async def run_trading_bot() -> None:
         # over the actual configured loop interval instead.
         _state.strategy = TradingStrategy(_state.ex, cache_ttl=settings.LOOP_INTERVAL_SEC * 1.5)
         _state.risk_manager = RiskManager(_state.ex)
+        # Share one protective-stop registry so risk.py's emergency flatten
+        # paths (killswitch / exposure reduction) cancel the same resting
+        # stops bot.py armed.
+        _state.risk_manager.protective_stops = _state.protective_stops
         logger.info("Trading strategy and risk manager initialized")
 
         # Restore crash-recovery state (peak_prices, cooldowns, position_adds,

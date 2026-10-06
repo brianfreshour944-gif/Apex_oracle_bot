@@ -16,7 +16,12 @@ from alpaca.data.timeframe import TimeFrame, TimeFrameUnit
 # Import alpaca-py components
 from alpaca.trading.client import TradingClient
 from alpaca.trading.enums import OrderSide, OrderStatus, TimeInForce
-from alpaca.trading.requests import GetOrdersRequest, LimitOrderRequest, MarketOrderRequest
+from alpaca.trading.requests import (
+    GetOrdersRequest,
+    LimitOrderRequest,
+    MarketOrderRequest,
+    StopLimitOrderRequest,
+)
 from tenacity import RetryCallState, retry, retry_if_exception, stop_after_attempt, wait_exponential
 
 from src.circuit_breaker import CircuitBreaker
@@ -166,6 +171,8 @@ class BaseExchange(Protocol):
     async def get_bars(self, symbol: str, timeframe: str = "1D", limit: int = 100, end: datetime.datetime | None = None) -> pl.DataFrame: ...
     async def get_positions(self, bypass_circuit_breaker: bool = False) -> list[dict[str, Any]]: ...
     async def create_order(self, symbol: str, qty: float, side: str, type: str = "market", time_in_force: str = "ioc", client_order_id: str | None = None, bypass_circuit_breaker: bool = False) -> dict[str, Any]: ...
+    async def submit_protective_stop(self, symbol: str, qty: float, stop_price: float, limit_price: float, client_order_id: str | None = None, bypass_circuit_breaker: bool = False) -> dict[str, Any]: ...
+    async def cancel_order(self, order_id: str, bypass_circuit_breaker: bool = False) -> bool: ...
     def invalidate_bars_cache(self, symbol: str | None = None, timeframe: str | None = None) -> int: ...
 
 
@@ -861,3 +868,116 @@ class AlpacaExchange:
                 logger.debug(f"Fallback order lookup failed: {e}")
 
         return order_info
+
+    async def submit_protective_stop(
+        self,
+        symbol: str,
+        qty: float,
+        stop_price: float,
+        limit_price: float,
+        client_order_id: str | None = None,
+        bypass_circuit_breaker: bool = False,
+    ) -> dict[str, Any]:
+        """Submit a resting protective stop_limit sell for an open long.
+
+        Crypto constraint (verified against Alpaca's order-type matrix,
+        alpaca-py 0.44.0): crypto supports ``market``, ``limit`` and
+        ``stop_limit`` only -- NOT ``stop``, NOT ``trailing_stop``, and NOT
+        bracket/OCO/OTO (crypto order class is ``simple`` only). So the only
+        exchange-side protective order available is a standalone
+        ``stop_limit`` sell: it triggers when the market trades at/below
+        ``stop_price`` and then rests as a limit at ``limit_price``.
+
+        ``limit_price`` must be BELOW ``stop_price`` so the resting limit is
+        marketable after the trigger; if it is not reached in a violent gap
+        the order can remain unfilled (the position is then still managed by
+        the bot's polled exits), so callers should leave enough offset.
+
+        Uses ``gtc``: ``ioc`` (the market-order default) would make the stop
+        leg immediately non-resting.
+        """
+        if not self.trading_client:
+            await self.load()
+        if qty <= 0 or stop_price <= 0 or limit_price <= 0:
+            raise ValueError(
+                f"submit_protective_stop needs positive qty/stop/limit, got "
+                f"qty={qty!r} stop_price={stop_price!r} limit_price={limit_price!r}"
+            )
+
+        order_kwargs: dict[str, Any] = {
+            "symbol": symbol,
+            "qty": qty,
+            "side": OrderSide.SELL,
+            "time_in_force": TimeInForce.GTC,
+            "stop_price": stop_price,
+            "limit_price": limit_price,
+        }
+        if client_order_id is not None:
+            order_kwargs["client_order_id"] = client_order_id
+        request = StopLimitOrderRequest(**order_kwargs)
+
+        try:
+            if bypass_circuit_breaker:
+                order = await asyncio.to_thread(self.trading_client.submit_order, request)
+            else:
+                order = await self.circuit_breaker.call(
+                    asyncio.to_thread, self.trading_client.submit_order, request
+                )
+        except Exception as submit_err:
+            # Log the real rejection reason (bad stop distance, insufficient
+            # qty, invalid symbol, etc.) instead of letting it surface as a
+            # generic circuit-open/retry error at the caller.
+            status = getattr(submit_err, "status_code", None) if isinstance(submit_err, APIError) else None
+            logger.error(
+                f"submit_protective_stop REJECTED for {symbol} qty={qty} "
+                f"stop={stop_price} limit={limit_price} (status={status}): {submit_err!r}"
+            )
+            raise
+
+        order_info = {
+            "id": str(order.id),
+            "symbol": str(order.symbol),
+            "qty": float(order.qty) if order.qty else 0.0,
+            "status": str(order.status.value) if hasattr(order.status, "value") else str(order.status),
+            "type": "stop_limit",
+            "side": "sell",
+            "stop_price": stop_price,
+            "limit_price": limit_price,
+            "client_order_id": client_order_id,
+        }
+        logger.info(
+            f"[PROTECTIVE_STOP] armed {symbol} qty={qty} stop={stop_price} "
+            f"limit={limit_price} (id={order_info['id']})"
+        )
+        return order_info
+
+    async def cancel_order(self, order_id: str, bypass_circuit_breaker: bool = False) -> bool:
+        """Cancel a resting order by id. Returns True on success.
+
+        Fail-safe by design: a cancel that fails because the order already
+        filled/cancelled is not an error (Alpaca returns 404/422 for those),
+        and is reported as True so callers don't retry a no-op forever.
+        """
+        if not self.trading_client:
+            await self.load()
+        if not order_id:
+            return False
+        try:
+            if bypass_circuit_breaker:
+                await asyncio.to_thread(self.trading_client.cancel_order_by_id, order_id)
+            else:
+                await self.circuit_breaker.call(
+                    asyncio.to_thread, self.trading_client.cancel_order_by_id, order_id
+                )
+            logger.info(f"[PROTECTIVE_STOP] cancelled order {order_id}")
+            return True
+        except Exception as cancel_err:
+            status = getattr(cancel_err, "status_code", None) if isinstance(cancel_err, APIError) else None
+            if status in (404, 422):
+                logger.info(
+                    f"[PROTECTIVE_STOP] order {order_id} already gone "
+                    f"(status={status}); treating cancel as done"
+                )
+                return True
+            logger.warning(f"[PROTECTIVE_STOP] cancel failed for {order_id}: {cancel_err!r}")
+            return False
