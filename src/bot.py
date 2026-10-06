@@ -2769,6 +2769,56 @@ async def run_periodic_db_maintenance() -> None:
 
         await asyncio.sleep(7 * 24 * 3600)
 
+def _bootstrap_adaptive_learner_from_history() -> int:
+    """Rebuild the adaptive meta-learner from the DB's closed-trade history.
+
+    Without this, per-regime sample counts grow only one per closed trade
+    AFTER process start, so on an account that closes a handful of trades a
+    day the 30-sample live gate takes weeks to reach and every adaptive
+    decision source stays in shadow indefinitely (observed live 2026-10-05:
+    'Insufficient regime samples: 0 < 30 / 1 < 30' on every cycle).
+
+    Snapshots are replayed oldest-first through the learner's normal update()
+    path via AdaptiveMetaLearner.rebuild_from_history(), which resets to cold
+    start first -- so restarts can never double-count: sample counts always
+    equal the number of closed snapshots actually in the DB.
+
+    Fail-safe: returns 0 without touching learner state if the DB yields no
+    closed snapshots (including a DB outage) -- an empty history must NOT
+    reset an already-learned state file.
+    """
+    from src.committee.committee import get_meta_learner
+    from src.db import get_closed_decision_snapshots
+
+    learner = get_meta_learner()
+    if learner is None:
+        return 0
+    snaps = get_closed_decision_snapshots(limit=10000)
+    if not snaps:
+        return 0
+    # get_closed_decision_snapshots returns most-recent-first; the learner
+    # must see trades in the order they actually happened.
+    histories = []
+    for snap in reversed(snaps):
+        pnl = float(snap.get("realized_pnl") or 0.0)
+        return_pct = float(snap.get("return_pct") or 0.0)
+        if return_pct == 0.0 and pnl != 0.0:
+            # Legacy rows closed before return_pct was recorded: reconstruct
+            # it the same way the live exit path does (net pnl / notional,
+            # bot._record_committee_outcome).
+            notional = float(snap.get("entry_price") or 0.0) * float(snap.get("qty") or 0.0)
+            if notional > 0:
+                return_pct = pnl / notional * 100.0
+        histories.append({
+            "regime": snap.get("regime", "default"),
+            "final_action": snap.get("final_action", "hold"),
+            "brain_votes": snap.get("brain_votes", {}) or {},
+            "net_pnl": pnl,
+            "return_pct": return_pct,
+        })
+    return learner.rebuild_from_history(histories)
+
+
 async def run_trading_bot() -> None:
     """Main trading bot loop."""
 
@@ -2854,6 +2904,23 @@ async def run_trading_bot() -> None:
                 )
             except Exception as alert_e:
                 logger.error(f"Failed to send database-down alert: {alert_e}")
+
+        # Bootstrap the adaptive meta-learner from closed-trade history so
+        # its per-regime sample gates count lifetime closed trades, not just
+        # trades closed since this process started. Must run BEFORE the first
+        # trading decision (the same learner singleton backs the committee's
+        # decision-source gates). Fail-safe: a DB outage yields no snapshots
+        # and leaves the loaded learner state untouched -- see
+        # _bootstrap_adaptive_learner_from_history.
+        try:
+            _bootstrapped = await asyncio.to_thread(_bootstrap_adaptive_learner_from_history)
+            if _bootstrapped:
+                logger.info(
+                    f"Adaptive learner bootstrapped from {_bootstrapped} closed "
+                    f"decision snapshot(s)"
+                )
+        except Exception as boot_err:
+            logger.warning(f"Adaptive learner bootstrap failed (non-fatal): {boot_err}")
 
         logger.info(settings.log_config())
 

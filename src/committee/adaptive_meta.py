@@ -142,6 +142,10 @@ class AdaptiveMetaLearner:
         self.regime_returns: dict[str, list[float]] = {}
         # Validation status per regime
         self.regime_validated: dict[str, bool] = {}
+        # Set while rebuild_from_history() replays historical trades so
+        # update() skips its per-call disk save and drift warning (the replay
+        # saves the state once at the end instead). See rebuild_from_history().
+        self._replay_in_progress: bool = False
 
         if self.state_path:
             self.load()
@@ -293,7 +297,8 @@ class AdaptiveMetaLearner:
             self.regime_sample_count[regime] = self.regime_sample_count.get(regime, 0) + 1
             self.last_update = datetime.now(UTC).isoformat()
             report.new_weights = old
-            self._save_safely()
+            if not self._replay_in_progress:
+                self._save_safely()
             return report
 
         # Record return for validation gate (even if we don't update weights)
@@ -328,14 +333,17 @@ class AdaptiveMetaLearner:
         # Compute drift vs equal-weight baseline
         report.drift_vs_equal, report.drift_l2_norm = self._compute_drift_vs_equal(new)
         
-        # Log significant drift
-        if report.drift_l2_norm > 0.15:
+        # Log significant drift (suppressed during history replay: weights
+        # legitimately drift as old trades are re-learned in order, and one
+        # summary log in rebuild_from_history covers the whole replay)
+        if report.drift_l2_norm > 0.15 and not self._replay_in_progress:
             logger.warning(f"Regime '{regime}' weight drift L2={report.drift_l2_norm:.3f} vs equal: {report.drift_vs_equal}")
 
         self.sample_count += 1
         self.regime_sample_count[regime] = self.regime_sample_count.get(regime, 0) + 1
         self.last_update = datetime.now(UTC).isoformat()
-        self._save_safely()
+        if not self._replay_in_progress:
+            self._save_safely()
         return report
 
     def sample_count_for_regime(self, regime: str) -> int:
@@ -343,6 +351,57 @@ class AdaptiveMetaLearner:
         to gate whether a given regime's learned weights are trustworthy --
         see the constructor comment on `regime_sample_count`."""
         return self.regime_sample_count.get(regime, 0)
+
+    def rebuild_from_history(self, histories: list[dict[str, Any]]) -> int:
+        """Rebuild learner state by replaying closed trades oldest-first.
+
+        Each item in ``histories``: {"regime": str, "final_action": str,
+        "brain_votes": dict, "net_pnl": float, "return_pct": float}.
+
+        Resets to cold start first, so repeated bootstraps are idempotent:
+        per-regime sample counts always equal the number of histories actually
+        replayed, never double-counted across restarts. Every history goes
+        through the normal update() path, so weights, per-brain performance
+        stats, and the validation gate's return history are re-derived exactly
+        as if each trade had closed in order. Per-update disk saves and drift
+        warnings are suppressed during the replay (update() otherwise saves on
+        every call); the state is saved once at the end. Returns the number of
+        histories replayed.
+        """
+        self._reset_to_cold_start()
+        replayed = 0
+        self._replay_in_progress = True
+        try:
+            for h in histories:
+                try:
+                    self.update(
+                        {
+                            "regime": str(h.get("regime", "default")),
+                            "final_action": str(h.get("final_action", "hold")),
+                            "brain_votes": h.get("brain_votes", {}) or {},
+                        },
+                        {
+                            "net_pnl": float(h.get("net_pnl", 0.0) or 0.0),
+                            "return_pct": float(h.get("return_pct", 0.0) or 0.0),
+                        },
+                    )
+                    replayed += 1
+                except Exception as e:
+                    logger.warning(
+                        f"Adaptive bootstrap replay skipped one history (non-fatal): {e}"
+                    )
+        finally:
+            self._replay_in_progress = False
+            self._save_safely()
+        if replayed:
+            per_regime = ", ".join(
+                f"{regime}={count}" for regime, count in sorted(self.regime_sample_count.items())
+            )
+            logger.info(
+                f"Adaptive learner rebuilt from history: {replayed} closed trade(s) "
+                f"replayed ({per_regime})"
+            )
+        return replayed
 
     # ---- validation gate --------------------------------------------------
 

@@ -836,6 +836,15 @@ def get_closed_decision_snapshots(limit: int = 2000, symbol: str | None = None) 
                         "entry_time": row.created_at.isoformat() if row.created_at else None,
                         "exit_time": row.closed_at.isoformat() if row.closed_at else None,
                         "realized_pnl": row.realized_pnl,
+                        # Read-only additions for the adaptive-learner startup
+                        # bootstrap (bot._bootstrap_adaptive_learner_from_history):
+                        # return_pct feeds the validation gate's return history
+                        # directly; entry_price/qty let it reconstruct the
+                        # live-path return for legacy rows closed before
+                        # return_pct was recorded.
+                        "return_pct": row.return_pct,
+                        "entry_price": row.entry_price,
+                        "qty": row.qty,
                     })
                 except Exception as e:
                     logger.warning(f"Skipping malformed decision snapshot {row.decision_id}: {e}")
