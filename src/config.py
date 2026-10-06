@@ -407,7 +407,7 @@ class TradingBotSettings(BaseSettings):
         lt=1
     )
     HIGH_VOLATILITY_PCT: float = Field(
-        default=12.0,
+        default=5.0,
         description="ATR% above this triggers stand-aside mode",
         gt=0
     )

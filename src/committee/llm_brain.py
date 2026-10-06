@@ -65,9 +65,40 @@ async def _call_gemini_llm(prompt: str, api_key: str, model: str = "gemini-1.5-f
     return None
 
 
+async def _call_openrouter_llm(prompt: str, api_key: str, model: str) -> dict[str, Any] | None:
+    """Call OpenRouter LLM API."""
+    if not api_key:
+        return None
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.post(
+                "https://openrouter.ai/api/v1/chat/completions",
+                headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+                json={
+                    "model": model,
+                    "messages": [
+                        {"role": "system", "content": "You are a crypto trading risk analyst. Output only valid JSON."},
+                        {"role": "user", "content": prompt}
+                    ],
+                    "temperature": 0.1,
+                    "max_tokens": 500,
+                    "response_format": {"type": "json_object"}
+                },
+            )
+            if resp.status_code == 200:
+                return resp.json()["choices"][0]["message"]["content"]
+    except Exception as e:
+        logger.warning(f"OpenRouter LLM call failed: {e}")
+    return None
+
 async def _call_llm(prompt: str) -> dict[str, Any] | None:
     """Try LLM providers in order of preference."""
-    # Try Groq first (fast, free tier)
+    # Try OpenRouter first (when both key and model are set)
+    if settings.OPENROUTER_API_KEY and settings.OPENROUTER_LLM_MODEL:
+        result = await _call_openrouter_llm(prompt, settings.OPENROUTER_API_KEY, settings.OPENROUTER_LLM_MODEL)
+        if result:
+            return result
+    # Try Groq (fast, free tier)
     if settings.GROQ_API_KEY:
         result = await _call_groq_llm(prompt, settings.GROQ_API_KEY)
         if result:
@@ -97,7 +128,9 @@ async def llm_brain(symbol: str, price: float, signal: dict) -> BrainVote:
     
     # Try to get LLM analysis
     llm_result = None
-    if settings.GROQ_API_KEY or settings.GEMINI_API_KEY:
+    if settings.GROQ_API_KEY or settings.GEMINI_API_KEY or (
+        settings.OPENROUTER_API_KEY and settings.OPENROUTER_LLM_MODEL
+    ):
         prompt = f"""Analyze this crypto trading signal for {symbol}:
 Current price: ${price:,.2f}
 Technical action: {raw_action}
