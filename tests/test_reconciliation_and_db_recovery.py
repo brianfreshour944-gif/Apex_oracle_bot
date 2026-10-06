@@ -159,3 +159,43 @@ def test_corrupt_db_file_is_rebuilt_not_crash_looped(tmp_path):
         db._engine = None
         db._tables_ensured = False
         settings.DATABASE_URL = original
+
+
+def test_corruption_after_engine_exists_is_rebuilt_and_reported(tmp_path):
+    """The raw pre-probe only runs on the first init_db() call (while _engine
+    is None). If the file is corrupted *after* the engine exists -- e.g. the
+    WAL sidecars were poisoned mid-run -- a fresh pooled connection fails with
+    "file is not a database" and, without a fallback, init_db() retried 5x and
+    gave up. It must instead move the file aside, rebuild, and return True so
+    bot.py alerts that live data was moved aside (the tenacity @retry would
+    otherwise swallow the signal and return False)."""
+    original = settings.DATABASE_URL
+    path = tmp_path / "bot.db"
+    if db._engine is not None:
+        db._engine.dispose()
+    db._engine = None
+    db._tables_ensured = False
+    settings.DATABASE_URL = "sqlite:///" + str(path).replace("\\", "/")
+    try:
+        assert db.init_db() is False  # healthy, engine now cached
+        # Corrupt in place and drain the pool so the next connect() opens a
+        # brand-new connection to the corrupt file (pre-probe is skipped
+        # because _engine is not None).
+        db.get_engine().dispose()
+        path.write_bytes(b"NOT a SQLite format 3 file" + b"\x00" * 8192)
+        for suffix in ("-wal", "-shm"):
+            try:
+                os.remove(str(path) + suffix)
+            except FileNotFoundError:
+                pass
+        assert db.init_db() is True
+        from sqlalchemy import text
+        with db.get_engine().connect() as conn:
+            assert conn.execute(text("SELECT 1")).scalar() == 1
+        assert os.listdir(tmp_path / "corrupt_backups")
+    finally:
+        if db._engine is not None:
+            db._engine.dispose()
+        db._engine = None
+        db._tables_ensured = False
+        settings.DATABASE_URL = original

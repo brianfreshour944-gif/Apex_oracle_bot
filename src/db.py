@@ -304,6 +304,10 @@ _engine = None
 # measured ~7ms of pure event-loop blocking time per decision-snapshot write
 # even when nothing had changed since the previous call.
 _tables_ensured = False
+# Set by _recovery_from_corruption(); init_db() folds it into its return value
+# so a rebuild that happens inside a tenacity retry is still reported to the
+# caller (bot.py alerts on a True return).
+_recovered_from_corruption = False
 # In-memory cache for get_open_snapshot() results, keyed by symbol.
 # Invalidated when close_decision_snapshot() is called for that symbol.
 _open_snapshot_cache: dict[str, dict[str, Any] | None] = {}
@@ -346,6 +350,16 @@ def _recovery_from_corruption() -> None:
     db_path = db_url[len("sqlite:///"):]
     if not db_path or db_path == ":memory:":
         return
+    # Record that a rebuild happened (only after the sqlite/memory guards, so
+    # this is never set for a non-recoverable URL). init_db() is wrapped in
+    # tenacity's @retry, so a recovery that happens inside a failed attempt is
+    # otherwise invisible to the caller: the function raises, tenacity
+    # retries, the retry succeeds against the freshly rebuilt file, and it
+    # returns False. bot.py relies on a True return to alert that live trade
+    # data was moved aside, so a corrupted database was previously rebuilt
+    # SILENTLY.
+    global _recovered_from_corruption
+    _recovered_from_corruption = True
 
     # CR-7/CR-10: dispose the cached engine BEFORE attempting the rename, not
     # after. On Windows, the connection pool keeps its OS-level file handle
@@ -473,7 +487,7 @@ def init_db() -> bool:
     totally-fails case already alerts at the bot.py call site, but this
     silent-rebuild-and-continue case did not). False otherwise.
     """
-    global _tables_ensured, _engine
+    global _tables_ensured, _engine, _recovered_from_corruption
     corruption_detected = False
     db_url = settings.DATABASE_URL
     is_sqlite = db_url.startswith("sqlite:///")
@@ -483,7 +497,7 @@ def init_db() -> bool:
     # (first call only -- get_engine() below would otherwise create and pool
     # a connection). Fully corrupt files (bad header / not a SQLite file at
     # all -- the realistic shape of hard-kill corruption) fail even a plain
-    # `SELECT 1`, before ever reaching the integrity_check further down, so
+    # schema read, before ever reaching the integrity_check further down, so
     # the graceful rebuild path was only reachable for "soft" corruption
     # (valid header, damaged internal b-tree structure). Tried catching this
     # via the SQLAlchemy connection instead first (dispose the pooled engine,
@@ -493,6 +507,11 @@ def init_db() -> bool:
     # the rename with WinError 32 on every retry. A raw stdlib connection
     # opened and closed outside any pool has no such entanglement. Found via
     # an external crash-recovery audit, root-caused and fixed 2026-09-21/22.
+    #
+    # NOTE: the probe query is `PRAGMA schema_version`, not `SELECT 1`.
+    # `SELECT 1` never reads the schema, so it succeeds on a corrupt-header
+    # file and this whole pre-probe silently no-ops (see _probe_sqlite_file;
+    # reproduced 2026-10-06).
     if is_sqlite and _engine is None:
         raw_path = db_url[len("sqlite:///"):]
         if raw_path and raw_path != ":memory:" and os.path.exists(raw_path):
@@ -538,7 +557,11 @@ def init_db() -> bool:
         _ensure_indexes()
 
         logger.info(f"Database connected: {settings.DATABASE_URL}")
-        return corruption_detected
+        # Consume the flag: report recoveries seen up to this call, then clear
+        # it so a later healthy init_db() returns False again.
+        recovered = corruption_detected or _recovered_from_corruption
+        _recovered_from_corruption = False
+        return recovered
     except SQLAlchemyError as e:
         # F1: a corrupt -wal/-shm sidecar (valid main file) fails HERE with
         # "disk I/O error", not via the raw pre-probe above -- reproduced
@@ -572,6 +595,18 @@ def init_db() -> bool:
                 else:
                     logger.warning(f"Database connection attempt failed: {e}. Retrying...")
                 raise
+        # Fallback for header-level corruption that the raw pre-probe above
+        # could not catch because the engine already existed (e.g. the file
+        # was replaced/corrupted after the first successful connect). Move the
+        # file aside and rebuild instead of retrying 5x and giving up.
+        if is_sqlite and any(sig in str(e).lower() for sig in _SQLITE_CORRUPTION_SIGNATURES):
+            logger.warning(
+                f"SQLite connection failed with a corruption signature: {e}. "
+                f"Moving aside and rebuilding."
+            )
+            _recovery_from_corruption()
+            corruption_detected = True
+            raise
         logger.warning(f"Database connection attempt failed: {e}. Retrying...")
         raise
 
@@ -623,7 +658,9 @@ def _try_clear_wal_sidecars(db_path: str) -> bool:
     try:
         conn = sqlite3.connect(db_path, timeout=1.0)
         try:
-            conn.execute("SELECT 1")
+            # PRAGMA schema_version (not SELECT 1) so a still-corrupt file
+            # isn't reported as recovered -- see _probe_sqlite_file.
+            conn.execute("PRAGMA schema_version")
         finally:
             conn.close()
         return True
@@ -649,12 +686,25 @@ def _probe_sqlite_file(db_path: str) -> str | None:
     whose text doesn't match a known corruption signature is treated as
     "not clearly corruption" (e.g. a locked file, a permissions issue) so a
     transient problem can't trigger a destructive rebuild.
+
+    The probe query is `PRAGMA schema_version`, deliberately NOT
+    `SELECT 1`. `SELECT 1` is answered without ever reading the schema, so
+    on this Python 3.13 / SQLite 3.46 stack a file with a corrupt header
+    (the realistic shape of hard-kill corruption) let `SELECT 1` succeed
+    while every schema read failed with "file is not a database". The
+    corruption then only surfaced later from SQLAlchemy's WAL-mode "connect"
+    pool event (which runs `PRAGMA journal_mode=WAL`), past the point this
+    pre-probe could move the file aside -- so init_db() retried 5x and gave
+    up permanently instead of rebuilding. `PRAGMA schema_version` forces
+    SQLite to read the header + schema on the raw stdlib connection, so it
+    detects the same corruption this probe exists to catch. Reproduced
+    2026-10-06 (test_corrupt_db_file_is_rebuilt_not_crash_looped).
     """
     import sqlite3
     try:
         conn = sqlite3.connect(db_path, timeout=1.0)
         try:
-            conn.execute("SELECT 1")
+            conn.execute("PRAGMA schema_version")
         finally:
             conn.close()
         return None

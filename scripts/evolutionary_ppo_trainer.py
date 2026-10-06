@@ -417,11 +417,15 @@ async def main() -> int:
         logger.info(f"⚔️ PPO Challenger Reward: {challenger_reward:.2f}")
         
         # 4. Champion vs Challenger
-        # The live learner (rl_meta.RLMetaLearner._build_obs) and the training
-        # env (rl_env.MetaDecisionEnv) build different observation vectors
-        # (26 vs 17 dims as of 2026-09-29). A model trained on the wrong one
-        # raises on every live call, and because the champion then fails to
-        # load here too, every later challenger would "win" by default.
+        # Both MetaDecisionEnv and RLMetaLearner._build_obs now delegate to
+        # regime_utils.build_rl_observation, so their observation shapes are
+        # identical by construction. This guard stays as a cheap tripwire in
+        # case they ever drift apart again: a challenger trained on a
+        # different vector than the live learner would raise on every live
+        # call, and because the champion would then also fail to load here,
+        # every later challenger would "win" by default. (They previously
+        # drifted to 26 live vs 17 training dims, which permanently blocked
+        # every promotion -- fixed 2026-10-06.)
         from src.committee.rl_meta import RLMetaLearner
         live_obs_shape = RLMetaLearner()._build_obs([], "default", {}).shape
         if challenger.observation_space.shape != live_obs_shape:

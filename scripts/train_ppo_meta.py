@@ -1,7 +1,9 @@
 """Train the PPO RL agent for Meta-Decisions.
 
 Pulls historical DecisionSnapshots from the database, feeds them into MetaDecisionEnv,
-and trains a PPO agent to predict optimal committee weights and position sizing.
+trains a PPO agent to predict optimal committee weights and position sizing, and
+promotes the result into the persistent model store (src.model_store) -- the
+location rl_meta.py loads the live agent from.
 """
 
 import json
@@ -14,6 +16,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 from stable_baselines3 import PPO
 
+from src import model_store
 from src.committee.rl_env import MetaDecisionEnv
 from src.db import Base, DecisionSnapshot, get_engine
 from src.logging_config import get_logger
@@ -74,14 +77,17 @@ def main():
     logger.info(f"Training PPO agent for {total_timesteps} timesteps...")
     
     model.learn(total_timesteps=total_timesteps)
-    
-    # Save
-    models_dir = os.path.join(os.path.dirname(__file__), '..', 'models')
-    os.makedirs(models_dir, exist_ok=True)
-    save_path = os.path.join(models_dir, 'ppo_meta_weights.zip')
-    
-    model.save(save_path)
-    logger.info(f"✅ Successfully trained and saved PPO Meta-Learner to {save_path}")
+
+    # Promote into the persistent model store -- the SAME location
+    # rl_meta.get_ppo_model() reads via model_store.bundle_path("ppo", ...).
+    # Previously this wrote models/ppo_meta_weights.zip, a path the live
+    # learner never consults once a persistent store exists, so a manual
+    # bake silently had no effect on the running bot.
+    with model_store.staging("ppo") as staged:
+        staged_path = os.path.join(staged, 'ppo_meta_weights.zip')
+        model.save(staged_path)
+        store = model_store.promote("ppo", {'ppo_meta_weights.zip': staged_path})
+    logger.info(f"✅ Successfully trained and promoted PPO Meta-Learner to {store}")
 
 if __name__ == "__main__":
     main()

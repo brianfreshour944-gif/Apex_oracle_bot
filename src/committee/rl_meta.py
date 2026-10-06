@@ -14,7 +14,8 @@ from src.logging_config import get_logger
 
 from .adaptive_meta import AdaptiveDecision
 from .models import BrainVote
-from .regime_utils import normalize_regime
+from .regime_utils import build_rl_observation, confidence_threshold, position_size_multiplier
+from .regime_utils import normalize_regime as normalize_regime
 
 logger = get_logger("rl_meta")
 
@@ -71,49 +72,12 @@ class RLMetaLearner:
         self.model = get_ppo_model()
         
     def _build_obs(self, brain_outputs: list[BrainVote], regime: str, features: dict[str, Any]) -> np.ndarray:
-        # 1. Regime One-Hot
-        # M1: normalize DT-8 (live classifier / DecisionTransformer) regimes into
-        # the RL-6 one-hot space so the guard below no longer silently zeroes it.
-        regime = normalize_regime(regime)
-        regime_vec = np.zeros(len(REGIMES), dtype=np.float32)
-        if regime in REGIMES:
-            regime_vec[REGIMES.index(regime)] = 1.0
-            
-        # 2. Features
-        rsi = (features.get("rsi", 50.0) - 50) / 50.0  
-        atr = features.get("atr", 0.0) / 100.0 
-        macd = np.clip(features.get("macd", 0.0), -1.0, 1.0)
-        
-        # On-Chain Features
-        fr = np.clip(features.get("funding_rate", 0.0) * 1000, -1.0, 1.0) # Scale funding rate
-        oi = np.clip(features.get("open_interest", 0.0) / 1e9, 0.0, 10.0) # Scale OI
-        lsr = np.clip((features.get("long_short_ratio", 1.0) - 1.0), -1.0, 1.0) # Center LSR at 0
-        imb = np.clip(features.get("bid_ask_imbalance", 0.0), -1.0, 1.0) # L2 Imbalance
-        
-        # Sentiment Features
-        sent_score = np.clip(features.get("sentiment_score", 0.0), -1.0, 1.0)
-        sent_conf = np.clip(features.get("sentiment_conf", 0.0), 0.0, 1.0)
-        
-        event_types = ["earnings", "regulation", "macro", "security", "adoption", "none"]
-        event = features.get("event_type", "none")
-        event_vec = np.zeros(len(event_types), dtype=np.float32)
-        if event in event_types:
-            event_vec[event_types.index(event)] = 1.0
-            
-        feature_vec = np.array([rsi, atr, macd, fr, oi, lsr, imb, sent_score, sent_conf], dtype=np.float32)
-        
-        # 3. Brain Votes
+        # Delegate to the shared 26-dim builder so this stays byte-for-byte
+        # aligned with rl_env's training observations. They used to be built
+        # independently and drifted (26 live vs 17 training), which silently
+        # blocked every weekly PPO promotion -- see regime_utils docstring.
         votes = {v.name: v.action for v in brain_outputs}
-        vote_vec = np.zeros(len(BRAINS), dtype=np.float32)
-        for i, b in enumerate(BRAINS):
-            v = votes.get(b, "hold")
-            if v == "buy":
-                vote_vec[i] = 1.0
-            elif v == "sell":
-                vote_vec[i] = -1.0
-                
-        obs = np.concatenate([regime_vec, feature_vec, event_vec, vote_vec])
-        return np.nan_to_num(obs, 0.0).astype(np.float32)
+        return build_rl_observation(regime, features, votes)
 
     def combine(self, brain_outputs: list[BrainVote], regime: str, features: dict[str, Any]) -> AdaptiveDecision:
         if not self.model:
@@ -151,8 +115,8 @@ class RLMetaLearner:
         exp_w = np.exp(raw_weights - np.max(raw_weights))
         weights_arr = exp_w / exp_w.sum()
         
-        pos_size_mult = ((action[5] + 1.0) / 2.0) + 0.5 
-        conf_thresh = ((action[6] + 1.0) / 2.0) * 0.2 + 0.35
+        pos_size_mult = position_size_multiplier(action[5])
+        conf_thresh = confidence_threshold(action[6])
         
         weights = {BRAINS[i]: float(weights_arr[i]) for i in range(len(BRAINS))}
         
