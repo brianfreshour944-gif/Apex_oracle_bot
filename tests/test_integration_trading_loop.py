@@ -3,9 +3,12 @@
 import asyncio
 import os
 import sys
+import time
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+
+from src.config import settings
 
 # Add src to path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
@@ -18,8 +21,45 @@ from src.risk import RiskManager
 from src.strategies import TradingStrategy
 
 
+def _deterministic_committee_result(action: str = "buy", score: float = 0.62):
+    """CommitteeResult with two directional votes so the entry-agreement
+    floor (MIN_ENTRY_DIRECTIONAL_VOTES=2) is satisfied deterministically,
+    independent of what the real committee brains do in the test env."""
+    from src.committee.models import BrainVote, CommitteeResult
+
+    votes = [
+        BrainVote(name="momentum", action=action, confidence=0.7, weight=0.3,
+                  regime="trending", reason="test"),
+        BrainVote(name="quant", action=action, confidence=0.6, weight=0.3,
+                  regime="trending", reason="test"),
+    ]
+    return CommitteeResult(
+        action=action, score=score, size_multiplier=1.0, entropy=0.0,
+        votes=votes, decision_id="test-decision-id",
+    )
+
+
 class TestFullTradingLoop:
     """Integration tests for the complete trading loop."""
+
+    @pytest.fixture(autouse=True)
+    def _reset_last_fill_times(self):
+        """Isolate the fill-time tracker between tests: a fill recorded in
+        one test must not veto the next test's entry via ENTRY_RACE_GUARD."""
+        import src.bot as bot_mod
+        bot_mod._state.last_fill_times = {}
+        yield
+        bot_mod._state.last_fill_times = {}
+
+    async def _run_buy_with_patched_committee(self, mock_exchange, mock_strategy,
+                                              mock_risk_manager, action="buy",
+                                              score=0.62):
+        """Run the buy flow with a deterministic committee verdict so sizing
+        and the entry gates don't depend on live brain behaviour."""
+        async def _fake_run_committee(symbol, price, signal):
+            return _deterministic_committee_result(action=action, score=score)
+        with patch("src.committee.committee.run_committee", new=_fake_run_committee):
+            await self._run_buy(mock_exchange, mock_strategy, mock_risk_manager)
 
     @pytest.fixture
     def mock_exchange(self):
@@ -227,6 +267,81 @@ class TestFullTradingLoop:
         # left to expire via their own 30s TTL.
         mock_risk_manager.release_position_slot.assert_not_called()
         mock_risk_manager.release_reserved_exposure.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_recent_fill_blocks_immediate_reentry(self, mock_exchange, mock_strategy, mock_risk_manager):
+        """ENTRY_RACE_GUARD: a fill recorded seconds ago (not yet visible in
+        the cycle-start positions snapshot) must veto a fresh BUY. This is
+        the 2026-10-05 double-entry race: two equal-size ETH buys 59s apart."""
+        import src.bot as bot_mod
+
+        bot_mod._state.last_fill_times["BTC/USD"] = time.time() - 5.0
+        try:
+            await self._run_buy_with_patched_committee(
+                mock_exchange, mock_strategy, mock_risk_manager
+            )
+        finally:
+            bot_mod._state.last_fill_times.pop("BTC/USD", None)
+        mock_exchange.create_order.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_old_fill_does_not_block_new_entry(self, mock_exchange, mock_strategy, mock_risk_manager):
+        """A fill older than ENTRY_RACE_GUARD_SECONDS must not block a fresh
+        BUY, and the successful fill must record a new fill time."""
+        import src.bot as bot_mod
+
+        bot_mod._state.last_fill_times["BTC/USD"] = time.time() - (
+            settings.ENTRY_RACE_GUARD_SECONDS + 60.0
+        )
+        fill_recorded: list[float] = []
+        try:
+            await self._run_buy_with_patched_committee(
+                mock_exchange, mock_strategy, mock_risk_manager
+            )
+            # Read inside the try: the finally below clears the tracker.
+            fill_recorded.append(bot_mod._state.last_fill_times.get("BTC/USD", 0.0))
+        finally:
+            bot_mod._state.last_fill_times.pop("BTC/USD", None)
+        mock_exchange.create_order.assert_called_once()
+        assert fill_recorded and fill_recorded[0] > 0.0
+
+    @pytest.mark.asyncio
+    async def test_small_buy_bumped_to_equity_notional_floor(self, mock_exchange, mock_strategy, mock_risk_manager):
+        """MIN_ENTRY_NOTIONAL_EQUITY_PCT: a ~$10 entry on a $100 account is
+        bumped to the equity-based floor (15% of equity = $15) rather than
+        trading a dust-size fill whose fees dominate the round trip."""
+        mock_risk_manager.update_account_status = AsyncMock(return_value={
+            "status": "risk_ok", "equity": 100.0, "cash": 100.0,
+            "portfolio_value": 100.0, "drawdown_pct": 0.0, "daily_pnl": 0.0,
+            "open_positions": 0, "current_exposure": 0.0,
+        })
+        mock_risk_manager.calculate_position_size = MagicMock(return_value=(0.0002, "ok"))
+        await self._run_buy_with_patched_committee(
+            mock_exchange, mock_strategy, mock_risk_manager
+        )
+        mock_exchange.create_order.assert_called_once()
+        qty = mock_exchange.create_order.call_args.kwargs["qty"]
+        notional = qty * 50050.0
+        floor = max(10.0, settings.MIN_ENTRY_NOTIONAL_EQUITY_PCT * 100.0)
+        assert notional >= floor * 0.99
+        assert notional < floor * 2.0
+
+    @pytest.mark.asyncio
+    async def test_tiny_buy_below_half_floor_vetoed(self, mock_exchange, mock_strategy, mock_risk_manager):
+        """An entry less than half the effective notional floor is vetoed
+        (bumping it >2x would be too large a deviation) and must release the
+        exposure reservation it made before the veto."""
+        mock_risk_manager.update_account_status = AsyncMock(return_value={
+            "status": "risk_ok", "equity": 100.0, "cash": 100.0,
+            "portfolio_value": 100.0, "drawdown_pct": 0.0, "daily_pnl": 0.0,
+            "open_positions": 0, "current_exposure": 0.0,
+        })
+        mock_risk_manager.calculate_position_size = MagicMock(return_value=(0.00005, "ok"))
+        await self._run_buy_with_patched_committee(
+            mock_exchange, mock_strategy, mock_risk_manager
+        )
+        mock_exchange.create_order.assert_not_called()
+        mock_risk_manager.release_reserved_exposure.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_close_position_flow(self, mock_exchange, mock_strategy, mock_risk_manager):

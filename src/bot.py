@@ -447,6 +447,13 @@ class BotState:
         self.trade_timestamps: list[float] = []
         self.exchange_failure_count: int = 0
 
+        # Per-symbol wall-clock time of the last successfully-placed order.
+        # In-memory only (deliberately NOT persisted): after a restart the
+        # positions are re-fetched fresh at startup, so the staleness window
+        # this guards against (ENTRY_RACE_GUARD_SECONDS) resets naturally.
+        # See the ENTRY_RACE_GUARD check in process_signal_for_symbol.
+        self.last_fill_times: dict[str, float] = {}
+
     def get_regime_flag(self) -> dict[str, Any]:
         """Read the regime flag file, cached and only re-read when the file's mtime changes."""
         default = {
@@ -1718,6 +1725,15 @@ async def process_signal_for_symbol(symbol: str, current_price: float, risk_mana
                             break
                     if sell_pos is None or float(sell_pos.get("qty", 0)) <= 0:
                         logger.warning(f"[{symbol}] Sell vetoed: no position to sell")
+                        # Re-print the dashboard with the veto so the console
+                        # doesn't leave "EXECUTE SELL" as the last visible
+                        # verdict for this cycle (observed 2026-10-05: the
+                        # SOL veto was correct but looked like a phantom
+                        # announcement because nothing followed it).
+                        dashboard.append("FINAL.......... VETO")
+                        dashboard.append("Reason......... No position to sell (order would be rejected)")
+                        dashboard.append("==============================")
+                        print("\n".join(dashboard), flush=True)
                         return
                     available = float(sell_pos["qty"])
                     # leave tiny dust, use 0.99 cap to avoid rounding rejection
@@ -1728,6 +1744,35 @@ async def process_signal_for_symbol(symbol: str, current_price: float, risk_mana
                     if position_size <= 0:
                         return
     
+                # ENTRY_RACE_GUARD: positions are fetched once per cycle and
+                # shared by every symbol evaluated in that cycle, so a fill
+                # from the previous cycle is invisible here -- the scale-in
+                # gates above then see "no position" and the entry goes out
+                # again at full size (observed live 2026-10-05: two equal-size
+                # ETH buys 59s apart). Veto buys for a short window after any
+                # fill on this symbol. Sells are unaffected: the sell-qty cap
+                # below requires an existing position, and the post-close
+                # buy-cooldown already covers re-entry after a close.
+                if signal["action"] == "buy":
+                    _last_fill = _state.last_fill_times.get(symbol, 0.0)
+                    _since_fill = time.time() - _last_fill
+                    if _last_fill > 0 and _since_fill < settings.ENTRY_RACE_GUARD_SECONDS:
+                        logger.warning(
+                            f"[{symbol}] Buy vetoed: a fill on this symbol was placed "
+                            f"{_since_fill:.0f}s ago (< {settings.ENTRY_RACE_GUARD_SECONDS}s "
+                            f"race guard) and may not yet be reflected in the cycle-start "
+                            f"positions snapshot -- re-entering now risks a duplicate "
+                            f"full-size entry."
+                        )
+                        dashboard.append("FINAL.......... VETO")
+                        dashboard.append(
+                            f"Reason......... Entry race guard "
+                            f"({_since_fill:.0f}s since last fill)"
+                        )
+                        dashboard.append("==============================")
+                        print("\n".join(dashboard), flush=True)
+                        return
+
                 # Atomically check and reserve exposure to prevent a race condition
                 # where concurrently-evaluated symbols could each pass an individual
                 # exposure check before any of their sibling orders have settled.
@@ -1842,6 +1887,20 @@ async def process_signal_for_symbol(symbol: str, current_price: float, risk_mana
                 # a dust position it can never reduce.
                 if signal["action"] == "buy":
                     min_order_usd = getattr(settings, "MIN_ORDER_USD", 10.0)
+                    # Fee-drag floor: crypto fees are proportional, but tiny
+                    # repeated entries still bleed spread+fees on every round
+                    # trip, and the $10 exchange minimum forces dust-size
+                    # fills on small accounts (observed live 2026-10-05: five
+                    # ~$10 ETH fills netted -$0.18, almost entirely fees).
+                    # Lift the effective minimum to
+                    # MIN_ENTRY_NOTIONAL_EQUITY_PCT of equity when equity is
+                    # known; the setting at 0 (or unknown equity) keeps the
+                    # plain exchange minimum. The bump/veto logic below is
+                    # unchanged -- it just targets this larger floor.
+                    _equity = float(risk_status.get("equity") or 0.0)
+                    _equity_floor = settings.MIN_ENTRY_NOTIONAL_EQUITY_PCT * _equity
+                    if _equity_floor > min_order_usd:
+                        min_order_usd = _equity_floor
                     final_notional = current_price * position_size
                     if 0 < final_notional < min_order_usd:
                         if final_notional >= min_order_usd * 0.5:
@@ -1938,6 +1997,10 @@ async def process_signal_for_symbol(symbol: str, current_price: float, risk_mana
                     _persist_order_record, order_result, symbol, signal["action"], client_order_id,
                     decision_id=committee_result.decision_id,
                 )
+                # Record the fill time for the ENTRY_RACE_GUARD check above:
+                # the next cycle's positions snapshot may not yet include this
+                # fill, so its entry path must not treat the symbol as flat.
+                _state.last_fill_times[symbol] = time.time()
 
 # Deliberately NOT releasing either reservation here on success --
                 # reproduced with real asyncio race tests that releasing

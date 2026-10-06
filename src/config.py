@@ -278,6 +278,36 @@ class TradingBotSettings(BaseSettings):
                     "round trip instead of a position actually playing out.",
         ge=0
     )
+    ENTRY_RACE_GUARD_SECONDS: int = Field(
+        default=120,
+        description=(
+            "Seconds after a successful fill on a symbol during which a new BUY "
+            "entry on that symbol is vetoed. Positions are fetched once per "
+            "cycle and shared by every symbol evaluated in it, so a fill from "
+            "the previous cycle is invisible to the scale-in gates on the next "
+            "cycle -- without this guard a fresh signal double-enters at full "
+            "size (observed live 2026-10-05: two equal-size ETH buys 59s "
+            "apart). Two loop cycles is safely longer than the fill-to-next-"
+            "fetch gap and far shorter than the 900s scale-in spacing and the "
+            "300s post-close cooldown. Set to 0 to disable."
+        ),
+        ge=0
+    )
+    MIN_ENTRY_NOTIONAL_EQUITY_PCT: float = Field(
+        default=0.15,
+        description=(
+            "Minimum BUY notional as a fraction of account equity. The $10 "
+            "exchange minimum on a small account forces several dust-size "
+            "fills per deployment, and proportional crypto fees + spread "
+            "dominate the P&L of each round trip (observed 2026-10-05: five "
+            "~$10 ETH fills netted -$0.18, almost all fees). Entries below "
+            "max(MIN_ORDER_USD, this fraction * equity) are bumped up within "
+            "the existing 2x bound, or vetoed if they are less than half the "
+            "effective floor. Set to 0 to disable the equity-based floor."
+        ),
+        ge=0,
+        le=1.0
+    )
     # --- Position Pyramid / Scale-in Gates ---
     MAX_POSITION_ADDS: int = Field(
         default=2,
