@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 import json
 import logging
 import math
@@ -26,7 +27,12 @@ from src.config import (
 )
 from src.db import get_recent_realized_pnl, init_db
 from src.exchange import AlpacaExchange
-from src.logging_config import get_logger
+from src.logging_config import (
+    configure_structlog,
+    get_logger,
+    log_training_job_result,
+    log_training_job_start,
+)
 from src.persistent_state import PersistentBotState
 from src.population_trainer import get_pbt_trainer
 from src.risk import RiskManager
@@ -242,8 +248,11 @@ async def _record_committee_outcome(
                         f.write(record + "\n")
 
                 await asyncio.to_thread(_append_live_experience)
+                logger.info(f"[LIVE_BUFFER] appended 1 record for {symbol} (label={label})")
+            else:
+                logger.debug(f"[LIVE_BUFFER] no tensor_state for {symbol}; trade not written to replay buffer")
         except Exception as e:
-            logger.warning(f"Failed to append live trade to Transformer replay buffer (non-fatal): {e}")
+            logger.warning(f"[LIVE_BUFFER] failed to append live trade (non-fatal): {e}")
 
 # Online Transformer gradient step: one step on the just-closed trade's
         # tensor state. This provides continuous learning between daily full
@@ -647,7 +656,28 @@ def _stop_key(symbol: str) -> str:
     return symbol.replace("/", "")
 
 
-async def _arm_protective_stop(ex, symbol: str, qty: float, stop_price: float) -> None:
+def _protstop_client_order_id(symbol: str, decision_id: str | None) -> str | None:
+    """Deterministic client_order_id for a symbol's protective stop.
+
+    Derived from the decision_id (not a timestamp) so the resting stop's id can
+    be recomputed from the open snapshot after a restart -- reconcile then
+    matches its fill by client_order_id instead of guessing by recency. Returns
+    None when there is no decision_id, letting the caller fall back to a
+    timestamped id.
+
+    The decision_id is hashed rather than embedded: Alpaca caps
+    client_order_id at 48 characters, and a raw decision_id plus the symbol
+    prefix overflows that, which would make the exchange reject the stop.
+    """
+    if not decision_id:
+        return None
+    digest = hashlib.sha1(str(decision_id).encode("utf-8")).hexdigest()[:16]
+    return f"{_stop_key(symbol)}_ps_{digest}"
+
+
+async def _arm_protective_stop(
+    ex, symbol: str, qty: float, stop_price: float, decision_id: str | None = None
+) -> None:
     """Place an exchange-side protective stop_limit sell for a fresh long.
 
     Fully fail-safe: a rejected stop (bad distance, exchange hiccup) must not
@@ -656,6 +686,9 @@ async def _arm_protective_stop(ex, symbol: str, qty: float, stop_price: float) -
 
     No-op unless PROTECTIVE_STOPS_ENABLED, and requires an exchange adapter
     that implements submit_protective_stop (older fakes in tests may not).
+
+    ``decision_id`` links the resting stop back to the entry's decision
+    snapshot so its fill can later be attributed to the right position.
     """
     if not getattr(settings, "PROTECTIVE_STOPS_ENABLED", False):
         return
@@ -666,6 +699,11 @@ async def _arm_protective_stop(ex, symbol: str, qty: float, stop_price: float) -
     # Replace any stale stop for this symbol before arming a new one, so a
     # scale-in or a re-entry never leaves two resting sells for one position.
     await _cancel_protective_stop(ex, symbol)
+    # Derive the client_order_id from the decision_id when we have one: it makes
+    # the resting stop's id recoverable from the snapshot after a restart, so
+    # reconcile can match its fill by client_order_id (see _protstop_client_order_id)
+    # and the same decision re-arming the stop stays idempotent.
+    client_order_id = _protstop_client_order_id(symbol, decision_id) or f"{key}_protstop_{int(time.time())}"
     try:
         limit_price = stop_price * (1.0 - float(settings.PROTECTIVE_STOP_LIMIT_OFFSET_PCT))
         info = await submit(
@@ -673,10 +711,29 @@ async def _arm_protective_stop(ex, symbol: str, qty: float, stop_price: float) -
             qty=qty,
             stop_price=stop_price,
             limit_price=limit_price,
-            client_order_id=f"{key}_protstop_{int(time.time())}",
+            client_order_id=client_order_id,
         )
         if info and info.get("id"):
             _state.protective_stops[key] = str(info["id"])
+            # Persist the resting stop in the order ledger (same schema the
+            # entry/exit orders use) so a crash/restart can recover its real
+            # fill by client_order_id instead of guessing from the symbol's
+            # most-recent order. Fail-safe: a ledger write never blocks arming.
+            # Persist the id the exchange actually RESTED (info's
+            # client_order_id): on the duplicate-recovery path the adapter may
+            # have re-armed under a fresh nonce, so recording our requested id
+            # would put a client_order_id in the ledger that no live order has.
+            # The decision_id is the reconcile key (tier 1) and is unaffected.
+            await asyncio.to_thread(
+                _persist_order_record,
+                info,
+                symbol,
+                "sell",
+                info.get("client_order_id") or client_order_id,
+                decision_id=decision_id,
+                order_type="stop_limit",
+                time_in_force="gtc",
+            )
     except Exception as stop_err:
         logger.warning(
             f"[PROTECTIVE_STOP] failed to arm for {symbol} qty={qty} "
@@ -1006,6 +1063,7 @@ async def reconcile_open_snapshots(exchange: AlpacaExchange) -> None:
                 continue  # genuinely open position -> snapshot is correct
             exit_price = 0.0
             exit_price_source = "estimated_last_bar"
+            action = snap.get("final_action", "buy")
             # CR-6: prefer the actual fill price from the order ledger over
             # the last bar -- the last bar is the CURRENT price at
             # reconciliation time, not the price the position was actually
@@ -1013,9 +1071,29 @@ async def reconcile_open_snapshots(exchange: AlpacaExchange) -> None:
             # training sample. Found via an external crash-recovery audit,
             # confirmed by reproduction (estimated $16 pnl vs true $100 pnl
             # in the audit's own scenario), 2026-09-22.
-            recent_order = await asyncio.to_thread(_find_recent_order_for_symbol, sym_clean)
-            if recent_order is not None and recent_order.get("filled_avg_price", 0.0) > 0:
-                exit_price = float(recent_order["filled_avg_price"])
+            # Use the fill that actually CLOSED the position, not simply the
+            # symbol's most-recent order: a re-entry or a resting protective
+            # stop can leave a newer row, and picking it would attribute the
+            # wrong exit price to this snapshot. Prefer the order recorded for
+            # this snapshot's decision_id, else the latest fill on the closing
+            # side (a long is closed by a sell, a short by a buy).
+            exit_side = "sell" if action == "buy" else "buy"
+            # Reconcile by client_order_id as well as decision_id: the
+            # protective stop's id is derived from the snapshot's decision_id
+            # (_protstop_client_order_id), so even a stop fill whose ledger row
+            # lost its decision_id is still matched to the right snapshot rather
+            # than falling back to the newest unrelated sell.
+            protstop_coid = _protstop_client_order_id(sym, snap["decision_id"])
+            exit_order = await asyncio.to_thread(
+                _find_recent_exit_fill,
+                sym_clean,
+                snap["decision_id"],
+                exit_side,
+                3600.0,
+                protstop_coid,
+            )
+            if exit_order is not None:
+                exit_price = float(exit_order["filled_avg_price"])
                 exit_price_source = "actual_fill"
             else:
                 try:
@@ -1026,7 +1104,6 @@ async def reconcile_open_snapshots(exchange: AlpacaExchange) -> None:
                     logger.debug(f"[RECONCILE] No price available for {sym}: {e}")
             entry_price = float(snap.get("entry_price", 0.0))
             qty = float(snap.get("qty", 0.0))
-            action = snap.get("final_action", "buy")
             if exit_price > 0 and entry_price > 0 and qty != 0:
                 pnl = (exit_price - entry_price) * qty if action == "buy" else (entry_price - exit_price) * qty
             else:
@@ -1115,7 +1192,29 @@ async def reconcile_open_snapshots(exchange: AlpacaExchange) -> None:
             logger.debug(f"[RECONCILE] Protective-stop reconciliation skipped (non-fatal): {e}")
 
 
-def _persist_order_record(order_result: dict, symbol: str, side: str, client_order_id: str | None, decision_id: str | None = None) -> None:
+def _parse_order_timestamp(value: Any) -> datetime | None:
+    """Best-effort parse of an order timestamp (ISO str or datetime) for the
+    ledger's ``filled_at`` column. Returns None on anything unparseable so a
+    malformed exchange field never blocks the ledger write."""
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value
+    try:
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except Exception:
+        return None
+
+
+def _persist_order_record(
+    order_result: dict,
+    symbol: str,
+    side: str,
+    client_order_id: str | None,
+    decision_id: str | None = None,
+    order_type: str = "market",
+    time_in_force: str = "ioc",
+) -> None:
     """Fire-and-forget write to the order ledger (CR-3). save_order_record()
     was defined but had zero callers -- after a crash, the bot had no local
     record of order ids/client_order_ids/fills to reconcile against, only
@@ -1124,6 +1223,10 @@ def _persist_order_record(order_result: dict, symbol: str, side: str, client_ord
     and CR-6 (using the real fill price instead of estimating from a bar).
     Found via an external crash-recovery audit, confirmed by AST scan
     showing zero call sites outside db.py, 2026-09-22.
+
+    ``order_type``/``time_in_force`` default to the market/ioc entry/exit
+    convention; the protective stop_limit path passes stop_limit/gtc so the
+    ledger (and a later reconcile) can tell the resting sell apart.
     """
     from src.db import save_order_record
     try:
@@ -1137,10 +1240,46 @@ def _persist_order_record(order_result: dict, symbol: str, side: str, client_ord
             filled_avg_price=float(order_result.get("filled_avg_price", 0.0) or 0.0),
             commission=float(order_result.get("commission", 0.0) or 0.0),
             status=str(order_result.get("status", "unknown")),
+            type=order_type,
+            time_in_force=time_in_force,
             client_order_id=client_order_id,
+            filled_at=_parse_order_timestamp(order_result.get("filled_at")),
         )
     except Exception as e:
         logger.debug(f"Order-ledger write failed for {symbol} (non-fatal): {e}")
+
+
+async def _snapshot_decision_id(symbol: str) -> str | None:
+    """Return the open decision snapshot's id for *symbol*, or None.
+
+    Exit orders (trailing stop, strategy close, killswitch flatten) are the
+    only orders besides the protective stop that should carry the snapshot's
+    decision_id: without it the ledger row can't be tied to the trade it
+    closed, so a restart/reconcile has to guess by recency (the bug that fed
+    the adaptive learner a wrong exit price). Fail-safe: any lookup error
+    returns None, which the reconcile fallback handles.
+    """
+    try:
+        from src.db import get_open_snapshot
+        snap = await asyncio.to_thread(get_open_snapshot, symbol)
+        return snap.get("decision_id") if snap else None
+    except Exception as e:
+        logger.debug(f"[ORDER] snapshot lookup failed for {symbol} (non-fatal): {e}")
+        return None
+
+
+async def _persist_exit_order(
+    order_result: dict,
+    symbol: str,
+    side: str,
+    client_order_id: str | None,
+    decision_id: str | None = None,
+) -> None:
+    """Record an exit order in the ledger with the snapshot's decision_id and
+    the exchange's filled_at, so reconcile can match the real exit later."""
+    await asyncio.to_thread(
+        _persist_order_record, order_result, symbol, side, client_order_id, decision_id
+    )
 
 
 def _find_recent_order_for_symbol(symbol_clean: str, max_age_sec: float = 3600.0) -> dict | None:
@@ -1148,17 +1287,104 @@ def _find_recent_order_for_symbol(symbol_clean: str, max_age_sec: float = 3600.0
 
     Used by reconcile_open_snapshots() to tell a genuine crash-gap fill (the
     bot's own order landed but the process died before save_decision_snapshot()
-    ran) apart from a truly pre-existing/manually-opened position, and to
-    recover the real fill price for a ghost-close instead of estimating from
-    the current bar. Bounded to the last hour so a stale ledger entry from
-    long ago can't misattribute an unrelated position.
+    ran) apart from a truly pre-existing/manually-opened position. Bounded to
+    the last hour so a stale ledger entry from long ago can't misattribute an
+    unrelated position.
+
+    Protective-stop rows (type=stop_limit) are skipped: a resting sell is not
+    the entry that opened the position, and since the stop ledger write was
+    added it can be the symbol's most-recent row -- returning it would reattach
+    a snapshot with side="sell" and a zero entry price.
     """
     from src.db import get_recent_order_records
     try:
         candidates = get_recent_order_records(symbol_clean, max_age_sec=max_age_sec)
-        return candidates[0] if candidates else None
+        entries = [c for c in candidates if str(c.get("type", "")).lower() != "stop_limit"]
+        return entries[0] if entries else None
     except Exception as e:
         logger.debug(f"[RECONCILE] Order-ledger lookup failed for {symbol_clean} (non-fatal): {e}")
+        return None
+
+
+def _record_filled_at_ms(record: dict) -> float:
+    """Sort key for a ledger record's real exit time: ``filled_at`` when the
+    exchange supplied it, else the submission time. Returns -inf when neither
+    is present so an un-timestamped record sorts as oldest, never newest."""
+    ts = _parse_order_timestamp(record.get("filled_at"))
+    if ts is None:
+        ts = _parse_order_timestamp(record.get("submitted_at"))
+    if ts is None:
+        return float("-inf")
+    try:
+        return ts.timestamp()
+    except Exception:
+        return float("-inf")
+
+
+def _select_exit_fill(
+    candidates: list[dict],
+    decision_id: str | None = None,
+    exit_side: str = "sell",
+    client_order_id: str | None = None,
+) -> dict | None:
+    """Pick the exit fill that actually closed a position from the ledger.
+
+    The symbol's most-recent order is NOT necessarily the one that closed the
+    position: a re-entry after the exit, or a protective stop resting while a
+    later market sell fires, can both leave a newer ledger row. Choosing wrong
+    feeds the adaptive learner a fabricated exit price (the pre-fix bug: one
+    ghost-close used the last bar, the other trusted ``records[0]``).
+
+    Selection order, most-specific first:
+      1. ``decision_id`` match -- the exact order recorded for this snapshot.
+      2. ``client_order_id`` match -- used when the snapshot's decision_id has
+         no ledger row (the record was lost) but the exit order's id is known.
+      3. the LATEST filled order on ``exit_side`` -- a long is closed by a
+         sell (the default); latest-by-``filled_at`` breaks ties.
+    Returns None when no such fill exists, so the caller falls back to the bar.
+    """
+    fills = [
+        c for c in candidates
+        if str(c.get("side", "")).lower() == exit_side
+        and float(c.get("filled_avg_price", 0.0) or 0.0) > 0
+    ]
+    if not fills:
+        return None
+    if decision_id:
+        for c in fills:
+            if c.get("decision_id") == decision_id:
+                return c
+    if client_order_id:
+        for c in fills:
+            if c.get("client_order_id") == client_order_id:
+                return c
+    return max(fills, key=_record_filled_at_ms)
+
+
+def _find_recent_exit_fill(
+    symbol_clean: str,
+    decision_id: str | None = None,
+    exit_side: str = "sell",
+    max_age_sec: float = 3600.0,
+    client_order_id: str | None = None,
+) -> dict | None:
+    """Ledger lookup for the exit that closed a symbol's position (CR-6).
+
+    Unlike ``_find_recent_order_for_symbol`` (which returns the single most
+    recent record, entry or exit), this returns the fill that closed the
+    position, preferring the order recorded for ``decision_id`` (or, failing
+    that, one whose ``client_order_id`` matches), and otherwise the latest fill
+    on ``exit_side`` (a long is closed by a sell). A filled protective
+    stop_limit sell is itself a filled sell, so a stop-triggered exit is
+    recovered the same way. Fail-safe: any error returns None so the caller
+    falls back to the last bar.
+    """
+    from src.db import get_recent_order_records
+    try:
+        candidates = get_recent_order_records(symbol_clean, max_age_sec=max_age_sec)
+        return _select_exit_fill(candidates, decision_id, exit_side, client_order_id)
+    except Exception as e:
+        logger.debug(f"[RECONCILE] Exit-fill lookup failed for {symbol_clean} (non-fatal): {e}")
         return None
 
 
@@ -1397,7 +1623,13 @@ async def process_signal_for_symbol(symbol: str, current_price: float, risk_mana
                         client_order_id=client_order_id,
                         bypass_circuit_breaker=True,
                     )
-                    await asyncio.to_thread(_persist_order_record, order_result, symbol, side, client_order_id)
+                    # Wire decision_id + filled_at so a restart/reconcile can
+                    # match this exit to its snapshot by correlation, not by
+                    # recency (task: exit records must carry decision_id).
+                    await _persist_exit_order(
+                        order_result, symbol, side, client_order_id,
+                        await _snapshot_decision_id(symbol),
+                    )
                     logger.info(f"Trailing Stop Executed: {symbol}")
                     await send_telegram_alert(f"🔔 <b>Trailing Stop Triggered</b>\nSymbol: {symbol}\nClosed {qty} @ ${current_price:.2f}")
                     _state.cooldowns[symbol] = time.time() + settings.COOLDOWN_SECONDS_BUY
@@ -2194,8 +2426,14 @@ async def process_signal_for_symbol(symbol: str, current_price: float, risk_mana
                 # Basis/qty for the exchange-side protective stop (armed below).
                 # A scale-in overrides these with the weighted-average entry
                 # and combined qty so the stop covers the whole position.
+                # decision_id likewise tracks the snapshot this stop protects:
+                # a fresh entry creates its own, while a scale-in must link to
+                # the ORIGINAL snapshot it folds into -- otherwise the resting
+                # stop's later fill would correlate to the add's throwaway
+                # decision_id and the real exit would not be found on restart.
                 stop_basis = filled_price if filled_price > 0 else current_price
                 stop_qty = float(position_size)
+                stop_decision_id = committee_result.decision_id
                 try:
                     if is_new_entry:
                         from src.db import save_decision_snapshot
@@ -2247,14 +2485,17 @@ async def process_signal_for_symbol(symbol: str, current_price: float, risk_mana
                                 logger.info(f"[SCALE-IN] Snapshot {snap['decision_id']} updated: entry ${prev_entry:.2f} -> ${new_avg:.2f} (weighted by real fill), qty {prev_qty} -> {new_qty}")
                                 stop_basis = new_avg
                                 stop_qty = new_qty
+                                stop_decision_id = snap["decision_id"]
                 except Exception as db_e:
                     logger.warning(f"Decision snapshot persist failed for {symbol} (non-fatal): {db_e}")
 
                 # Arm/replace the exchange-side protective stop so the position
                 # is capped even between the bot's 60s exit scans. Fail-safe and
-                # a no-op unless PROTECTIVE_STOPS_ENABLED.
+                # a no-op unless PROTECTIVE_STOPS_ENABLED. The snapshot's
+                # decision_id links the resting stop to the position it covers.
                 await _arm_protective_stop(
-                    ex, symbol, stop_qty, stop_basis * (1.0 - settings.STOP_LOSS_PCT)
+                    ex, symbol, stop_qty, stop_basis * (1.0 - settings.STOP_LOSS_PCT),
+                    decision_id=stop_decision_id,
                 )
 
             elif signal["action"] == "close" and current_position:
@@ -2278,7 +2519,10 @@ async def process_signal_for_symbol(symbol: str, current_price: float, risk_mana
                     client_order_id=client_order_id,
                     bypass_circuit_breaker=True,
                 )
-                await asyncio.to_thread(_persist_order_record, order_result, symbol, side, client_order_id)
+                await _persist_exit_order(
+                    order_result, symbol, side, client_order_id,
+                    await _snapshot_decision_id(symbol),
+                )
 
                 filled_price = order_result.get("filled_avg_price", 0.0)
                 commission = order_result.get("commission", 0.0)
@@ -2430,12 +2674,14 @@ async def run_periodic_analyzer() -> None:
     while True:
         try:
             logger.info("Running periodic analyzer script...")
+            log_training_job_start("analyzer", script_path)
             process = await asyncio.create_subprocess_exec(
                 sys.executable, script_path,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE
             )
             stdout, stderr = await process.communicate()
+            log_training_job_result("analyzer", returncode=process.returncode, script=script_path)
             
             if process.returncode == 0:
                 logger.info(f"Analyzer completed successfully:\n{stdout.decode().strip()}")
@@ -2473,6 +2719,7 @@ async def run_periodic_automl() -> None:
             await asyncio.sleep(sleep_seconds)
             
             logger.info("Running AutoML pipeline...")
+            log_training_job_start("automl", script_path)
             process = await asyncio.create_subprocess_exec(
                 sys.executable, script_path,
                 stdout=asyncio.subprocess.PIPE,
@@ -2484,6 +2731,7 @@ async def run_periodic_automl() -> None:
                 logger.info(f"AutoML pipeline completed successfully:\n{stdout.decode().strip()}")
             else:
                 logger.error(f"AutoML pipeline failed with code {process.returncode}:\n{stderr.decode().strip()}")
+            log_training_job_result("automl", returncode=process.returncode, script=script_path)
                 
         except Exception as e:
             logger.error(f"Error running AutoML pipeline: {e}")
@@ -2515,6 +2763,7 @@ async def run_periodic_cull() -> None:
             await asyncio.sleep(sleep_seconds)
             
             logger.info("Running Evolution Cull pipeline...")
+            log_training_job_start("cull", script_path)
             marks = _promotion_marks()
             process = await asyncio.create_subprocess_exec(
                 sys.executable, script_path,
@@ -2528,6 +2777,7 @@ async def run_periodic_cull() -> None:
                 logger.info(f"Evolution Cull completed successfully:\n{stdout.decode().strip()}")
             else:
                 logger.error(f"Evolution Cull failed with code {process.returncode}:\n{stderr.decode().strip()}")
+            log_training_job_result("cull", returncode=process.returncode, script=script_path)
                 
         except Exception as e:
             logger.error(f"Error running Evolution Cull: {e}")
@@ -2558,6 +2808,7 @@ async def run_periodic_research() -> None:
             await asyncio.sleep(sleep_seconds)
             
             logger.info("Running Automatic Research...")
+            log_training_job_start("research", script_path)
             process = await asyncio.create_subprocess_exec(
                 sys.executable, script_path,
                 stdout=asyncio.subprocess.PIPE,
@@ -2569,6 +2820,7 @@ async def run_periodic_research() -> None:
                 logger.info(f"Automatic Research completed successfully:\n{stdout.decode().strip()}")
             else:
                 logger.error(f"Automatic Research failed with code {process.returncode}:\n{stderr.decode().strip()}")
+            log_training_job_result("research", returncode=process.returncode, script=script_path)
                 
         except Exception as e:
             logger.error(f"Error running Automatic Research: {e}")
@@ -2604,6 +2856,7 @@ async def run_periodic_transformer_replay() -> None:
             await asyncio.sleep(sleep_seconds)
 
             logger.info("Running Transformer replay fine-tune...")
+            log_training_job_start("transformer_replay", script_path)
             marks = _promotion_marks()
             process = await asyncio.create_subprocess_exec(
                 sys.executable, script_path,
@@ -2617,6 +2870,7 @@ async def run_periodic_transformer_replay() -> None:
                 logger.info(f"Transformer replay fine-tune completed successfully:\n{stdout.decode().strip()}")
             else:
                 logger.error(f"Transformer replay fine-tune failed with code {process.returncode}:\n{stderr.decode().strip()}")
+            log_training_job_result("transformer_replay", returncode=process.returncode, script=script_path)
 
         except Exception as e:
             logger.error(f"Error running Transformer replay fine-tune: {e}")
@@ -2656,6 +2910,7 @@ async def run_periodic_ppo_retrain() -> None:
             await asyncio.sleep(sleep_seconds)
 
             logger.info("Running Evolutionary PPO Trainer...")
+            log_training_job_start("ppo_retrain", script_path)
             marks = _promotion_marks()
             process = await asyncio.create_subprocess_exec(
                 sys.executable, script_path,
@@ -2669,6 +2924,7 @@ async def run_periodic_ppo_retrain() -> None:
                 logger.info(f"PPO Meta-Learner retraining completed successfully:\n{stdout.decode().strip()}")
             else:
                 logger.error(f"PPO Meta-Learner retraining failed with code {process.returncode}:\n{stderr.decode().strip()}")
+            log_training_job_result("ppo_retrain", returncode=process.returncode, script=script_path)
 
         except Exception as e:
             logger.error(f"Error running PPO Meta-Learner retraining: {e}")
@@ -2704,6 +2960,7 @@ async def run_periodic_decision_transformer_retrain() -> None:
             await asyncio.sleep(sleep_seconds)
 
             logger.info("Running Decision Transformer retraining...")
+            log_training_job_start("decision_transformer", script_path)
             marks = _promotion_marks()
             process = await asyncio.create_subprocess_exec(
                 sys.executable, script_path,
@@ -2717,6 +2974,7 @@ async def run_periodic_decision_transformer_retrain() -> None:
                 logger.info(f"Decision Transformer retraining completed successfully:\n{stdout.decode().strip()}")
             else:
                 logger.error(f"Decision Transformer retraining failed with code {process.returncode}:\n{stderr.decode().strip()}")
+            log_training_job_result("decision_transformer", returncode=process.returncode, script=script_path)
 
         except Exception as e:
             logger.error(f"Error running Decision Transformer retraining: {e}")
@@ -2734,6 +2992,7 @@ async def run_periodic_pbt() -> None:
     while True:
         try:
             logger.info("Running Population-Based Training cycle...")
+            log_training_job_start("pbt")
             
             trainer = get_pbt_trainer()
             
@@ -2752,6 +3011,7 @@ async def run_periodic_pbt() -> None:
             logger.info(f"PBT cycle completed: pop={stats.get('population_size', 0)}, "
                        f"best_perf={stats.get('max_performance', 0):.4f}, "
                        f"mean_perf={stats.get('mean_performance', 0):.4f}")
+            log_training_job_result("pbt")
             
         except Exception as e:
             logger.error(f"Error in PBT cycle: {e}")
@@ -2764,64 +3024,78 @@ async def run_periodic_pbt() -> None:
 
 async def run_periodic_ood_retrain() -> None:
     """Background task to retrain OOD Discriminator periodically.
-    
+
     Runs every hour to retrain the discriminator on new live data vs historical data.
     """
     # Initial delay to let bot stabilize
     await asyncio.sleep(3600)  # 1 hour
-    
+
     while True:
         try:
             logger.info("Running OOD Discriminator retraining cycle...")
-            
-            from src.committee.decision_transformer import BRAINS, REGIMES, build_state_vector
+            log_training_job_start("ood_retrain")
+
+            from src.committee.decision_transformer import BRAINS, REGIMES
             from src.db import get_closed_decision_snapshots
-            from src.ood_discriminator import get_ood_discriminator
-            
+            from src.ood_discriminator import (
+                OOD_BOOTSTRAP_MIN_HISTORY,
+                OOD_MODEL_PATH,
+                build_ood_state_vector,
+                get_ood_discriminator,
+            )
+
             ood_disc = get_ood_discriminator()
-            if not ood_disc._is_trained:
-                logger.info("OOD Discriminator not yet trained, skipping retrain")
-                await asyncio.sleep(3600)
-                continue
-            
-            # Get historical states from closed decisions
+
+            # "Historical" class = REAL closed trades. The old code refused to
+            # train until _is_trained was already True -- a deadlock, so the
+            # OOD veto never armed at all.
             closed_decisions = await asyncio.to_thread(get_closed_decision_snapshots, limit=5000)
-            if len(closed_decisions) < 100:
-                logger.warning("Not enough historical data for OOD retraining")
+            if len(closed_decisions) < OOD_BOOTSTRAP_MIN_HISTORY:
+                logger.info(
+                    f"OOD retrain waiting for history: "
+                    f"{len(closed_decisions)}/{OOD_BOOTSTRAP_MIN_HISTORY} closed decisions"
+                )
                 await asyncio.sleep(3600)
                 continue
-            
+
             # Build historical state vectors
             historical_states = []
             for dec in closed_decisions:
                 regime = dec.get("regime", "default")
-                features = dec.get("features", {})
-                brain_votes = dec.get("brain_votes", {})
-                state = build_state_vector(regime, features, brain_votes, REGIMES, BRAINS)
-                historical_states.append(state)
-            
+                features = dec.get("features", {}) or {}
+                brain_votes = dec.get("brain_votes", {}) or {}
+                historical_states.append(build_ood_state_vector(regime, features, brain_votes, REGIMES, BRAINS))
+
             historical_states = np.array(historical_states)
-            
-            # Get recent live states (from recent decisions, last 24 hours)
-            # For simplicity, use the same closed decisions but we could track live states separately
-            # In a full implementation, we'd track live states separately during trading
-            live_states = historical_states[-min(200, len(historical_states)):]  # Last 200 as "live"
-            
+
+            # Both classes come from the same real closed-trade pool: older
+            # trades are the historical reference, the most recent are the
+            # "live" sample, so a shift in the newest state distribution
+            # (regime/feature drift) is what gets flagged. A disjoint tail
+            # (not the whole array) keeps the two classes separate.
+            live_states = historical_states[-min(200, len(historical_states)):]
+            historical_states = historical_states[: max(1, len(historical_states) - len(live_states))]
+
             if len(live_states) < 50:
                 logger.warning("Not enough live states for OOD retraining")
                 await asyncio.sleep(3600)
                 continue
-            
+
             # Retrain
             acc = ood_disc.train_on_data(historical_states, live_states)
             logger.info(f"OOD Discriminator retrained: val_acc={acc:.3f}")
-            
-            # Save model
+
+            # OOD_MODEL_PATH lives under model_store.store_dir() (data/models/ood/),
+            # the persistent data volume -- never the image's models/ dir, which
+            # is wiped on every redeploy.
             ood_disc.save()
-            
+            logger.info(f"OOD Discriminator saved to {OOD_MODEL_PATH}")
+            log_training_job_result("ood_retrain", returncode=0)
+
         except Exception as e:
             logger.error(f"Error in OOD Discriminator retraining: {e}")
-        
+            log_training_job_result("ood_retrain", returncode=1)
+
         # Run every hour
         await asyncio.sleep(3600)
 
@@ -2850,6 +3124,7 @@ async def run_periodic_post_mortem() -> None:
             await asyncio.sleep(sleep_seconds)
             
             logger.info("Running Post-Mortem AI...")
+            log_training_job_start("post_mortem", script_path)
             process = await asyncio.create_subprocess_exec(
                 sys.executable, script_path,
                 stdout=asyncio.subprocess.PIPE,
@@ -2861,6 +3136,7 @@ async def run_periodic_post_mortem() -> None:
                 logger.info(f"Post-Mortem AI completed successfully:\n{stdout.decode().strip()}")
             else:
                 logger.error(f"Post-Mortem AI failed with code {process.returncode}:\n{stderr.decode().strip()}")
+            log_training_job_result("post_mortem", returncode=process.returncode, script=script_path)
                 
         except Exception as e:
             logger.error(f"Error running Post-Mortem AI: {e}")
@@ -2982,6 +3258,10 @@ async def run_trading_bot() -> None:
     active_tasks: set[asyncio.Task] = set()
 
     try:
+        # Install structured stdout + the persistent rotating file log
+        # (data/logs/apex_bot.log, 20 MB x 5) before anything else logs, so
+        # startup and every TRAINING_JOB line reach the on-disk file.
+        configure_structlog()
         logger.info("Initializing Apex Oracle Bot v2.0.0")
         logger.info("=================================")
         logger.info("Configuration:")

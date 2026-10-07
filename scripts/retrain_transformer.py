@@ -29,6 +29,7 @@ sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 from src import model_store
 from src.backtest import run_backtest
 from src.committee.transformer_brain import GrokGQA_Transformer, reset_ml_predictor, set_ml_predictor_override
+from src.live_buffer import read_jsonl_tolerant
 from src.logging_config import get_logger, set_correlation_id
 from src.walkforward import run_walkforward_validation
 
@@ -70,42 +71,29 @@ class ReplayBufferDataset(Dataset):
         for data_path in data_paths:
             if not os.path.exists(data_path):
                 continue
-            # Explicit, tolerant decoding: the tracked live buffer was committed
-            # as a UTF-16 file (FF FE BOM, from a Windows PowerShell redirect),
-            # and a bare open() -- UTF-8 on Linux and in this repo's Windows
-            # env -- raised UnicodeDecodeError from readlines(), OUTSIDE the
-            # per-line try below. That aborted this whole constructor, so every
-            # nightly retrain failed and the 6k+ valid historical records were
-            # discarded along with the unreadable file. errors="replace" turns
-            # undecodable bytes into lines json.loads rejects individually, and
-            # the per-file try keeps one bad file from losing the others.
-            loaded = skipped = 0
-            try:
-                with open(data_path, encoding="utf-8-sig", errors="replace") as f:
-                    lines = f.readlines()
-            except OSError as e:
-                logger.warning(f"Could not read replay buffer {data_path}: {e}")
-                continue
-            # Keep only the last `max_size_per_file` trades
-            for line_index, line in enumerate(lines[-max_size_per_file:]):
-                # A UTF-16 newline leaves a stray NUL that glues onto the next
-                # (UTF-8-appended) record; raw NUL is never valid in JSON text.
-                line = line.replace("\x00", "").strip()
-                if not line:
-                    continue
+            # Tolerant decoding lives in src.live_buffer (BOM/NUL stripping,
+            # per-line counting, [LIVE_BUFFER] warnings). It was extracted so
+            # the same reader backs this trainer and scripts/repair_live_buffer.py
+            # -- previously the tolerant logic was inline here only, so nothing
+            # else could see or fix a bad buffer. A per-file failure still keeps
+            # one bad file from losing the others.
+            records, _stats = read_jsonl_tolerant(
+                data_path, max_lines=max_size_per_file, buffer_name=os.path.basename(data_path)
+            )
+            for line_index, record in enumerate(records):
                 try:
-                    record = json.loads(line)
                     tensor_state = np.array(record["tensor"], dtype=np.float32)
                     label = float(record["label"])
                     ts = _parse_entry_time(record.get("entry_time"))
                     key = (0, ts.timestamp(), 0, 0) if ts else (1, 0.0, file_index, line_index)
                     staged.append((key, tensor_state, label))
-                    loaded += 1
-                except Exception:
-                    skipped += 1
-            if skipped:
-                logger.warning(f"Replay buffer {data_path}: skipped {skipped} unreadable record(s)")
-            logger.info(f"Replay buffer {data_path}: loaded {loaded} record(s)")
+                except Exception as e:
+                    # A structurally valid JSON object that still can't be
+                    # turned into a (tensor, label) pair -- surface it too.
+                    logger.warning(
+                        f"[LIVE_BUFFER] {os.path.basename(data_path)}: line {line_index} "
+                        f"is missing a usable tensor/label ({e})"
+                    )
             file_index += 1
 
         # Keep only records matching the model's input shape (sequence x
@@ -334,7 +322,6 @@ def retrain_model() -> int:
         champ_layers = 4
         champ_embed = 128
         if os.path.exists(config_path):
-            import json
             with open(config_path) as f:
                 arch = json.load(f)
                 champ_layers = arch.get("num_layers", 4)

@@ -354,3 +354,80 @@ async def test_cancel_protective_stop_is_failsafe():
 
     await rm._cancel_protective_stop("BTC/USD")  # must not raise
     assert "BTCUSD" not in rm.protective_stops
+
+
+@pytest.mark.asyncio
+async def test_persist_exit_order_swallows_exceptions(monkeypatch):
+    """_persist_exit_order is best-effort: any failure (DB down, disk full,
+    bad snapshot read) must be swallowed so the caller's flatten loop is not
+    interrupted."""
+    import src.bot as bot_mod
+    rm = RiskManager(AsyncMock())
+
+    def boom(*a, **k):
+        raise RuntimeError("ledger write failed")
+    monkeypatch.setattr(bot_mod, "_persist_order_record", boom)
+
+    await rm._persist_exit_order("BTC/USD", {"id": "o1"}, "sell", "cid")  # must not raise
+
+
+@pytest.mark.asyncio
+async def test_persist_exit_order_failure_cannot_block_or_precede_liquidation(monkeypatch):
+    """The emergency close order must be placed BEFORE the ledger write is
+    even attempted, and a ledger failure must not stop the flatten. Records
+    call order to prove the close is not gated behind persistence."""
+    import src.bot as bot_mod
+
+    calls: list[str] = []
+    ex = AsyncMock()
+
+    async def _get_positions(*a, **k):
+        return [{"symbol": "BTC/USD", "qty": "0.1", "market_value": "5000"}]
+
+    async def _create_order(*a, **k):
+        calls.append("close")
+        return {"id": "close_1", "filled_avg_price": 50000.0, "filled_qty": 0.1}
+
+    ex.get_positions = _get_positions
+    ex.create_order = _create_order
+    ex.cancel_order = AsyncMock(return_value=True)
+
+    def _persist(*a, **k):
+        calls.append("persist")
+        raise RuntimeError("ledger write failed")
+
+    monkeypatch.setattr(bot_mod, "_persist_order_record", _persist)
+    rm = RiskManager(ex)
+
+    result = await rm.liquidate_all_positions()
+
+    assert calls == ["close", "persist"], calls          # close first, then persist
+    assert result["status"] == "liquidation_complete"    # failure did not abort the flatten
+
+
+@pytest.mark.asyncio
+async def test_persist_exit_order_failure_cannot_block_exposure_reduction(monkeypatch):
+    """Same guarantee on the incremental exposure-cap reduction path."""
+    import src.bot as bot_mod
+
+    ex = AsyncMock()
+    ex.get_positions = AsyncMock(return_value=[
+        {"symbol": "BTC/USD", "qty": "0.1", "market_value": "9000", "unrealized_pl": "-10"},
+    ])
+    ex.create_order = AsyncMock(return_value={
+        "id": "close_1", "filled_avg_price": 50000.0, "filled_qty": 0.1,
+    })
+    ex.cancel_order = AsyncMock(return_value=True)
+
+    def _persist(*a, **k):
+        raise RuntimeError("ledger write failed")
+    monkeypatch.setattr(bot_mod, "_persist_order_record", _persist)
+
+    rm = RiskManager(ex)
+    monkeypatch.setattr(settings, "MAX_PORTFOLIO_PCT", 0.01)  # cap $100 < $9000 held
+    rm.peak_equity = 1000.0
+
+    result = await rm.reduce_exposure_to_cap()
+
+    ex.create_order.assert_awaited()                 # the close still happened
+    assert result["status"] == "exposure_reduced", result

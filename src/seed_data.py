@@ -12,11 +12,11 @@ never touched, and a replaced file is kept as a timestamped backup.
 
 from __future__ import annotations
 
-import json
 import os
 import shutil
 from datetime import UTC, datetime
 
+from src.live_buffer import has_usable_tensor, read_jsonl_tolerant
 from src.logging_config import get_logger
 
 logger = get_logger("seed_data")
@@ -28,23 +28,8 @@ BUFFER_NAME = "historical_experiences.jsonl"
 def count_usable_records(path: str) -> int:
     """Records whose tensor is a non-empty 2-D (timesteps x features) array,
     the only shape retrain_transformer.py can train on."""
-    usable = 0
-    try:
-        with open(path, encoding="utf-8-sig", errors="replace") as f:
-            for line in f:
-                line = line.replace("\x00", "").strip()
-                if not line:
-                    continue
-                try:
-                    tensor = json.loads(line).get("tensor")
-                except (ValueError, AttributeError):
-                    continue
-                if (isinstance(tensor, list) and tensor and isinstance(tensor[0], list)
-                        and tensor[0] and not isinstance(tensor[0][0], list)):
-                    usable += 1
-    except OSError:
-        return 0
-    return usable
+    records, _ = read_jsonl_tolerant(path)
+    return sum(1 for record in records if has_usable_tensor(record))
 
 
 def bootstrap_replay_buffer(data_dir: str | None = None, seed_dir: str | None = None) -> bool:

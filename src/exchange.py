@@ -157,6 +157,29 @@ def _rate_limit_wait(retry_state: RetryCallState) -> float:
     return wait_exponential(multiplier=1, min=4, max=30)(retry_state)
 
 
+def _iso_or_none(value: Any) -> str | None:
+    """ISO-8601 string for a datetime/string timestamp, else None. The Alpaca
+    SDK returns a datetime, but tests and cached payloads hand back a string;
+    calling .isoformat() blindly raised AttributeError and aborted the whole
+    fill-detail branch (silently losing the real exit price)."""
+    if value is None:
+        return None
+    if hasattr(value, "isoformat"):
+        return value.isoformat()
+    return str(value)
+
+
+# Alpaca order statuses that mean the order is still WORKING on the book and
+# will still trigger (so it can protect a position). Anything else -- filled,
+# canceled, expired, rejected, done_for_day, replaced, pending_cancel,
+# pending_replace -- is terminal or going away and must NOT be adopted as a
+# resting protective stop. Source: Alpaca "Placing Orders" status table.
+LIVE_ORDER_STATUSES = frozenset({
+    "new", "accepted", "open", "partially_filled",
+    "pending", "pending_new", "accepted_for_bidding", "held",
+})
+
+
 class RateLimitError(Exception):
     """Raised when Alpaca rate limit is exceeded and all retries are exhausted."""
     pass
@@ -581,7 +604,11 @@ class AlpacaExchange:
             "id": str(order.id),
             "symbol": str(order.symbol),
             "qty": float(order.qty) if order.qty else 0.0,
+            "filled_qty": float(order.filled_qty) if order.filled_qty else 0.0,
+            "filled_avg_price": float(order.filled_avg_price) if order.filled_avg_price else 0.0,
             "status": str(order.status.value) if hasattr(order.status, "value") else str(order.status),
+            "client_order_id": str(order.client_order_id) if getattr(order, "client_order_id", None) else client_order_id,
+            "filled_at": order.filled_at.isoformat() if getattr(order, "filled_at", None) else None,
         }
 
     @retry(retry=retry_if_exception(_retry_unless_circuit_open), stop=stop_after_attempt(5), wait=wait_exponential(multiplier=1, min=2, max=30))
@@ -815,6 +842,7 @@ class AlpacaExchange:
                             filled_order = await self.circuit_breaker.call(asyncio.to_thread, self.trading_client.get_order_by_id, order_id)
                             order_info["filled_avg_price"] = float(filled_order.filled_avg_price) if filled_order.filled_avg_price else 0.0
                             order_info["filled_qty"] = float(filled_order.filled_qty) if filled_order.filled_qty else 0.0
+                            order_info["filled_at"] = _iso_or_none(getattr(filled_order, "filled_at", None))
                             order_info["commission"] = 0.0  # SDK 0.44.0: Order has no .commission
                             order_info["slippage"] = 0.0
                         except Exception as fetch_err:
@@ -827,6 +855,7 @@ class AlpacaExchange:
                                 filled_order = await self.circuit_breaker.call(asyncio.to_thread, self.trading_client.get_order_by_id, order_id)
                                 order_info["filled_avg_price"] = float(filled_order.filled_avg_price) if filled_order.filled_avg_price else 0.0
                                 order_info["filled_qty"] = float(filled_order.filled_qty) if filled_order.filled_qty else 0.0
+                                order_info["filled_at"] = _iso_or_none(getattr(filled_order, "filled_at", None))
                                 order_info["commission"] = 0.0  # SDK 0.44.0: Order has no .commission
                                 order_info["slippage"] = 0.0
                             except Exception as retry_err:
@@ -837,6 +866,7 @@ class AlpacaExchange:
                                 )
                                 order_info["filled_avg_price"] = float(poll_info.get("filled_avg_price", 0.0) or 0.0)
                                 order_info["filled_qty"] = float(poll_info.get("qty", order_info.get("qty", 0.0)) or 0.0)
+                                order_info["filled_at"] = poll_info.get("filled_at")
                                 order_info["commission"] = 0.0  # SDK 0.44.0
                                 order_info["slippage"] = 0.0
                                 order_info["fill_data_incomplete"] = True
@@ -863,6 +893,7 @@ class AlpacaExchange:
                         order_info["status"] = "filled"
                         order_info["filled_avg_price"] = float(o.get("filled_avg_price", 0.0) or 0.0)
                         order_info["filled_qty"] = float(o.get("filled_qty", 0.0) or 0.0)
+                        order_info["filled_at"] = o.get("filled_at")
                         break
             except Exception as e:
                 logger.debug(f"Fallback order lookup failed: {e}")
@@ -928,25 +959,111 @@ class AlpacaExchange:
             # qty, invalid symbol, etc.) instead of letting it surface as a
             # generic circuit-open/retry error at the caller.
             status = getattr(submit_err, "status_code", None) if isinstance(submit_err, APIError) else None
+            # A duplicate client_order_id (same deterministic id from
+            # _protstop_client_order_id re-armed for the same decision_id, e.g.
+            # after a restart that lost _state.protective_stops) means an order
+            # with that id already exists on the exchange. Alpaca rejects the
+            # reuse while that order is still ACTIVE; it may also reject a
+            # recently-terminated id. Recover, but only adopt an order that is
+            # still LIVE (working on the book) -- adopting a filled/canceled/
+            # expired/rejected order would silently leave the position with NO
+            # resting stop.
+            if client_order_id is not None and not _is_circuit_open_error(submit_err):
+                existing = await self._find_existing_order_by_client_id(client_order_id)
+                if existing is not None:
+                    existing_status = str(existing.get("status", "")).lower()
+                    if existing_status in LIVE_ORDER_STATUSES:
+                        logger.warning(
+                            f"submit_protective_stop for {symbol} was rejected ({submit_err!r}) but a "
+                            f"LIVE stop with client_order_id={client_order_id!r} already rests on the "
+                            f"exchange (id={existing['id']}, status={existing_status}) -- adopting it."
+                        )
+                        return {
+                            **existing,
+                            "type": "stop_limit",
+                            "side": "sell",
+                            "stop_price": stop_price,
+                            "limit_price": limit_price,
+                            "client_order_id": client_order_id,
+                        }
+                    # The id is used up by a dead order (canceled/expired/
+                    # rejected/filled). Re-arm with a FRESH unique id so the
+                    # position gets a live resting stop. The decision_id still
+                    # travels in the order ledger, so reconcile keeps matching
+                    # this stop by decision_id (tier 1) regardless of the id.
+                    fresh_id = f"{client_order_id[:36]}_{int(time.time())}"
+                    logger.warning(
+                        f"submit_protective_stop for {symbol}: client_order_id={client_order_id!r} is "
+                        f"held by a non-live order (status={existing_status}); re-arming with a fresh "
+                        f"id {fresh_id!r}."
+                    )
+                    return await self._submit_protective_stop_once(
+                        symbol, qty, stop_price, limit_price, fresh_id, bypass_circuit_breaker
+                    )
             logger.error(
                 f"submit_protective_stop REJECTED for {symbol} qty={qty} "
                 f"stop={stop_price} limit={limit_price} (status={status}): {submit_err!r}"
             )
             raise
 
+        return self._protective_stop_info(order, symbol, stop_price, limit_price, client_order_id)
+
+    async def _submit_protective_stop_once(
+        self,
+        symbol: str,
+        qty: float,
+        stop_price: float,
+        limit_price: float,
+        client_order_id: str | None,
+        bypass_circuit_breaker: bool = False,
+    ) -> dict[str, Any]:
+        """Single protective-stop submission with no duplicate recovery.
+
+        Split out of submit_protective_stop so the fresh-id re-arm path can
+        submit once without recursing into the duplicate-adoption logic.
+        """
+        order_kwargs: dict[str, Any] = {
+            "symbol": symbol,
+            "qty": qty,
+            "side": OrderSide.SELL,
+            "time_in_force": TimeInForce.GTC,
+            "stop_price": stop_price,
+            "limit_price": limit_price,
+        }
+        if client_order_id is not None:
+            order_kwargs["client_order_id"] = client_order_id
+        request = StopLimitOrderRequest(**order_kwargs)
+        if bypass_circuit_breaker:
+            order = await asyncio.to_thread(self.trading_client.submit_order, request)
+        else:
+            order = await self.circuit_breaker.call(
+                asyncio.to_thread, self.trading_client.submit_order, request
+            )
+        return self._protective_stop_info(order, symbol, stop_price, limit_price, client_order_id)
+
+    @staticmethod
+    def _protective_stop_info(
+        order: Any, symbol: str, stop_price: float, limit_price: float, client_order_id: str | None
+    ) -> dict[str, Any]:
         order_info = {
             "id": str(order.id),
             "symbol": str(order.symbol),
             "qty": float(order.qty) if order.qty else 0.0,
+            "filled_qty": float(order.filled_qty) if order.filled_qty else 0.0,
+            "filled_avg_price": float(order.filled_avg_price) if order.filled_avg_price else 0.0,
             "status": str(order.status.value) if hasattr(order.status, "value") else str(order.status),
             "type": "stop_limit",
             "side": "sell",
             "stop_price": stop_price,
             "limit_price": limit_price,
             "client_order_id": client_order_id,
+            # Real trigger time, so the order ledger (and any later reconcile of
+            # a stop-triggered exit) records when the position actually exited
+            # instead of falling back to the submission timestamp.
+            "filled_at": _iso_or_none(getattr(order, "filled_at", None)),
         }
         logger.info(
-            f"[PROTECTIVE_STOP] armed {symbol} qty={qty} stop={stop_price} "
+            f"[PROTECTIVE_STOP] armed {symbol} qty={order_info['qty']} stop={stop_price} "
             f"limit={limit_price} (id={order_info['id']})"
         )
         return order_info

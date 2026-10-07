@@ -78,6 +78,9 @@ data/
 .opencode/bun.lock
 .opencode/.gitignore
 
+# OpenHands agent-local state (memory, tmp) -- never committed
+.openhands/
+
 # Trained model artifacts (generated, not source)
 models/*.pth
 models/*.pkl

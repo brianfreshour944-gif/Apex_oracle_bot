@@ -22,30 +22,43 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 
+from src import model_store
 from src.config import settings
 from src.logging_config import get_logger
 
 logger = get_logger("ood_discriminator")
 
 # Paths
-# NOTE: one '..' too many here used to resolve this OUTSIDE the project
-# (src/ood_discriminator.py -> <repo>/../models/ood = /models/ood in the
-# container), so the discriminator never found a trained model, _is_trained
-# stayed False and check_ood_and_override() silently no-op'd forever. It also
-# meant save() wrote the trained model outside the repo/image. This must stay
-# in sync with the other relative model paths in src/config.py
-# (TRANSFORMER_MODEL_PATH = "models/grok_gqa_v9_best.pth" etc.).
-OOD_DIR = os.path.join(os.path.dirname(__file__), '..', 'models', 'ood')
+# The discriminator is retrained at runtime (hourly, in-process), so its
+# weights must live on the PERSISTENT data volume, not in the image's models/
+# directory -- the image (and models/) is replaced on every redeploy, so
+# anything written there is wiped. It also must not sit at a bare relative
+# path that a container resolves outside /app. model_store.store_dir() is the
+# repo's single convention for runtime-trained models (data/models/ by
+# default, overridable with APEX_MODEL_STORE_DIR for tests) -- the same base
+# the PPO/transformer trainers and PBT/Bayesian state use. Baked, read-only
+# weights (grok_gqa_v9_best.pth etc.) stay in models/ because git ships them.
+OOD_DIR = os.path.join(model_store.store_dir(), 'ood')
 OOD_MODEL_PATH = os.path.join(OOD_DIR, 'ood_discriminator.pth')
 OOD_CONFIG_PATH = os.path.join(OOD_DIR, 'ood_discriminator_config.json')
 
 # Default settings
-OOD_STATE_DIM = getattr(settings, 'OOD_STATE_DIM', 64)
+# The discriminator consumes build_state_vector() output directly (via
+# build_ood_state_vector), which is regime_onehot(8) + features(12) +
+# brain_votes(5) = 25. The old default of 64 never matched that, so the very
+# first is_ood() call raised a shape error and the OOD veto silently no-op'd
+# (caught by check_ood_and_override's except). 25 is the correct default.
+OOD_STATE_DIM = getattr(settings, 'OOD_STATE_DIM', 25)
 OOD_HIDDEN = getattr(settings, 'OOD_HIDDEN', 128)
 OOD_THRESHOLD = getattr(settings, 'OOD_THRESHOLD', 0.75)
 OOD_LR = getattr(settings, 'OOD_LR', 1e-3)
 OOD_EPOCHS = getattr(settings, 'OOD_EPOCHS', 20)
 OOD_RETRAIN_INTERVAL = getattr(settings, 'OOD_RETRAIN_INTERVAL', 3600)  # 1 hour
+# Minimum number of real closed-trade states required before the first
+# training run. Below this the job logs "waiting_history N/<min>" each cycle
+# instead of skipping forever (the old code required _is_trained to already be
+# True, which could never happen, so the discriminator never trained at all).
+OOD_BOOTSTRAP_MIN_HISTORY = getattr(settings, 'OOD_BOOTSTRAP_MIN_HISTORY', 100)
 
 
 class OODDiscriminator(nn.Module):
@@ -79,10 +92,39 @@ class OODDiscriminator(nn.Module):
         self._training_lock = threading.Lock()
         self._last_retrain = 0.0
         self._is_trained = False
-    
+
+    def _rebuild_net(self, state_dim: int, hidden: int | None = None) -> None:
+        """Rebuild the MLP for a new input width. Used when a state vector
+        arrives whose length differs from the built net (e.g. a stale model
+        saved at the old 64-dim width, or a feature-set change). Rebuilding
+        lets is_ood() work instead of raising a shape error that the caller
+        swallows -- which previously disabled the OOD veto entirely."""
+        hidden = hidden or OOD_HIDDEN
+        self.state_dim = state_dim
+        self.net = nn.Sequential(
+            nn.Linear(state_dim, hidden),
+            nn.ReLU(),
+            nn.Dropout(0.2),
+            nn.Linear(hidden, hidden // 2),
+            nn.ReLU(),
+            nn.Dropout(0.1),
+            nn.Linear(hidden // 2, 1),
+            nn.Sigmoid(),
+        )
+
+    def _ensure_width(self, width: int) -> None:
+        """Lazily rebuild the net if *width* does not match its input layer."""
+        if width != self.state_dim:
+            logger.warning(
+                f"OOD Discriminator state width mismatch: got {width}, net expects "
+                f"{self.state_dim}. Rebuilding the input layer (retrain required)."
+            )
+            self._rebuild_net(width)
+            self._is_trained = False
+
     def forward(self, state: torch.Tensor) -> torch.Tensor:
         """Forward pass.
-        
+
         Args:
             state: [batch_size, state_dim] or [state_dim]
         Returns:
@@ -90,6 +132,7 @@ class OODDiscriminator(nn.Module):
         """
         if state.dim() == 1:
             state = state.unsqueeze(0)
+        self._ensure_width(state.shape[-1])
         return self.net(state)
     
     def is_ood(self, state: torch.Tensor) -> tuple[bool, float]:
@@ -127,6 +170,10 @@ class OODDiscriminator(nn.Module):
         with self._training_lock:
             # Prepare data
             X = np.vstack([historical_states, live_states]).astype(np.float32)
+            # Align the net's input width to the data before training, so a
+            # model saved at a stale width (or a feature-set change) is
+            # retrained rather than raising a shape error.
+            self._ensure_width(X.shape[1])
             y = np.hstack([
                 np.zeros(len(historical_states), dtype=np.float32),
                 np.ones(len(live_states), dtype=np.float32)
@@ -209,8 +256,20 @@ class OODDiscriminator(nn.Module):
             return False
         try:
             state = torch.load(path, map_location='cpu')
+            saved_dim = state.get('state_dim')
+            if saved_dim and saved_dim != self.state_dim:
+                # Rebuild the MLP to the saved width BEFORE loading weights,
+                # otherwise load_state_dict raises a size-mismatch and load()
+                # returns False, leaving an untrained 25-dim net that is_ood()
+                # then rejects. This is what happened with a 64-dim checkpoint
+                # left by the old default: the OOD veto never armed.
+                logger.info(
+                    f"OOD checkpoint is {saved_dim}-dim (net is {self.state_dim}-dim); "
+                    f"rebuilding to match"
+                )
+                self._rebuild_net(int(saved_dim))
             self.load_state_dict(state['state_dict'])
-            self.state_dim = state.get('state_dim', self.state_dim)
+            self.state_dim = saved_dim or self.state_dim
             self.threshold = state.get('threshold', self.threshold)
             self._is_trained = state.get('is_trained', False)
             self._last_retrain = state.get('last_retrain', 0.0)

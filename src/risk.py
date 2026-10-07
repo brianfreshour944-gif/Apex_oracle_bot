@@ -228,9 +228,27 @@ class RiskManager:
         except Exception as e:
             logger.warning(f"_close_open_snapshot failed for {symbol} (non-fatal): {e}")
 
+    async def _persist_exit_order(self, symbol: str, order_result: dict, side: str, client_order_id: str) -> None:
+        """Record an emergency exit order (killswitch / exposure reduction) in
+        the order ledger with the snapshot's decision_id and the exchange's
+        filled_at. These flatten paths bypass bot._persist_order_record, so
+        without this the ledger has no exit row for them and a restart can only
+        guess the exit price by recency. Fail-safe: ledger writes never block
+        the emergency close itself."""
+        try:
+            from src.bot import _persist_order_record
+            from src.db import get_open_snapshot
+            snap = await asyncio.to_thread(get_open_snapshot, symbol)
+            decision_id = snap.get("decision_id") if snap else None
+            await asyncio.to_thread(
+                _persist_order_record, order_result, symbol, side, client_order_id, decision_id
+            )
+        except Exception as e:
+            logger.warning(f"[ORDER] failed to persist exit record for {symbol} (non-fatal): {e}")
+
     def get_transaction_costs(self, symbol: str) -> dict[str, float]:
         """Get transaction cost estimates for a symbol.
-        
+
         Uses dynamic model (recent realized costs) if enabled and available,
         otherwise falls back to static defaults from settings.
         
@@ -1679,6 +1697,7 @@ class RiskManager:
                 client_order_id = f"emergency_{symbol}_{side}_{qty_abs}_{int(time.time())}"
                 await self._cancel_protective_stop(symbol)
                 order_result = await self.exchange.create_order(symbol=symbol, qty=qty_abs, side=side, type="market", client_order_id=client_order_id, bypass_circuit_breaker=True)
+                await self._persist_exit_order(symbol, order_result, side, client_order_id)
                 filled_price = order_result.get("filled_avg_price", 0.0)
                 filled_qty = order_result.get("filled_qty", qty_abs)
                 actual_value = filled_price * filled_qty if filled_price > 0 else market_value
@@ -1731,6 +1750,7 @@ class RiskManager:
                     client_order_id=client_order_id,
                     bypass_circuit_breaker=True,
                 )
+                await self._persist_exit_order(symbol, order_result, side, client_order_id)
 
                 results.append({
                     "symbol": symbol,
