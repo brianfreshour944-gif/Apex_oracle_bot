@@ -388,6 +388,114 @@ class TestProtectiveStopLimit:
         with pytest.raises(ValueError):
             await exchange.submit_protective_stop("BTC/USD", qty=0.0, stop_price=1.0, limit_price=0.9)
 
+    @staticmethod
+    def _fake_stop_order(order_id, status, client_order_id, qty="0.5", filled_qty="0"):
+        o = MagicMock()
+        o.id = order_id
+        o.symbol = "BTC/USD"
+        o.qty = qty
+        o.filled_qty = filled_qty
+        o.filled_avg_price = None
+        o.status = status
+        o.client_order_id = client_order_id
+        o.filled_at = None
+        return o
+
+    @pytest.mark.asyncio
+    async def test_duplicate_client_order_id_adopts_live_existing_stop(self, exchange):
+        """Re-arming the same deterministic client_order_id (e.g. after a
+        restart lost _state.protective_stops) is rejected by Alpaca as a
+        duplicate. If the existing order is still LIVE (working on the book)
+        it must be ADOPTED, not dropped -- otherwise the position silently
+        ends up unprotected."""
+        from alpaca.common.exceptions import APIError
+
+        exchange.trading_client = MagicMock()
+        http_err = MagicMock()
+        http_err.response.status_code = 422
+        exchange.trading_client.submit_order = MagicMock(
+            side_effect=APIError('{"code": 40010001, "message": "client_order_id must be unique"}',
+                                 http_error=http_err)
+        )
+        exchange.trading_client.get_order_by_client_id = MagicMock(
+            return_value=self._fake_stop_order("stop_existing", "new", "BTCUSD_ps_deadbeef")
+        )
+
+        info = await exchange.submit_protective_stop(
+            "BTC/USD", qty=0.5, stop_price=48000.0, limit_price=47520.0,
+            client_order_id="BTCUSD_ps_deadbeef",
+        )
+
+        assert info["id"] == "stop_existing"          # adopted, not raised
+        assert info["type"] == "stop_limit"
+        assert info["side"] == "sell"
+        assert info["client_order_id"] == "BTCUSD_ps_deadbeef"
+        assert info["stop_price"] == 48000.0
+        # No second submit was attempted (we reused the resting order).
+        exchange.trading_client.submit_order.assert_called_once()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("dead_status", ["canceled", "expired", "rejected", "filled", "done_for_day"])
+    async def test_duplicate_with_dead_existing_order_rearms_fresh_id(self, exchange, dead_status):
+        """If the id is held by a NON-live order (canceled/expired/rejected/
+        filled/done_for_day), adopting it would leave the position with no
+        resting stop. The adapter must instead re-arm with a FRESH unique
+        client_order_id and return the new live stop."""
+        from alpaca.common.exceptions import APIError
+
+        exchange.trading_client = MagicMock()
+        http_err = MagicMock()
+        http_err.response.status_code = 422
+        fresh_order = self._fake_stop_order("stop_fresh", "new", "BTCUSD_ps_deadbeef_1712345678")
+        exchange.trading_client.submit_order = MagicMock(
+            side_effect=[
+                APIError('{"code": 40010001, "message": "client_order_id must be unique"}',
+                         http_error=http_err),
+                fresh_order,
+            ]
+        )
+        exchange.trading_client.get_order_by_client_id = MagicMock(
+            return_value=self._fake_stop_order("stop_dead", dead_status, "BTCUSD_ps_deadbeef")
+        )
+
+        info = await exchange.submit_protective_stop(
+            "BTC/USD", qty=0.5, stop_price=48000.0, limit_price=47520.0,
+            client_order_id="BTCUSD_ps_deadbeef",
+        )
+
+        assert info["id"] == "stop_fresh"             # a NEW live order, not the dead one
+        assert info["status"] == "new"
+        assert info["type"] == "stop_limit"
+        assert info["client_order_id"] != "BTCUSD_ps_deadbeef"   # fresh id
+        assert info["client_order_id"].startswith("BTCUSD_ps_deadbeef_")
+        assert info["stop_price"] == 48000.0
+        assert exchange.trading_client.submit_order.call_count == 2  # retried once
+        # The retried request carried the fresh id.
+        retried_request = exchange.trading_client.submit_order.call_args_list[1][0][0]
+        assert str(retried_request.client_order_id) == info["client_order_id"]
+
+    @pytest.mark.asyncio
+    async def test_rejected_duplicate_with_no_existing_order_still_raises(self, exchange):
+        """If the rejection is NOT a recoverable duplicate (no order with that
+        client_order_id exists), the error must propagate so the caller's
+        fail-safe logging fires -- we must never claim a stop is resting when
+        it is not."""
+        from alpaca.common.exceptions import APIError
+
+        exchange.trading_client = MagicMock()
+        http_err = MagicMock()
+        http_err.response.status_code = 422
+        exchange.trading_client.submit_order = MagicMock(
+            side_effect=APIError('{"code": 40010001, "message": "insufficient qty"}', http_error=http_err)
+        )
+        exchange.trading_client.get_order_by_client_id = MagicMock(side_effect=RuntimeError("404 not found"))
+
+        with pytest.raises(APIError):
+            await exchange.submit_protective_stop(
+                "BTC/USD", qty=0.5, stop_price=48000.0, limit_price=47520.0,
+                client_order_id="BTCUSD_ps_none",
+            )
+
     @pytest.mark.asyncio
     async def test_cancel_order_calls_sdk(self, exchange):
         exchange.trading_client = MagicMock()

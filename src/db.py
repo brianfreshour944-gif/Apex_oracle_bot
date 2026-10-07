@@ -285,7 +285,11 @@ def get_recent_order_records(symbol_clean: str, max_age_sec: float = 3600.0) -> 
                     "filled_qty": r.filled_qty,
                     "filled_avg_price": r.filled_avg_price,
                     "status": r.status,
+                    "type": r.type,
+                    "time_in_force": r.time_in_force,
+                    "client_order_id": r.client_order_id,
                     "submitted_at": r.submitted_at,
+                    "filled_at": r.filled_at,
                 }
                 for r in rows
                 if r.symbol.replace("/", "") == symbol_clean

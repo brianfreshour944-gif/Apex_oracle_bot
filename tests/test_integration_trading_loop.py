@@ -699,6 +699,53 @@ class TestProtectiveStops:
         assert "BTCUSD" not in bot_mod._state.protective_stops
 
     @pytest.mark.asyncio
+    async def test_stop_records_decision_id_and_client_order_id_in_ledger(self, ex, strategy, rm):
+        """The resting stop must land in the order ledger tagged with the
+        entry's decision_id and its own client_order_id, so a crash can
+        correlate the stop's later fill back to the position it protected."""
+        import src.bot as bot_mod
+        from src.db import get_recent_order_records
+
+        async def _fake_committee(symbol, price, signal):
+            return _deterministic_committee_result(action="buy", score=0.62)
+
+        with patch.object(settings, "PROTECTIVE_STOPS_ENABLED", True), \
+             patch("src.committee.committee.run_committee", new=_fake_committee):
+            await self._buy(ex, strategy, rm)
+
+        cid = ex.submit_protective_stop.call_args.kwargs["client_order_id"]
+        # Deterministic from the entry's decision_id, so reconcile can recompute
+        # it after a restart and match the stop's fill by client_order_id.
+        assert cid == bot_mod._protstop_client_order_id("BTC/USD", "test-decision-id")
+        assert cid.startswith("BTCUSD_ps_")
+        assert len(cid) <= 48  # Alpaca's client_order_id limit
+        records = get_recent_order_records("BTCUSD")
+        stops = [r for r in records if r["type"] == "stop_limit"]
+        assert len(stops) == 1
+        assert stops[0]["decision_id"] == "test-decision-id"
+        assert stops[0]["client_order_id"] == cid
+        assert stops[0]["side"] == "sell"
+        assert stops[0]["time_in_force"] == "gtc"
+
+    @pytest.mark.asyncio
+    async def test_stop_records_real_fill_price_and_filled_at(self, ex, strategy, rm):
+        """If the exchange reports the stop already triggered (a fast gap), the
+        ledger must store its real fill price/time -- that is the exit price a
+        restart reconciles the snapshot against."""
+        from src.db import get_recent_order_records
+        ex.submit_protective_stop = AsyncMock(return_value={
+            "id": "stop_filled", "type": "stop_limit", "status": "filled",
+            "filled_avg_price": 48000.0, "filled_qty": 0.1, "qty": 0.1,
+            "filled_at": "2026-10-07T12:00:00Z",
+        })
+        with patch.object(settings, "PROTECTIVE_STOPS_ENABLED", True):
+            await self._buy(ex, strategy, rm)
+
+        stops = [r for r in get_recent_order_records("BTCUSD") if r["type"] == "stop_limit"]
+        assert stops[0]["filled_avg_price"] == pytest.approx(48000.0)
+        assert stops[0]["filled_at"] is not None
+
+    @pytest.mark.asyncio
     async def test_stop_cancelled_before_trailing_close(self, ex, strategy, rm):
         import src.bot as bot_mod
         bot_mod._state.protective_stops["BTCUSD"] = "stop_2"
