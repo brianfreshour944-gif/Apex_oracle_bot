@@ -93,10 +93,10 @@ class TestExchangeFillDataIntegrity:
         assert result["commission_estimated"] is True
 
     @pytest.mark.asyncio
-    async def test_estimated_commission_scales_with_filled_quantity_shortfall(self, exchange):
-        """The estimate is scaled by the fill's quantity shortfall
-        (filled_qty/qty) -- the production paper-fill pattern where the
-        delivered quantity falls short of the ordered quantity."""
+    async def test_estimated_commission_uses_filled_notional_on_partial_fill(self, exchange):
+        """The fee is charged on what actually FILLED, so a partial fill
+        (filled_qty < qty) is priced on filled_qty alone -- the estimate must
+        NOT be scaled by an additional filled_qty/qty shortfall factor."""
         fake_filled_order = MagicMock()
         fake_filled_order.id = "ord_789"
         fake_filled_order.symbol = "BTC/USD"
@@ -114,8 +114,8 @@ class TestExchangeFillDataIntegrity:
 
         result = await exchange.create_order("BTC/USD", 1.0, "buy", confirm=True, confirm_timeout=2.0)
 
-        base = 50000.00 * 0.75 * (settings.ESTIMATED_TAKER_FEE_BPS / 10000.0)
-        assert result["commission"] == pytest.approx(base * 0.75)
+        expected = 50000.00 * 0.75 * (settings.ESTIMATED_TAKER_FEE_BPS / 10000.0)
+        assert result["commission"] == pytest.approx(expected)
 
     @pytest.mark.asyncio
     async def test_create_order_partial_fill_handles_filled_qty(self, exchange):

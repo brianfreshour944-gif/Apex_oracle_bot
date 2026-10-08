@@ -13,6 +13,8 @@ flags it (`commission_estimated`). These tests cover:
 """
 
 
+import datetime
+
 import pytest
 
 import src.bot as bot
@@ -56,6 +58,20 @@ def test_apply_estimated_commission_fills_flag_when_none_observed():
         "qty": 1.0, "commission": 0.0,
     }
     out = AlpacaExchange._apply_estimated_commission(dict(info))
+    expected = 100.0 * 1.0 * (settings.ESTIMATED_TAKER_FEE_BPS / 10000.0)
+    assert out["commission"] == pytest.approx(expected)
+    assert out["commission_estimated"] is True
+
+
+def test_apply_estimated_commission_ignores_ordered_qty_on_partial_fill():
+    """The fee is charged on what FILLED, so a partial fill (filled_qty < qty)
+    must not scale the estimate down: notional already uses filled_qty."""
+    info = {
+        "status": "filled", "filled_avg_price": 100.0, "filled_qty": 1.0,
+        "qty": 2.0, "commission": 0.0,
+    }
+    out = AlpacaExchange._apply_estimated_commission(dict(info))
+    # 100 * 1.0 filled (NOT * 0.5 shortfall) * rate
     expected = 100.0 * 1.0 * (settings.ESTIMATED_TAKER_FEE_BPS / 10000.0)
     assert out["commission"] == pytest.approx(expected)
     assert out["commission_estimated"] is True
@@ -140,3 +156,69 @@ async def test_orders_ledger_stores_estimated_commission(fresh_db):
     )
     fee = db.get_entry_fee_estimate("BTCUSD", entry_price=100.0)
     assert fee == pytest.approx(0.42)
+
+
+@pytest.mark.asyncio
+async def test_entry_fee_matched_by_decision_id_ignores_age(fresh_db):
+    """An 8h hold must STILL subtract the entry fee: the match is by
+    decision_id, so the old 2h age cap must not drop it."""
+    eight_h_ago = datetime.datetime.now(datetime.UTC) - datetime.timedelta(hours=8)
+    db.save_decision_snapshot(
+        decision_id="dec-long", symbol="BTC/USD", regime="trending",
+        final_action="buy", confidence=0.7, size_multiplier=1.0,
+        entry_price=100.0, qty=1.0, brain_votes={"transformer": "buy"},
+    )
+    db.save_order_record(
+        order_id="ord-entry-long", decision_id="dec-long", symbol="BTC/USD", side="buy",
+        qty=1.0, filled_qty=1.0, filled_avg_price=100.0, commission=0.30,
+        status="filled", type="market", submitted_at=eight_h_ago,
+    )
+
+    # Direct lookup keyed by decision_id: no age cap.
+    assert db.get_entry_fee_estimate("BTCUSD", 100.0, "dec-long") == pytest.approx(0.30)
+
+    await bot._record_committee_outcome(
+        "BTC/USD", 101.0, exit_reason="signal_close",
+        entry_price=100.0, qty=1.0, commission=0.25,
+    )
+    snap = _closed_snapshot("dec-long")
+    # gross +1.0, minus exit 0.25 and the 8h-old entry 0.30 -> +0.45
+    assert snap.realized_pnl == pytest.approx(0.45)
+
+
+@pytest.mark.asyncio
+async def test_entry_fee_sums_all_scale_in_buys(fresh_db):
+    """A scale-in folds several buys into ONE snapshot; the entry fee must be
+    the SUM of every one of their commissions, not just the first/latest."""
+    db.save_decision_snapshot(
+        decision_id="dec-scale", symbol="ETH/USD", regime="trending",
+        final_action="buy", confidence=0.7, size_multiplier=1.0,
+        entry_price=100.0, qty=4.0, brain_votes={"transformer": "buy"},
+    )
+    for i in range(4):
+        db.save_order_record(
+            order_id=f"ord-add-{i}", decision_id="dec-scale", symbol="ETH/USD", side="buy",
+            qty=1.0, filled_qty=1.0, filled_avg_price=100.0, commission=0.10,
+            status="filled", type="market",
+        )
+
+    assert db.get_entry_fee_estimate("ETHUSD", 100.0, "dec-scale") == pytest.approx(0.40)
+
+    await bot._record_committee_outcome(
+        "ETH/USD", 101.0, exit_reason="signal_close",
+        entry_price=100.0, qty=4.0, commission=0.25,
+    )
+    snap = _closed_snapshot("dec-scale")
+    # gross (101-100)*4 = 4.0, minus exit 0.25 and entry 0.40 -> 3.35
+    assert snap.realized_pnl == pytest.approx(3.35)
+
+
+def test_entry_fee_falls_back_to_symbol_price_without_decision_id(fresh_db):
+    """When no decision_id is available, the symbol/price heuristic still
+    finds the entry fill."""
+    db.save_order_record(
+        order_id="ord-fb", decision_id="dec-other", symbol="BTC/USD", side="buy",
+        qty=1.0, filled_qty=1.0, filled_avg_price=100.0, commission=0.55,
+        status="filled", type="market",
+    )
+    assert db.get_entry_fee_estimate("BTCUSD", 100.0, None) == pytest.approx(0.55)

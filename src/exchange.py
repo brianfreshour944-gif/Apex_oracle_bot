@@ -915,10 +915,10 @@ class AlpacaExchange:
         the fee is otherwise invisible to the ledger and every P&L snapshot
         looks fee-free. When commission is not directly observed, estimate it
         from the configured taker rate (``ESTIMATED_TAKER_FEE_BPS``) times the
-        notional, scaled by the fill's quantity shortfall (``filled_qty/qty``)
-        when one is present. The result is flagged with
-        ``"commission_estimated": True`` so downstream consumers never treat an
-        estimate as an observed fee.
+        FILLED notional (``filled_avg_price * filled_qty``). The fee is charged
+        on what actually filled, so no separate ordered-vs-filled scaling is
+        needed. The result is flagged with ``"commission_estimated": True`` so
+        downstream consumers never treat an estimate as an observed fee.
         """
         if not isinstance(order_info, dict):
             return order_info
@@ -935,10 +935,7 @@ class AlpacaExchange:
         filled_qty = float(order_info.get("filled_qty", 0.0) or 0.0)
         if filled_price <= 0.0 or filled_qty <= 0.0:
             return order_info
-        ordered_qty = float(order_info.get("qty", 0.0) or 0.0)
-        shortfall = (filled_qty / ordered_qty) if ordered_qty > 0 else 1.0
-        estimated_fee = filled_price * filled_qty * (rate_bps / 10000.0) * shortfall
-        order_info["commission"] = estimated_fee
+        order_info["commission"] = filled_price * filled_qty * (rate_bps / 10000.0)
         order_info["commission_estimated"] = True
         return order_info
 

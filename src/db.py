@@ -254,45 +254,87 @@ def save_order_record(
         return False
 
 
-def get_entry_fee_estimate(symbol_clean: str, entry_price: float, max_age_sec: float = 7200.0) -> float:
-    """Best-effort estimate of the fee paid on this position's entry leg.
+def get_entry_fee_estimate(
+    symbol_clean: str,
+    entry_price: float = 0.0,
+    decision_id: str | None = None,
+    max_age_sec: float = 7200.0,
+) -> float:
+    """Best-effort estimate of the fee paid on this position's ENTRY leg(s).
 
-    The decision snapshot records only ONE round-trip commission (observed at
-    exit), but a round trip pays a fee on the entry fill too. That entry fee is
-    read back from the orders ledger -- the most recent buy fill for the symbol
-    within ``max_age_sec`` -- whose commission is an estimate (see
-    exchange._apply_estimated_commission). Returns 0.0 (fail-safe) rather than
-    guessing when no matching buy fill is on record.
+    The decision snapshot records only ONE commission (observed on the exit
+    fill), but a round trip pays a fee on the entry fill(s) too. That entry fee
+    is read back from the orders ledger:
+
+      * When ``decision_id`` is known (the normal path), SUM the commissions of
+        every filled buy carrying it. A scale-in folds several buys into the
+        SAME snapshot (``update_decision_snapshot_position``), and each add paid
+        its own fee, so they must all count. There is deliberately NO age cap
+        here: a position may be held for days and its entry fills must still be
+        attributed.
+      * Only when ``decision_id`` is unavailable does it fall back to the most
+        recent buy fill for the symbol whose price is within 5% of
+        ``entry_price`` and submitted within ``max_age_sec`` -- the
+        pre-decision-id heuristic, used when there is no exact key to match on.
+
+    Returns 0.0 (fail-safe) rather than guessing when nothing matches.
     """
     try:
         _ensure_tables()
-        cutoff = datetime.datetime.now(datetime.UTC) - datetime.timedelta(seconds=max_age_sec)
         with get_db_session() as session:
-            stmt = (
-                select(OrderRecord)
-                .where(OrderRecord.submitted_at >= cutoff)
-                .order_by(OrderRecord.submitted_at.desc())
-                .limit(50)
-            )
+            if decision_id:
+                stmt = select(OrderRecord).where(OrderRecord.decision_id == decision_id)
+            else:
+                cutoff = datetime.datetime.now(datetime.UTC) - datetime.timedelta(seconds=max_age_sec)
+                stmt = (
+                    select(OrderRecord)
+                    .where(OrderRecord.submitted_at >= cutoff)
+                    .order_by(OrderRecord.submitted_at.desc())
+                    .limit(50)
+                )
             rows = session.execute(stmt).scalars().all()
-        best: OrderRecord | None = None
-        for r in rows:
-            if r.symbol.replace("/", "") != symbol_clean:
-                continue
-            if str(r.side).lower() != "buy":
-                continue
-            if float(r.filled_qty or 0.0) <= 0.0 or float(r.filled_avg_price or 0.0) <= 0.0:
+
+        def _is_real_buy(r: OrderRecord) -> bool:
+            return (
+                r.symbol.replace("/", "") == symbol_clean
+                and str(r.side).lower() == "buy"
+                and float(r.filled_qty or 0.0) > 0.0
+                and float(r.filled_avg_price or 0.0) > 0.0
+            )
+
+        if decision_id:
+            return sum(float(r.commission or 0.0) for r in rows if _is_real_buy(r))
+
+        for r in rows:  # newest-first
+            if not _is_real_buy(r):
                 continue
             if float(r.commission or 0.0) <= 0.0:
                 continue
             if entry_price > 0 and abs(float(r.filled_avg_price) - entry_price) / entry_price > 0.05:
                 continue  # a different entry than this position's
-            best = r  # rows are newest-first
-            break
-        return float(best.commission) if best is not None else 0.0
+            return float(r.commission)
+        return 0.0
     except Exception as e:
         logger.warning(f"get_entry_fee_estimate failed (non-fatal): {e}")
         return 0.0
+
+
+def get_order_record_decision_id(order_id: str) -> str | None:
+    """Return the decision_id already stored on an order row, or None.
+
+    Used before refreshing a resting protective stop's ledger row: if the
+    snapshot lookup fails we must NOT overwrite the decision_id written at arm
+    time with None (``save_order_record`` merges, so a None field would wipe
+    it). Preserving it keeps the stop fill matched to the right snapshot.
+    """
+    try:
+        _ensure_tables()
+        with get_db_session() as session:
+            row = session.get(OrderRecord, order_id)
+            return row.decision_id if row is not None else None
+    except Exception as e:
+        logger.warning(f"get_order_record_decision_id failed (non-fatal): {e}")
+        return None
 
 
 def get_recent_order_records(symbol_clean: str, max_age_sec: float = 3600.0) -> list[dict[str, Any]]:

@@ -165,8 +165,15 @@ async def _record_committee_outcome(
         entry_fee = 0.0
         try:
             from src.db import get_entry_fee_estimate
+            # Match the entry fills by the snapshot's decision_id and SUM them
+            # (a scale-in folds several buys into this one snapshot, each with
+            # its own fee). Only fall back to the symbol/price heuristic when
+            # there is no decision_id to key on.
             entry_fee = abs(float(await asyncio.to_thread(
-                get_entry_fee_estimate, symbol.replace("/", ""), entry_price,
+                get_entry_fee_estimate,
+                symbol.replace("/", ""),
+                entry_price,
+                snap.get("decision_id"),
             )))
         except Exception as fee_err:
             logger.debug(f"entry-fee lookup failed for {symbol} (non-fatal): {fee_err}")
@@ -1061,6 +1068,82 @@ async def reconcile_open_snapshots(exchange: AlpacaExchange) -> None:
                     logger.debug(f"Position-desync alert skipped (non-fatal): {alert_err}")
                 await _close_orphan_position(exchange, held, positions)
 
+        # Ledger refresh for PROTECTIVE-STOP fills, run BEFORE the ghost-close
+        # loop below. _arm_protective_stop writes the resting stop's ledger row
+        # once, at arm time, while the stop is still ``new`` (status="new",
+        # filled_avg_price=0). A stop that later TRIGGERS fills server-side with
+        # no bot code in the path, so its ledger row keeps the stale "new"/0
+        # fill -- the ghost-close loop's exit lookup then sees filled_avg_price
+        # 0, drops it, and falls back to the last bar (a fabricated exit price
+        # for the learner, the exact class of bug CR-6 fixed for the normal exit
+        # paths). Refresh EVERY tracked stop from the exchange first so its real
+        # fill is on record before the ghost-close loop reads the ledger.
+        #
+        # This covers tracked stops for symbols that are NOT held (the stop
+        # filled and flattened the position) as well as held ones: the earlier
+        # version ran after the ghost-close loop and only for held symbols, so a
+        # stop that flattened the position could never have its real fill price
+        # recorded in time. Keyed off _state.protective_stops (which reconcile
+        # repopulates at startup and _arm_protective_stop fills live), not just
+        # held symbols. Fail-safe: any error is logged and skipped.
+        try:
+            from src.db import get_open_snapshot, get_order_record_decision_id
+            from src.exchange import LIVE_ORDER_STATUSES
+            # get_open_snapshot keys on the exact stored symbol ("ETH/USD"), not
+            # the slash-stripped form used as the stop-registry key. Fall back to
+            # the slash form for an unheld symbol with no position to map from.
+            pos_symbol_by_clean = {p["symbol"].replace("/", ""): p["symbol"] for p in positions}
+            for o_sym, order_id in list(_state.protective_stops.items()):
+                if not order_id:
+                    continue
+                try:
+                    fresh = await exchange.get_order(str(order_id))
+                except Exception as order_err:
+                    logger.debug(f"[RECONCILE] Could not refresh protective stop {order_id} (non-fatal): {order_err}")
+                    continue
+                if not isinstance(fresh, dict):
+                    continue
+                status = str(fresh.get("status", "")).lower()
+                if status in LIVE_ORDER_STATUSES or float(fresh.get("filled_qty", 0) or 0) <= 0:
+                    continue
+                # It filled while we were polling: persist the real fill so the
+                # ghost-close loop (and a later restart) matches it by
+                # decision_id. Alpaca reports no commission, so fill in the
+                # estimate (same as the entry/exit paths) so the stop leg's fee
+                # is on record too.
+                fresh = AlpacaExchange._apply_estimated_commission(fresh)
+                decision_id = None
+                try:
+                    snap = await asyncio.to_thread(
+                        get_open_snapshot, pos_symbol_by_clean.get(o_sym, o_sym)
+                    )
+                    decision_id = snap.get("decision_id") if snap else None
+                except Exception as snap_err:
+                    logger.debug(f"[RECONCILE] snapshot lookup for stop refresh failed (non-fatal): {snap_err}")
+                if not decision_id:
+                    # No open snapshot (it may already be closed) -- preserve the
+                    # decision_id the arm-time row already carries rather than
+                    # overwriting it with None.
+                    decision_id = await asyncio.to_thread(
+                        get_order_record_decision_id, str(order_id)
+                    )
+                await asyncio.to_thread(
+                    _persist_order_record,
+                    fresh,
+                    o_sym,
+                    "sell",
+                    fresh.get("client_order_id"),
+                    decision_id,
+                    "stop_limit",
+                    "gtc",
+                )
+                logger.warning(
+                    f"[RECONCILE] Protective stop {order_id} for {o_sym} filled "
+                    f"({status}) -- ledger updated with its real fill price."
+                )
+        except Exception as e:
+            logger.debug(f"[RECONCILE] Protective-stop ledger refresh skipped (non-fatal): {e}")
+
         # NOTE: no early `return` here when open_snaps is empty -- the loop below
         # is already a no-op on an empty list, and an early return would skip the
         # stale-open-order check further down too. That's not hypothetical: found
@@ -1204,66 +1287,6 @@ async def reconcile_open_snapshots(exchange: AlpacaExchange) -> None:
                         )
         except Exception as e:
             logger.debug(f"[RECONCILE] Protective-stop reconciliation skipped (non-fatal): {e}")
-
-        # Ledger refresh for PROTECTIVE-STOP fills. _arm_protective_stop writes
-        # the resting stop's ledger row once, at arm time, when the stop is
-        # still ``new`` (status="new", filled_avg_price=0). A stop that later
-        # TRIGGERS fills server-side with no bot code in the path, so its
-        # ledger row keeps the stale "new"/0 fill forever -- reconcile's exit
-        # lookup then sees filled_avg_price 0, drops it, and falls back to the
-        # last bar (a fabricated exit price for the learner, the exact class of
-        # bug CR-6 fixed for the normal exit paths). Refresh every resting stop
-        # still tracked for a HELD symbol from the exchange so its real fill
-        # price/time is on record for the next reconcile. Only held symbols:
-        # an unheld symbol's stop is dangling and handled just above.
-        try:
-            from src.db import get_open_snapshot
-            from src.exchange import LIVE_ORDER_STATUSES
-            # get_open_snapshot keys on the exact stored symbol ("ETH/USD"),
-            # not the slash-stripped form used as the stop-registry key.
-            pos_symbol_by_clean = {p["symbol"].replace("/", ""): p["symbol"] for p in positions}
-            for o_sym in list(held_symbols):
-                order_id = _state.protective_stops.get(o_sym)
-                if not order_id:
-                    continue
-                try:
-                    fresh = await exchange.get_order(str(order_id))
-                except Exception as order_err:
-                    logger.debug(f"[RECONCILE] Could not refresh protective stop {order_id} (non-fatal): {order_err}")
-                    continue
-                if not isinstance(fresh, dict):
-                    continue
-                status = str(fresh.get("status", "")).lower()
-                if status not in LIVE_ORDER_STATUSES and float(fresh.get("filled_qty", 0) or 0) > 0:
-                    # It filled while we were polling: persist the real fill so
-                    # a later reconcile matches it by decision_id. Alpaca reports
-                    # no commission, so fill in the estimate (same as the entry/
-                    # exit paths) so the stop leg's fee is on record too.
-                    fresh = AlpacaExchange._apply_estimated_commission(fresh)
-                    decision_id = None
-                    try:
-                        snap = await asyncio.to_thread(
-                            get_open_snapshot, pos_symbol_by_clean.get(o_sym, o_sym)
-                        )
-                        decision_id = snap.get("decision_id") if snap else None
-                    except Exception as snap_err:
-                        logger.debug(f"[RECONCILE] snapshot lookup for stop refresh failed (non-fatal): {snap_err}")
-                    await asyncio.to_thread(
-                        _persist_order_record,
-                        fresh,
-                        o_sym,
-                        "sell",
-                        fresh.get("client_order_id"),
-                        decision_id,
-                        "stop_limit",
-                        "gtc",
-                    )
-                    logger.warning(
-                        f"[RECONCILE] Protective stop {order_id} for {o_sym} filled "
-                        f"({status}) -- ledger updated with its real fill price."
-                    )
-        except Exception as e:
-            logger.debug(f"[RECONCILE] Protective-stop ledger refresh skipped (non-fatal): {e}")
 
 
 def _parse_order_timestamp(value: Any) -> datetime | None:
