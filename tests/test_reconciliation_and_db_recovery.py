@@ -17,9 +17,10 @@ from src.config import settings
 
 
 class FakeExchange:
-    def __init__(self, positions=None, orders=None, price=100.0, fail_positions=False):
+    def __init__(self, positions=None, orders=None, price=100.0, fail_positions=False, orders_by_id=None):
         self.positions = positions or []
         self.orders = orders or []
+        self.orders_by_id = orders_by_id or {}
         self.price = price
         self.fail_positions = fail_positions
         self.submitted = []
@@ -35,6 +36,9 @@ class FakeExchange:
 
     async def get_orders(self, status=None, limit=100):
         return list(self.orders)
+
+    async def get_order(self, order_id):
+        return (self.orders_by_id or {}).get(str(order_id))
 
     async def create_order(self, symbol, qty, side, **kwargs):
         self.submitted.append((symbol, qty, side))
@@ -506,6 +510,41 @@ async def test_ghost_close_matches_protective_stop_by_client_order_id(fresh_db, 
     assert row.status == "closed"
     assert row.realized_pnl == pytest.approx(100.0)  # (150 - 100) * 2
     assert "actual_fill" in row.exit_reason
+
+
+@pytest.mark.asyncio
+async def test_resting_stop_fill_is_refreshed_into_the_ledger(fresh_db, clean_state, monkeypatch):
+    """A resting stop armed while the position was open fills server-side with
+    no bot code in the path, so its ledger row is frozen at arm time
+    (status="new", filled_avg_price=0). Reconcile must refresh it from the
+    exchange, or a later restart can only estimate the exit from a bar."""
+    monkeypatch.setattr(settings, "PROTECTIVE_STOPS_ENABLED", True)
+    _open_snapshot("snap-held", "ETH/USD", entry=100.0, qty=2.0)
+    # Arm-time row: still working, no fill yet.
+    db.save_order_record(order_id="stop_live", decision_id="snap-held", symbol="ETH/USD",
+                         side="sell", qty=2.0, status="new", type="stop_limit",
+                         client_order_id="ETHUSD_ps_x", time_in_force="gtc")
+    bot._state.protective_stops["ETHUSD"] = "stop_live"
+    # The stop triggered and filled while the position was still held.
+    ex = FakeExchange(
+        positions=[{"symbol": "ETH/USD", "qty": "2.0", "side": "long", "avg_entry_price": 100.0}],
+        orders_by_id={"stop_live": {
+            "id": "stop_live", "client_order_id": "ETHUSD_ps_x", "symbol": "ETH/USD",
+            "qty": 2.0, "filled_qty": 2.0, "filled_avg_price": 88.0, "status": "filled",
+            "type": "stop_limit", "side": "sell", "filled_at": "2026-10-07T12:00:00Z",
+        }},
+    )
+
+    try:
+        await bot.reconcile_open_snapshots(ex)
+    finally:
+        bot._state.protective_stops.pop("ETHUSD", None)
+
+    rows = [r for r in db.get_recent_order_records("ETHUSD") if r["type"] == "stop_limit"]
+    assert len(rows) == 1
+    assert rows[0]["filled_avg_price"] == pytest.approx(88.0)
+    assert rows[0]["status"] == "filled"
+    assert rows[0]["decision_id"] == "snap-held"
 
 
 class _RestingStopExchange(FakeExchange):

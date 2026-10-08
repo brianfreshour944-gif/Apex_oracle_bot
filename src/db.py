@@ -254,6 +254,47 @@ def save_order_record(
         return False
 
 
+def get_entry_fee_estimate(symbol_clean: str, entry_price: float, max_age_sec: float = 7200.0) -> float:
+    """Best-effort estimate of the fee paid on this position's entry leg.
+
+    The decision snapshot records only ONE round-trip commission (observed at
+    exit), but a round trip pays a fee on the entry fill too. That entry fee is
+    read back from the orders ledger -- the most recent buy fill for the symbol
+    within ``max_age_sec`` -- whose commission is an estimate (see
+    exchange._apply_estimated_commission). Returns 0.0 (fail-safe) rather than
+    guessing when no matching buy fill is on record.
+    """
+    try:
+        _ensure_tables()
+        cutoff = datetime.datetime.now(datetime.UTC) - datetime.timedelta(seconds=max_age_sec)
+        with get_db_session() as session:
+            stmt = (
+                select(OrderRecord)
+                .where(OrderRecord.submitted_at >= cutoff)
+                .order_by(OrderRecord.submitted_at.desc())
+                .limit(50)
+            )
+            rows = session.execute(stmt).scalars().all()
+        best: OrderRecord | None = None
+        for r in rows:
+            if r.symbol.replace("/", "") != symbol_clean:
+                continue
+            if str(r.side).lower() != "buy":
+                continue
+            if float(r.filled_qty or 0.0) <= 0.0 or float(r.filled_avg_price or 0.0) <= 0.0:
+                continue
+            if float(r.commission or 0.0) <= 0.0:
+                continue
+            if entry_price > 0 and abs(float(r.filled_avg_price) - entry_price) / entry_price > 0.05:
+                continue  # a different entry than this position's
+            best = r  # rows are newest-first
+            break
+        return float(best.commission) if best is not None else 0.0
+    except Exception as e:
+        logger.warning(f"get_entry_fee_estimate failed (non-fatal): {e}")
+        return 0.0
+
+
 def get_recent_order_records(symbol_clean: str, max_age_sec: float = 3600.0) -> list[dict[str, Any]]:
     """Most-recent-first order-ledger records for a symbol within max_age_sec.
 

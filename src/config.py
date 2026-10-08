@@ -250,9 +250,13 @@ class TradingBotSettings(BaseSettings):
                     "of price movement in sideways regimes -- structurally "
                     "guaranteed losses. Price-based exits (stop loss, take "
                     "profit, trailing stop, max hold) are NOT gated by this "
-                    "and always fire. An identical close signal persisting "
-                    "for MIN_HOLD_CONSECUTIVE_SIGNALS consecutive scans also "
-                    "overrides the gate, so a genuine reversal is not trapped.",
+                    "and always fire. DISCRETIONARY strategy closes (momentum, "
+                    "trend, mean-reversion, breakout, grid, scalp) respect this "
+                    "strictly -- MIN_HOLD_CONSECUTIVE_SIGNALS does NOT override "
+                    "them (production 2026-10-02: repeated momentum-flip churn "
+                    "closed 8+ BTC/USD positions after ~3 scans). Other closes "
+                    "may override the gate when an identical signal persists for "
+                    "MIN_HOLD_CONSECUTIVE_SIGNALS consecutive scans.",
         ge=0
     )
     LOSS_LIMIT_WINDOW_HOURS: float = Field(
@@ -281,6 +285,14 @@ class TradingBotSettings(BaseSettings):
         description="Consecutive scans the same strategy-based close signal "
                     "must persist to override the min-hold gate.",
         ge=1
+    )
+    COMMITTEE_MIN_HOLD_EXEMPT: bool = Field(
+        default=False,
+        description="If True, a committee 'sell' override of a discretionary "
+                    "strategy close bypasses the MIN_HOLD_MINUTES gate (restores "
+                    "the pre-2026-10-07 churn behaviour). Default False: the "
+                    "committee override is gated exactly like the strategy's own "
+                    "discretionary close. Price-based risk exits are never gated.",
     )
     DUST_VALUE_USD: float = Field(
         default=1.50,
@@ -388,6 +400,18 @@ class TradingBotSettings(BaseSettings):
     TX_COST_USE_DYNAMIC: bool = Field(
         default=True,
         description="If True, use recent realized slippage/spread from exchange instead of static defaults.",
+    )
+    ESTIMATED_TAKER_FEE_BPS: float = Field(
+        default=25.0,
+        description="Estimated taker fee (bps per side) charged by the exchange "
+                    "per crypto fill. Alpaca's paper/adapter reports commission 0.0 "
+                    "(alpaca-py>=0.43 Order has no .commission attribute), so the "
+                    "real fee is estimated from this rate and scaled by the fill's "
+                    "observed quantity shortfall. Used only when no commission is "
+                    "directly observed; any recorded fee is flagged as an estimate. "
+                    "0 disables fee estimation.",
+        ge=0,
+        le=1000,
     )
 
     # --- Multi-Timeframe Feature Engineering ---
