@@ -517,14 +517,18 @@ async def test_resting_stop_fill_is_refreshed_into_the_ledger(fresh_db, clean_st
     """A resting stop armed while the position was open fills server-side with
     no bot code in the path, so its ledger row is frozen at arm time
     (status="new", filled_avg_price=0). Reconcile must refresh it from the
-    exchange, or a later restart can only estimate the exit from a bar."""
+    exchange, or a later restart can only estimate the exit from a bar.
+
+    The in-memory ``_state.protective_stops`` registry is deliberately EMPTY
+    here: reconcile runs at startup, before any cycle repopulates it, so the
+    refresh must find its candidates in the orders ledger instead."""
     monkeypatch.setattr(settings, "PROTECTIVE_STOPS_ENABLED", True)
     _open_snapshot("snap-held", "ETH/USD", entry=100.0, qty=2.0)
-    # Arm-time row: still working, no fill yet.
+    # Arm-time row: still working, no fill yet. Registry is NOT populated.
     db.save_order_record(order_id="stop_live", decision_id="snap-held", symbol="ETH/USD",
                          side="sell", qty=2.0, status="new", type="stop_limit",
                          client_order_id="ETHUSD_ps_x", time_in_force="gtc")
-    bot._state.protective_stops["ETHUSD"] = "stop_live"
+    bot._state.protective_stops.clear()
     # The stop triggered and filled while the position was still held.
     ex = FakeExchange(
         positions=[{"symbol": "ETH/USD", "qty": "2.0", "side": "long", "avg_entry_price": 100.0}],
@@ -535,10 +539,7 @@ async def test_resting_stop_fill_is_refreshed_into_the_ledger(fresh_db, clean_st
         }},
     )
 
-    try:
-        await bot.reconcile_open_snapshots(ex)
-    finally:
-        bot._state.protective_stops.pop("ETHUSD", None)
+    await bot.reconcile_open_snapshots(ex)
 
     rows = [r for r in db.get_recent_order_records("ETHUSD") if r["type"] == "stop_limit"]
     assert len(rows) == 1
@@ -549,19 +550,19 @@ async def test_resting_stop_fill_is_refreshed_into_the_ledger(fresh_db, clean_st
 
 @pytest.mark.asyncio
 async def test_stop_that_flattened_position_is_reconciled_from_its_fill(fresh_db, clean_state, monkeypatch):
-    """A tracked stop that filled server-side and flattened the position must
-    still be refreshed from the exchange BEFORE the ghost-close loop, so the
-    ghost close records exit_price_source == "actual_fill" at the stop's real
-    fill price -- not the current bar. (The earlier refresh ran after the
-    ghost-close loop and only for held symbols, so this case was never
-    covered.)"""
+    """A stop that filled server-side and flattened the position must still be
+    refreshed from the exchange BEFORE the ghost-close loop, so the ghost close
+    records exit_price_source == "actual_fill" at the stop's real fill price --
+    not the current bar. The registry is EMPTY (the restart case): the refresh
+    finds the stop via the orders ledger, so it does not depend on
+    _state.protective_stops being repopulated first."""
     monkeypatch.setattr(settings, "PROTECTIVE_STOPS_ENABLED", True)
     _open_snapshot("snap-flat", "ETH/USD", entry=100.0, qty=2.0)
     # Arm-time ledger row: still working, no fill yet.
     db.save_order_record(order_id="stop_flat", decision_id="snap-flat", symbol="ETH/USD",
                          side="sell", qty=2.0, status="new", type="stop_limit",
                          client_order_id="ETHUSD_ps_x", time_in_force="gtc")
-    bot._state.protective_stops["ETHUSD"] = "stop_flat"
+    bot._state.protective_stops.clear()
     # The stop triggered and filled at 90, flattening the position -- so the
     # exchange reports NO open position for ETH/USD.
     ex = FakeExchange(
@@ -574,10 +575,7 @@ async def test_stop_that_flattened_position_is_reconciled_from_its_fill(fresh_db
         }},
     )
 
-    try:
-        await bot.reconcile_open_snapshots(ex)
-    finally:
-        bot._state.protective_stops.pop("ETHUSD", None)
+    await bot.reconcile_open_snapshots(ex)
 
     with db.get_db_session() as session:
         row = session.query(db.DecisionSnapshot).filter_by(decision_id="snap-flat").first()

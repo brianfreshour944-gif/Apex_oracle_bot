@@ -1076,24 +1076,22 @@ async def reconcile_open_snapshots(exchange: AlpacaExchange) -> None:
         # fill -- the ghost-close loop's exit lookup then sees filled_avg_price
         # 0, drops it, and falls back to the last bar (a fabricated exit price
         # for the learner, the exact class of bug CR-6 fixed for the normal exit
-        # paths). Refresh EVERY tracked stop from the exchange first so its real
+        # paths). Refresh every stale stop from the exchange first so its real
         # fill is on record before the ghost-close loop reads the ledger.
         #
-        # This covers tracked stops for symbols that are NOT held (the stop
-        # filled and flattened the position) as well as held ones: the earlier
-        # version ran after the ghost-close loop and only for held symbols, so a
-        # stop that flattened the position could never have its real fill price
-        # recorded in time. Keyed off _state.protective_stops (which reconcile
-        # repopulates at startup and _arm_protective_stop fills live), not just
-        # held symbols. Fail-safe: any error is logged and skipped.
+        # Candidates come from the ORDERS LEDGER, not _state.protective_stops:
+        # that registry is in-memory and EMPTY after a restart, and reconcile
+        # runs at startup -- before any cycle repopulates it -- so keying off it
+        # would skip exactly the restart case this pass exists for. This also
+        # covers a stop whose position is no longer held (it filled and
+        # flattened the position). Fail-safe: any error is logged and skipped.
         try:
-            from src.db import get_open_snapshot, get_order_record_decision_id
+            from src.db import get_open_snapshot, get_stale_protective_stops
             from src.exchange import LIVE_ORDER_STATUSES
-            # get_open_snapshot keys on the exact stored symbol ("ETH/USD"), not
-            # the slash-stripped form used as the stop-registry key. Fall back to
-            # the slash form for an unheld symbol with no position to map from.
-            pos_symbol_by_clean = {p["symbol"].replace("/", ""): p["symbol"] for p in positions}
-            for o_sym, order_id in list(_state.protective_stops.items()):
+            stale_stops = await asyncio.to_thread(get_stale_protective_stops)
+            for rec in stale_stops:
+                order_id = rec.get("order_id")
+                o_sym = str(rec.get("symbol", "")).replace("/", "")
                 if not order_id:
                     continue
                 try:
@@ -1106,33 +1104,28 @@ async def reconcile_open_snapshots(exchange: AlpacaExchange) -> None:
                 status = str(fresh.get("status", "")).lower()
                 if status in LIVE_ORDER_STATUSES or float(fresh.get("filled_qty", 0) or 0) <= 0:
                     continue
-                # It filled while we were polling: persist the real fill so the
-                # ghost-close loop (and a later restart) matches it by
+                # It filled while we were down/polling: persist the real fill so
+                # the ghost-close loop (and a later restart) matches it by
                 # decision_id. Alpaca reports no commission, so fill in the
                 # estimate (same as the entry/exit paths) so the stop leg's fee
                 # is on record too.
                 fresh = AlpacaExchange._apply_estimated_commission(fresh)
-                decision_id = None
-                try:
-                    snap = await asyncio.to_thread(
-                        get_open_snapshot, pos_symbol_by_clean.get(o_sym, o_sym)
-                    )
-                    decision_id = snap.get("decision_id") if snap else None
-                except Exception as snap_err:
-                    logger.debug(f"[RECONCILE] snapshot lookup for stop refresh failed (non-fatal): {snap_err}")
+                # Prefer the decision_id already on the ledger row (the arm-time
+                # key); only if it is missing, look one up from the open snapshot
+                # for the stored symbol.
+                decision_id = rec.get("decision_id")
                 if not decision_id:
-                    # No open snapshot (it may already be closed) -- preserve the
-                    # decision_id the arm-time row already carries rather than
-                    # overwriting it with None.
-                    decision_id = await asyncio.to_thread(
-                        get_order_record_decision_id, str(order_id)
-                    )
+                    try:
+                        snap = await asyncio.to_thread(get_open_snapshot, rec.get("symbol") or o_sym)
+                        decision_id = snap.get("decision_id") if snap else None
+                    except Exception as snap_err:
+                        logger.debug(f"[RECONCILE] snapshot lookup for stop refresh failed (non-fatal): {snap_err}")
                 await asyncio.to_thread(
                     _persist_order_record,
                     fresh,
                     o_sym,
                     "sell",
-                    fresh.get("client_order_id"),
+                    fresh.get("client_order_id") or rec.get("client_order_id"),
                     decision_id,
                     "stop_limit",
                     "gtc",
@@ -2496,9 +2489,32 @@ async def process_signal_for_symbol(symbol: str, current_price: float, risk_mana
                         await risk_manager.release_position_slot(symbol)
                     logger.error(f"[{symbol}] Order placement failed: {_describe_exception(order_e)}")
                     raise
+                # Key the entry ledger row on the snapshot it actually belongs
+                # to. A genuinely fresh entry creates a snapshot with
+                # committee_result.decision_id, but a SCALE-IN -- and also a
+                # "new entry" that save_decision_snapshot FOLDS into a still-open
+                # snapshot for the symbol -- belongs to that existing snapshot.
+                # Recording the buy under anything else means the snapshot close
+                # (get_entry_fee_estimate keys on the snapshot's decision_id)
+                # misses the fee and under-subtracts the round trip. Resolve the
+                # open snapshot first; fall back to the committee id when none
+                # exists yet (the fresh-entry case, where the snapshot is created
+                # below with that same id). get_open_snapshot is cached per cycle,
+                # so the snapshot block further down re-reads it for free.
+                ledger_decision_id = committee_result.decision_id
+                try:
+                    from src.db import get_open_snapshot
+                    snap = await asyncio.to_thread(get_open_snapshot, symbol)
+                    if snap and snap.get("decision_id"):
+                        ledger_decision_id = snap["decision_id"]
+                except Exception as snap_err:
+                    logger.debug(
+                        f"[{symbol}] snapshot lookup for entry ledger key "
+                        f"failed (non-fatal): {snap_err}"
+                    )
                 await asyncio.to_thread(
                     _persist_order_record, order_result, symbol, signal["action"], client_order_id,
-                    decision_id=committee_result.decision_id,
+                    decision_id=ledger_decision_id,
                 )
                 # Also write the ENTRY-leg fill to the orders ledger (not just
                 # the exit legs). This records the entry fee estimate so the
@@ -2508,7 +2524,7 @@ async def process_signal_for_symbol(symbol: str, current_price: float, risk_mana
                 # only writes when the order actually filled.
                 await _persist_exit_order(
                     order_result, symbol, signal["action"], client_order_id,
-                    committee_result.decision_id,
+                    ledger_decision_id,
                 )
                 # Record the fill time for the ENTRY_RACE_GUARD check above:
                 # the next cycle's positions snapshot may not yet include this

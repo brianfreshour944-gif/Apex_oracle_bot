@@ -319,22 +319,63 @@ def get_entry_fee_estimate(
         return 0.0
 
 
-def get_order_record_decision_id(order_id: str) -> str | None:
-    """Return the decision_id already stored on an order row, or None.
+def get_stale_protective_stops(max_age_sec: float = 7 * 24 * 3600.0) -> list[dict[str, Any]]:
+    """Order-ledger protective-stop rows that may still need a fill refresh.
 
-    Used before refreshing a resting protective stop's ledger row: if the
-    snapshot lookup fails we must NOT overwrite the decision_id written at arm
-    time with None (``save_order_record`` merges, so a None field would wipe
-    it). Preserving it keeps the stop fill matched to the right snapshot.
+    A resting stop_limit sell is written to the ledger once, at arm time,
+    while it is still working (status "new", filled_avg_price 0). If it later
+    triggers, it fills server-side with no bot code in the path, so its row
+    stays stale until something refreshes it from the exchange.
+
+    Startup reconciliation cannot rely on ``_state.protective_stops`` to find
+    those rows: that registry is in-memory and EMPTY after a restart, and
+    reconcile runs at startup -- before any cycle repopulates it. So the
+    candidates are read back from the ledger instead: every stop_limit sell
+    within ``max_age_sec`` that is either non-final (status still in the live
+    set) or has no recorded fill price. Rows already finalized WITH a fill
+    price are up to date and skipped.
+
+    The window defaults to 7 days (a resting stop's own lifetime is bounded by
+    the position's, and gtc stops can rest a long time), which is why this is
+    much wider than get_recent_order_records' 1h.
     """
+    from src.exchange import LIVE_ORDER_STATUSES
     try:
         _ensure_tables()
+        cutoff = datetime.datetime.now(datetime.UTC) - datetime.timedelta(seconds=max_age_sec)
         with get_db_session() as session:
-            row = session.get(OrderRecord, order_id)
-            return row.decision_id if row is not None else None
+            stmt = (
+                select(OrderRecord)
+                .where(
+                    OrderRecord.type == "stop_limit",
+                    OrderRecord.side == "sell",
+                    OrderRecord.submitted_at >= cutoff,
+                )
+                .order_by(OrderRecord.submitted_at.desc())
+                .limit(200)
+            )
+            rows = session.execute(stmt).scalars().all()
+        out: list[dict[str, Any]] = []
+        for r in rows:
+            status = str(r.status or "").lower()
+            if status not in LIVE_ORDER_STATUSES and float(r.filled_avg_price or 0.0) > 0.0:
+                continue  # finalized with a real fill -> already up to date
+            out.append({
+                "order_id": r.order_id,
+                "decision_id": r.decision_id,
+                "symbol": r.symbol,
+                "side": r.side,
+                "client_order_id": r.client_order_id,
+                "status": r.status,
+                "filled_qty": r.filled_qty,
+                "filled_avg_price": r.filled_avg_price,
+                "submitted_at": r.submitted_at,
+                "filled_at": r.filled_at,
+            })
+        return out
     except Exception as e:
-        logger.warning(f"get_order_record_decision_id failed (non-fatal): {e}")
-        return None
+        logger.warning(f"get_stale_protective_stops failed (non-fatal): {e}")
+        return []
 
 
 def get_recent_order_records(symbol_clean: str, max_age_sec: float = 3600.0) -> list[dict[str, Any]]:
