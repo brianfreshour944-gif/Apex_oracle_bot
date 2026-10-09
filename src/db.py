@@ -254,6 +254,130 @@ def save_order_record(
         return False
 
 
+def get_entry_fee_estimate(
+    symbol_clean: str,
+    entry_price: float = 0.0,
+    decision_id: str | None = None,
+    max_age_sec: float = 7200.0,
+) -> float:
+    """Best-effort estimate of the fee paid on this position's ENTRY leg(s).
+
+    The decision snapshot records only ONE commission (observed on the exit
+    fill), but a round trip pays a fee on the entry fill(s) too. That entry fee
+    is read back from the orders ledger:
+
+      * When ``decision_id`` is known (the normal path), SUM the commissions of
+        every filled buy carrying it. A scale-in folds several buys into the
+        SAME snapshot (``update_decision_snapshot_position``), and each add paid
+        its own fee, so they must all count. There is deliberately NO age cap
+        here: a position may be held for days and its entry fills must still be
+        attributed.
+      * Only when ``decision_id`` is unavailable does it fall back to the most
+        recent buy fill for the symbol whose price is within 5% of
+        ``entry_price`` and submitted within ``max_age_sec`` -- the
+        pre-decision-id heuristic, used when there is no exact key to match on.
+
+    Returns 0.0 (fail-safe) rather than guessing when nothing matches.
+    """
+    try:
+        _ensure_tables()
+        with get_db_session() as session:
+            if decision_id:
+                stmt = select(OrderRecord).where(OrderRecord.decision_id == decision_id)
+            else:
+                cutoff = datetime.datetime.now(datetime.UTC) - datetime.timedelta(seconds=max_age_sec)
+                stmt = (
+                    select(OrderRecord)
+                    .where(OrderRecord.submitted_at >= cutoff)
+                    .order_by(OrderRecord.submitted_at.desc())
+                    .limit(50)
+                )
+            rows = session.execute(stmt).scalars().all()
+
+        def _is_real_buy(r: OrderRecord) -> bool:
+            return (
+                r.symbol.replace("/", "") == symbol_clean
+                and str(r.side).lower() == "buy"
+                and float(r.filled_qty or 0.0) > 0.0
+                and float(r.filled_avg_price or 0.0) > 0.0
+            )
+
+        if decision_id:
+            return sum(float(r.commission or 0.0) for r in rows if _is_real_buy(r))
+
+        for r in rows:  # newest-first
+            if not _is_real_buy(r):
+                continue
+            if float(r.commission or 0.0) <= 0.0:
+                continue
+            if entry_price > 0 and abs(float(r.filled_avg_price) - entry_price) / entry_price > 0.05:
+                continue  # a different entry than this position's
+            return float(r.commission)
+        return 0.0
+    except Exception as e:
+        logger.warning(f"get_entry_fee_estimate failed (non-fatal): {e}")
+        return 0.0
+
+
+def get_stale_protective_stops(max_age_sec: float = 7 * 24 * 3600.0) -> list[dict[str, Any]]:
+    """Order-ledger protective-stop rows that may still need a fill refresh.
+
+    A resting stop_limit sell is written to the ledger once, at arm time,
+    while it is still working (status "new", filled_avg_price 0). If it later
+    triggers, it fills server-side with no bot code in the path, so its row
+    stays stale until something refreshes it from the exchange.
+
+    Startup reconciliation cannot rely on ``_state.protective_stops`` to find
+    those rows: that registry is in-memory and EMPTY after a restart, and
+    reconcile runs at startup -- before any cycle repopulates it. So the
+    candidates are read back from the ledger instead: every stop_limit sell
+    within ``max_age_sec`` that is either non-final (status still in the live
+    set) or has no recorded fill price. Rows already finalized WITH a fill
+    price are up to date and skipped.
+
+    The window defaults to 7 days (a resting stop's own lifetime is bounded by
+    the position's, and gtc stops can rest a long time), which is why this is
+    much wider than get_recent_order_records' 1h.
+    """
+    from src.exchange import LIVE_ORDER_STATUSES
+    try:
+        _ensure_tables()
+        cutoff = datetime.datetime.now(datetime.UTC) - datetime.timedelta(seconds=max_age_sec)
+        with get_db_session() as session:
+            stmt = (
+                select(OrderRecord)
+                .where(
+                    OrderRecord.type == "stop_limit",
+                    OrderRecord.side == "sell",
+                    OrderRecord.submitted_at >= cutoff,
+                )
+                .order_by(OrderRecord.submitted_at.desc())
+                .limit(200)
+            )
+            rows = session.execute(stmt).scalars().all()
+        out: list[dict[str, Any]] = []
+        for r in rows:
+            status = str(r.status or "").lower()
+            if status not in LIVE_ORDER_STATUSES and float(r.filled_avg_price or 0.0) > 0.0:
+                continue  # finalized with a real fill -> already up to date
+            out.append({
+                "order_id": r.order_id,
+                "decision_id": r.decision_id,
+                "symbol": r.symbol,
+                "side": r.side,
+                "client_order_id": r.client_order_id,
+                "status": r.status,
+                "filled_qty": r.filled_qty,
+                "filled_avg_price": r.filled_avg_price,
+                "submitted_at": r.submitted_at,
+                "filled_at": r.filled_at,
+            })
+        return out
+    except Exception as e:
+        logger.warning(f"get_stale_protective_stops failed (non-fatal): {e}")
+        return []
+
+
 def get_recent_order_records(symbol_clean: str, max_age_sec: float = 3600.0) -> list[dict[str, Any]]:
     """Most-recent-first order-ledger records for a symbol within max_age_sec.
 

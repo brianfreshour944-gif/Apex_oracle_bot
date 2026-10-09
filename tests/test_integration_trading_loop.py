@@ -484,6 +484,106 @@ class TestFullTradingLoop:
             _state.position_adds.pop(symbol, None)
 
     @pytest.mark.asyncio
+    async def test_scale_in_entry_fee_is_summed_via_open_snapshot_decision_id(
+        self, mock_exchange, mock_strategy, mock_risk_manager
+    ):
+        """A scale-in add must be persisted under the OPEN snapshot's
+        decision_id -- not the add's throwaway committee id -- so the snapshot
+        close (db.get_entry_fee_estimate, keyed on decision_id) sums BOTH buys'
+        fees. Driven through the real process_signal_for_symbol buy path rather
+        than hand-built ledger rows, because the defect is in WHICH id the buy
+        path records the row under, which hand-built rows can't exercise.
+        """
+        import pandas as pd
+        import polars as pl
+
+        import src.bot as bot_mod
+        from src.committee.models import BrainVote, CommitteeResult
+        from src.db import get_entry_fee_estimate, get_recent_order_records
+
+        # Two distinct committee decision_ids: the fresh entry mints its own,
+        # the scale-in add mints a throwaway one that must NOT key its row.
+        ids = ["entry-dec", "add-dec"]
+
+        async def _committee(symbol, price, signal):
+            return CommitteeResult(
+                action="buy", score=0.62, size_multiplier=1.0, entropy=0.0,
+                votes=[
+                    BrainVote(name="momentum", action="buy", confidence=0.7, weight=0.3,
+                              regime="trending", reason="test"),
+                    BrainVote(name="quant", action="buy", confidence=0.6, weight=0.3,
+                              regime="trending", reason="test"),
+                ],
+                decision_id=ids.pop(0),
+            )
+
+        mock_exchange.get_latest_bar = AsyncMock(return_value=pl.DataFrame({
+            "t": [pd.Timestamp.now(tz="UTC")], "open": [50000.0], "high": [50100.0],
+            "low": [49900.0], "close": [50050.0], "volume": [100.0], "vwap": [50025.0],
+            "trade_count": [100],
+        }))
+
+        # Clear any entry cooldown / add-tracking left by earlier tests in this
+        # class (the class fixture resets fill times and stops, not these), or
+        # the first buy is skipped as "on entry cooldown".
+        bot_mod._state.cooldowns.clear()
+        bot_mod._state.position_adds.clear()
+        # Drop any open BTC/USD snapshot a prior test left behind: the suite
+        # shares one DB, and a leftover open snapshot would make entry 1 fold
+        # into it (creating no "entry-dec") and defeat the assertion. Clear the
+        # in-memory snapshot cache too, or a stale cached dict is returned.
+        import src.db as _db
+        from src.db import DecisionSnapshot, get_db_session
+        _db._open_snapshot_cache.clear()
+        with get_db_session() as _s:
+            _s.query(DecisionSnapshot).filter_by(symbol="BTC/USD", status="open").delete()
+            _s.commit()
+
+        # Distinct order ids per fill, or the ledger upserts both writes onto
+        # one row and the sum can't be observed.
+        order_ids = iter(["entry-ord", "add-ord"])
+
+        async def _create_order(**_kwargs):
+            return {"id": next(order_ids), "filled_avg_price": 50000.0,
+                    "filled_qty": 0.1, "commission": 5.0, "status": "filled"}
+        mock_exchange.create_order = AsyncMock(side_effect=_create_order)
+
+        # ENTRY_RACE_GUARD would veto the second (scale-in) buy seconds after
+        # the first fill; disable it so both buys go out in this one test.
+        with patch.object(settings, "ENTRY_RACE_GUARD_SECONDS", 0), \
+             patch("src.committee.committee.run_committee", new=_committee):
+            # Entry 1 -- fresh buy, no position yet.
+            mock_exchange.get_positions = AsyncMock(return_value=[])
+            await process_signal_for_symbol(
+                symbol="BTC/USD", current_price=50050.0, risk_manager=mock_risk_manager,
+                strategy=mock_strategy, ex=mock_exchange, positions=[],
+                regime_flag=None, banned_symbols=set(),
+            )
+
+            # Entry 2 -- scale-in add; a position is now held.
+            held = [{"symbol": "BTC/USD", "qty": "0.1", "side": "long",
+                     "avg_entry_price": 50050.0, "market_value": 5005.0}]
+            mock_exchange.get_positions = AsyncMock(return_value=held)
+            await process_signal_for_symbol(
+                symbol="BTC/USD", current_price=50050.0, risk_manager=mock_risk_manager,
+                strategy=mock_strategy, ex=mock_exchange, positions=held,
+                regime_flag=None, banned_symbols=set(),
+            )
+
+        assert mock_exchange.create_order.await_count == 2
+        # Scope to THIS test's two ledger rows; the suite shares one DB and
+        # earlier tests leave their own BTC/USD buy rows behind.
+        buys = [r for r in get_recent_order_records("BTCUSD")
+                if r["order_id"] in {"entry-ord", "add-ord"}]
+        assert len(buys) == 2
+        # The scale-in row carries the OPEN snapshot's id, not "add-dec".
+        assert {r["decision_id"] for r in buys} == {"entry-dec"}
+        # Both legs' fees (5.0 each) are summed for the snapshot the position
+        # closes on; the add's throwaway id keys nothing.
+        assert get_entry_fee_estimate("BTCUSD", 50050.0, "entry-dec") == pytest.approx(10.0)
+        assert get_entry_fee_estimate("BTCUSD", 50050.0, "add-dec") == 0.0
+
+    @pytest.mark.asyncio
     async def test_rolling_loss_limit_does_not_block_exit(self, mock_exchange, mock_strategy, mock_risk_manager):
         """Regression (reproduced 2026-10-05): the rolling soft loss-limit was
         a top-of-function early return, so on a losing day (exactly when it

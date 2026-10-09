@@ -669,11 +669,26 @@ class TradingStrategy:
                 if action == "close":
                     # Min-hold gate: real fills showed 47-60s round trips that
                     # bleed slippage on every churn cycle. Price-based exits
-                    # (checked above) always fire regardless. A close signal
-                    # that persists on consecutive scans overrides the gate so
-                    # a genuine reversal is not trapped. In backtests there is
-                    # no wall-clock entry timestamp, so fail open (allow the
+                    # (checked above) always fire regardless. In backtests there
+                    # is no wall-clock entry timestamp, so fail open (allow the
                     # close) rather than distort historical validation.
+                    #
+                    # Two classes of strategy close are handled differently:
+                    #  - DISCRETIONARY/alpha closes (momentum, trend,
+                    #    mean-reversion, breakout, grid, scalp) must respect
+                    #    MIN_HOLD strictly. The consecutive-signal override is
+                    #    deliberately NOT available to them: a persistent
+                    #    "loss of momentum" signal is exactly the churn the gate
+                    #    exists to stop. Production evidence 2026-10-02: 8+
+                    #    BTC/USD snapshots closed on "[MOMENTUM] Momentum: Loss
+                    #    of bullish momentum" after holding_period_sec 177-179
+                    #    (~3 scans), each round trip paying ~0.5% fees for a
+                    #    ~0.1% gross move.
+                    #  - other closes keep the consecutive-signal override so a
+                    #    genuine reversal is not permanently trapped.
+                    # Price-based risk exits (stop loss, trailing, max hold)
+                    # are handled earlier by _check_price_based_exits and never
+                    # reach this gate.
                     allowed = False
                     if self.backtest:
                         allowed = True
@@ -692,6 +707,19 @@ class TradingStrategy:
                             if held_minutes >= settings.MIN_HOLD_MINUTES:
                                 allowed = True
                                 self._pending_close.pop(symbol, None)
+                            elif self._is_discretionary_close(strat_signal.get("reason", "")):
+                                # Strict gate: a discretionary close cannot use
+                                # the consecutive-signal override. Hold to
+                                # MIN_HOLD_MINUTES; price-based risk exits (SL/
+                                # TP/trailing/max-hold, checked above) still
+                                # protect the position in the meantime.
+                                self._pending_close.pop(symbol, None)
+                                logger.info(
+                                    f"[{symbol}] Min-hold gate: discretionary close "
+                                    f"'{strat_signal.get('reason', '')}' held back "
+                                    f"({held_minutes:.1f} min < {settings.MIN_HOLD_MINUTES} min; "
+                                    f"no consecutive-signal override for discretionary exits)"
+                                )
                             else:
                                 reason_key = strat_signal.get("reason", "")
                                 prev = self._pending_close.get(symbol, ("", 0))
@@ -756,6 +784,59 @@ class TradingStrategy:
                 "atr": 0.0,
                 "features": {}
             }
+
+    def get_position_held_minutes(self, symbol: str, position: dict[str, Any] | None) -> float | None:
+        """Minutes the current position has been held, or None if unknown.
+
+        Uses the exchange position's entry timestamp (``created_at`` /
+        ``entry_time`` / ``opened_at``, attached in bot.py from the open
+        decision snapshot) when present, else the process-local first-sighting
+        clock. On the very first sighting (no timestamp and no clock yet) it
+        records the clock and returns None -- the caller must then fail OPEN
+        (not gate), matching the strategy's own min-hold gate. Shared by that
+        gate and by bot.py's committee-override gate so both clocks agree.
+        """
+        entry_raw = None
+        if position:
+            entry_raw = next(
+                (position[k] for k in ("created_at", "entry_time", "opened_at") if position.get(k) is not None),
+                None,
+            )
+        if entry_raw is not None:
+            created = self._parse_entry_time(entry_raw)
+            if created is not None:
+                return (datetime.now(UTC) - created).total_seconds() / 60.0
+        created = self._position_first_seen.get(symbol)
+        if created is None:
+            self._position_first_seen[symbol] = datetime.now(UTC)
+            return None
+        return (datetime.now(UTC) - created).total_seconds() / 60.0
+
+    @staticmethod
+    def _is_discretionary_close(reason: str) -> bool:
+        """Whether a strategy ``close`` reason is a discretionary/alpha exit.
+
+        Discretionary closes come from the execution strategies
+        (src/execution_strategies.py): momentum, trend-following,
+        mean-reversion, breakout, grid and scalp. They must respect MIN_HOLD
+        strictly -- the consecutive-signal override is not available to them,
+        because a persistent momentum/regime flip is precisely the churn the
+        gate exists to stop.
+
+        Price-based risk exits (stop loss, profit target, trailing stop, max
+        hold) are produced by ``_check_price_based_exits`` and returned before
+        this gate is ever reached, so they are never routed through here.
+
+        Fail-safe: an unrecognized reason is treated as discretionary (strict),
+        matching the conservative default of holding the position to MIN_HOLD
+        rather than allowing an early bypass.
+        """
+        if not reason:
+            return True
+        return not any(
+            token in reason.lower()
+            for token in ("stop_loss", "stop loss", "trailing", "max_hold", "max hold")
+        )
 
     @staticmethod
     def _parse_entry_time(value: Any) -> datetime | None:

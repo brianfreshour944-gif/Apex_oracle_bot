@@ -17,9 +17,10 @@ from src.config import settings
 
 
 class FakeExchange:
-    def __init__(self, positions=None, orders=None, price=100.0, fail_positions=False):
+    def __init__(self, positions=None, orders=None, price=100.0, fail_positions=False, orders_by_id=None):
         self.positions = positions or []
         self.orders = orders or []
+        self.orders_by_id = orders_by_id or {}
         self.price = price
         self.fail_positions = fail_positions
         self.submitted = []
@@ -35,6 +36,9 @@ class FakeExchange:
 
     async def get_orders(self, status=None, limit=100):
         return list(self.orders)
+
+    async def get_order(self, order_id):
+        return (self.orders_by_id or {}).get(str(order_id))
 
     async def create_order(self, symbol, qty, side, **kwargs):
         self.submitted.append((symbol, qty, side))
@@ -505,6 +509,78 @@ async def test_ghost_close_matches_protective_stop_by_client_order_id(fresh_db, 
         row = session.query(db.DecisionSnapshot).filter_by(decision_id="snap-coid").first()
     assert row.status == "closed"
     assert row.realized_pnl == pytest.approx(100.0)  # (150 - 100) * 2
+    assert "actual_fill" in row.exit_reason
+
+
+@pytest.mark.asyncio
+async def test_resting_stop_fill_is_refreshed_into_the_ledger(fresh_db, clean_state, monkeypatch):
+    """A resting stop armed while the position was open fills server-side with
+    no bot code in the path, so its ledger row is frozen at arm time
+    (status="new", filled_avg_price=0). Reconcile must refresh it from the
+    exchange, or a later restart can only estimate the exit from a bar.
+
+    The in-memory ``_state.protective_stops`` registry is deliberately EMPTY
+    here: reconcile runs at startup, before any cycle repopulates it, so the
+    refresh must find its candidates in the orders ledger instead."""
+    monkeypatch.setattr(settings, "PROTECTIVE_STOPS_ENABLED", True)
+    _open_snapshot("snap-held", "ETH/USD", entry=100.0, qty=2.0)
+    # Arm-time row: still working, no fill yet. Registry is NOT populated.
+    db.save_order_record(order_id="stop_live", decision_id="snap-held", symbol="ETH/USD",
+                         side="sell", qty=2.0, status="new", type="stop_limit",
+                         client_order_id="ETHUSD_ps_x", time_in_force="gtc")
+    bot._state.protective_stops.clear()
+    # The stop triggered and filled while the position was still held.
+    ex = FakeExchange(
+        positions=[{"symbol": "ETH/USD", "qty": "2.0", "side": "long", "avg_entry_price": 100.0}],
+        orders_by_id={"stop_live": {
+            "id": "stop_live", "client_order_id": "ETHUSD_ps_x", "symbol": "ETH/USD",
+            "qty": 2.0, "filled_qty": 2.0, "filled_avg_price": 88.0, "status": "filled",
+            "type": "stop_limit", "side": "sell", "filled_at": "2026-10-07T12:00:00Z",
+        }},
+    )
+
+    await bot.reconcile_open_snapshots(ex)
+
+    rows = [r for r in db.get_recent_order_records("ETHUSD") if r["type"] == "stop_limit"]
+    assert len(rows) == 1
+    assert rows[0]["filled_avg_price"] == pytest.approx(88.0)
+    assert rows[0]["status"] == "filled"
+    assert rows[0]["decision_id"] == "snap-held"
+
+
+@pytest.mark.asyncio
+async def test_stop_that_flattened_position_is_reconciled_from_its_fill(fresh_db, clean_state, monkeypatch):
+    """A stop that filled server-side and flattened the position must still be
+    refreshed from the exchange BEFORE the ghost-close loop, so the ghost close
+    records exit_price_source == "actual_fill" at the stop's real fill price --
+    not the current bar. The registry is EMPTY (the restart case): the refresh
+    finds the stop via the orders ledger, so it does not depend on
+    _state.protective_stops being repopulated first."""
+    monkeypatch.setattr(settings, "PROTECTIVE_STOPS_ENABLED", True)
+    _open_snapshot("snap-flat", "ETH/USD", entry=100.0, qty=2.0)
+    # Arm-time ledger row: still working, no fill yet.
+    db.save_order_record(order_id="stop_flat", decision_id="snap-flat", symbol="ETH/USD",
+                         side="sell", qty=2.0, status="new", type="stop_limit",
+                         client_order_id="ETHUSD_ps_x", time_in_force="gtc")
+    bot._state.protective_stops.clear()
+    # The stop triggered and filled at 90, flattening the position -- so the
+    # exchange reports NO open position for ETH/USD.
+    ex = FakeExchange(
+        positions=[],
+        price=999.0,
+        orders_by_id={"stop_flat": {
+            "id": "stop_flat", "client_order_id": "ETHUSD_ps_x", "symbol": "ETH/USD",
+            "qty": 2.0, "filled_qty": 2.0, "filled_avg_price": 90.0, "status": "filled",
+            "type": "stop_limit", "side": "sell", "filled_at": "2026-10-07T12:00:00Z",
+        }},
+    )
+
+    await bot.reconcile_open_snapshots(ex)
+
+    with db.get_db_session() as session:
+        row = session.query(db.DecisionSnapshot).filter_by(decision_id="snap-flat").first()
+    assert row.status == "closed"
+    assert row.realized_pnl == pytest.approx(-20.0)  # (90 - 100) * 2
     assert "actual_fill" in row.exit_reason
 
 

@@ -507,9 +507,16 @@ class AlpacaExchange:
             "symbol": str(order.symbol),
             "qty": float(order.qty) if order.qty else 0.0,
             "filled_qty": float(order.filled_qty) if order.filled_qty else 0.0,
+            "filled_avg_price": float(order.filled_avg_price) if getattr(order, "filled_avg_price", None) else 0.0,
             "status": str(order.status.value) if hasattr(order.status, "value") else str(order.status),
             "side": str(order.side.value) if hasattr(order.side, "value") else str(order.side),
             "type": str(order.type.value) if hasattr(order.type, "value") else str(order.type),
+            # Needed by reconcile's protective-stop ledger refresh: a resting
+            # stop that fills server-side must be written back with its real
+            # fill price/time and the client_order_id that links it to the
+            # decision. Order (alpaca-py>=0.43) exposes all three.
+            "client_order_id": str(order.client_order_id) if getattr(order, "client_order_id", None) else None,
+            "filled_at": _iso_or_none(getattr(order, "filled_at", None)),
         }
 
     @retry(retry=retry_if_exception(_retry_unless_circuit_open), stop=stop_after_attempt(5), wait=wait_exponential(multiplier=1, min=2, max=30))
@@ -826,7 +833,7 @@ class AlpacaExchange:
             self._order_cache[client_order_id] = (time.time(), order_info)
 
         if not confirm or not order_id:
-            return order_info
+            return self._apply_estimated_commission(order_info)
 
         # Confirmation loop
         start_time = time.monotonic()
@@ -871,7 +878,7 @@ class AlpacaExchange:
                                 order_info["slippage"] = 0.0
                                 order_info["fill_data_incomplete"] = True
                     order_info["status"] = status
-                    return order_info
+                    return self._apply_estimated_commission(order_info)
             except Exception as e:
                 logger.warning(f"Error polling order {order_id}: {e}")
 
@@ -898,6 +905,38 @@ class AlpacaExchange:
             except Exception as e:
                 logger.debug(f"Fallback order lookup failed: {e}")
 
+        return self._apply_estimated_commission(order_info)
+
+    @staticmethod
+    def _apply_estimated_commission(order_info: dict[str, Any]) -> dict[str, Any]:
+        """Fill in an estimated commission when the exchange reports none.
+
+        Alpaca surfaces no commission on the Order model (alpaca-py>=0.43), so
+        the fee is otherwise invisible to the ledger and every P&L snapshot
+        looks fee-free. When commission is not directly observed, estimate it
+        from the configured taker rate (``ESTIMATED_TAKER_FEE_BPS``) times the
+        FILLED notional (``filled_avg_price * filled_qty``). The fee is charged
+        on what actually filled, so no separate ordered-vs-filled scaling is
+        needed. The result is flagged with ``"commission_estimated": True`` so
+        downstream consumers never treat an estimate as an observed fee.
+        """
+        if not isinstance(order_info, dict):
+            return order_info
+        if order_info.get("status") != "filled":
+            return order_info
+        if order_info.get("commission_estimated"):
+            return order_info
+        if float(order_info.get("commission", 0.0) or 0.0) > 0.0:
+            return order_info  # directly observed -- leave untouched
+        rate_bps = float(getattr(settings, "ESTIMATED_TAKER_FEE_BPS", 0.0) or 0.0)
+        if rate_bps <= 0.0:
+            return order_info
+        filled_price = float(order_info.get("filled_avg_price", 0.0) or 0.0)
+        filled_qty = float(order_info.get("filled_qty", 0.0) or 0.0)
+        if filled_price <= 0.0 or filled_qty <= 0.0:
+            return order_info
+        order_info["commission"] = filled_price * filled_qty * (rate_bps / 10000.0)
+        order_info["commission_estimated"] = True
         return order_info
 
     async def submit_protective_stop(

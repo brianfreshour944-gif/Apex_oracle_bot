@@ -153,10 +153,31 @@ async def _record_committee_outcome(
         else:  # sell / short
             realized_pnl = (entry_price - exit_price) * qty
 
-        # Fees are real money: subtract the round-trip commission from the
-        # recorded PnL so near-zero trades don't get inflated win labels
-        # (audit finding F-B).
-        realized_pnl -= abs(float(commission))
+        # Fees are real money. ``commission`` is the fee on the EXIT fill the
+        # caller just observed (exchange.py estimates it when Alpaca reports
+        # none). A round trip also pays a fee on the ENTRY leg, which the exit
+        # caller cannot see -- read it back from the orders ledger so the
+        # snapshot's realized PnL is not entry-fee-blind. Both are estimates
+        # when the exchange reports no commission (flagged commission_estimated
+        # on the order record); we still subtract them so near-zero trades
+        # don't get inflated win labels (audit finding F-B).
+        exit_fee = abs(float(commission))
+        entry_fee = 0.0
+        try:
+            from src.db import get_entry_fee_estimate
+            # Match the entry fills by the snapshot's decision_id and SUM them
+            # (a scale-in folds several buys into this one snapshot, each with
+            # its own fee). Only fall back to the symbol/price heuristic when
+            # there is no decision_id to key on.
+            entry_fee = abs(float(await asyncio.to_thread(
+                get_entry_fee_estimate,
+                symbol.replace("/", ""),
+                entry_price,
+                snap.get("decision_id"),
+            )))
+        except Exception as fee_err:
+            logger.debug(f"entry-fee lookup failed for {symbol} (non-fatal): {fee_err}")
+        realized_pnl -= exit_fee + entry_fee
 
         # return_pct must be computed from the NET (post-commission) PnL, not
         # the gross price delta -- otherwise a trade that's a real loser after
@@ -1047,6 +1068,75 @@ async def reconcile_open_snapshots(exchange: AlpacaExchange) -> None:
                     logger.debug(f"Position-desync alert skipped (non-fatal): {alert_err}")
                 await _close_orphan_position(exchange, held, positions)
 
+        # Ledger refresh for PROTECTIVE-STOP fills, run BEFORE the ghost-close
+        # loop below. _arm_protective_stop writes the resting stop's ledger row
+        # once, at arm time, while the stop is still ``new`` (status="new",
+        # filled_avg_price=0). A stop that later TRIGGERS fills server-side with
+        # no bot code in the path, so its ledger row keeps the stale "new"/0
+        # fill -- the ghost-close loop's exit lookup then sees filled_avg_price
+        # 0, drops it, and falls back to the last bar (a fabricated exit price
+        # for the learner, the exact class of bug CR-6 fixed for the normal exit
+        # paths). Refresh every stale stop from the exchange first so its real
+        # fill is on record before the ghost-close loop reads the ledger.
+        #
+        # Candidates come from the ORDERS LEDGER, not _state.protective_stops:
+        # that registry is in-memory and EMPTY after a restart, and reconcile
+        # runs at startup -- before any cycle repopulates it -- so keying off it
+        # would skip exactly the restart case this pass exists for. This also
+        # covers a stop whose position is no longer held (it filled and
+        # flattened the position). Fail-safe: any error is logged and skipped.
+        try:
+            from src.db import get_open_snapshot, get_stale_protective_stops
+            from src.exchange import LIVE_ORDER_STATUSES
+            stale_stops = await asyncio.to_thread(get_stale_protective_stops)
+            for rec in stale_stops:
+                order_id = rec.get("order_id")
+                o_sym = str(rec.get("symbol", "")).replace("/", "")
+                if not order_id:
+                    continue
+                try:
+                    fresh = await exchange.get_order(str(order_id))
+                except Exception as order_err:
+                    logger.debug(f"[RECONCILE] Could not refresh protective stop {order_id} (non-fatal): {order_err}")
+                    continue
+                if not isinstance(fresh, dict):
+                    continue
+                status = str(fresh.get("status", "")).lower()
+                if status in LIVE_ORDER_STATUSES or float(fresh.get("filled_qty", 0) or 0) <= 0:
+                    continue
+                # It filled while we were down/polling: persist the real fill so
+                # the ghost-close loop (and a later restart) matches it by
+                # decision_id. Alpaca reports no commission, so fill in the
+                # estimate (same as the entry/exit paths) so the stop leg's fee
+                # is on record too.
+                fresh = AlpacaExchange._apply_estimated_commission(fresh)
+                # Prefer the decision_id already on the ledger row (the arm-time
+                # key); only if it is missing, look one up from the open snapshot
+                # for the stored symbol.
+                decision_id = rec.get("decision_id")
+                if not decision_id:
+                    try:
+                        snap = await asyncio.to_thread(get_open_snapshot, rec.get("symbol") or o_sym)
+                        decision_id = snap.get("decision_id") if snap else None
+                    except Exception as snap_err:
+                        logger.debug(f"[RECONCILE] snapshot lookup for stop refresh failed (non-fatal): {snap_err}")
+                await asyncio.to_thread(
+                    _persist_order_record,
+                    fresh,
+                    o_sym,
+                    "sell",
+                    fresh.get("client_order_id") or rec.get("client_order_id"),
+                    decision_id,
+                    "stop_limit",
+                    "gtc",
+                )
+                logger.warning(
+                    f"[RECONCILE] Protective stop {order_id} for {o_sym} filled "
+                    f"({status}) -- ledger updated with its real fill price."
+                )
+        except Exception as e:
+            logger.debug(f"[RECONCILE] Protective-stop ledger refresh skipped (non-fatal): {e}")
+
         # NOTE: no early `return` here when open_snaps is empty -- the loop below
         # is already a no-op on an empty list, and an early return would skip the
         # stale-open-order check further down too. That's not hypothetical: found
@@ -1812,13 +1902,53 @@ async def process_signal_for_symbol(symbol: str, current_price: float, risk_mana
                     print("\n".join(dashboard), flush=True)
                     _state.latest_scan_results[symbol] = {"score": committee_result.score, "action": committee_result.action.upper(), "price": current_price}
                     return
-    
+
                 _state.latest_scan_results[symbol] = {"score": committee_result.score, "action": committee_result.action.upper(), "price": current_price}
-    
+
                 # Override original signal action & confidence with committee's consensus decision
                 signal["action"] = committee_result.action
                 signal["confidence"] = committee_result.score
-    
+
+            # --- COMMITTEE-OVERRIDE MIN-HOLD GATE ---
+            # A held long whose strategy would have emitted a discretionary
+            # close (momentum/trend/mean-reversion/breakout/grid/scalp) can
+            # still reach here as a committee "sell" if the committee overrode
+            # that close. strategies.py's own gate never sees this path, so
+            # without this check the committee override bypassed MIN_HOLD
+            # entirely -- reproducing the exact 2026-10-02 churn (BTC/USD
+            # closed on "[MOMENTUM] Momentum: Loss of bullish momentum" after
+            # 177-179s, ~0.5% fees for a ~0.1% gross move). This gate holds a
+            # discretionary exit to MIN_HOLD_MINUTES; every PRICE-BASED risk
+            # exit (stop loss, trailing stop, profit target, max hold) was
+            # already handled above and returned, so it is never blocked here.
+            if (
+                signal["action"] == "sell"
+                and current_position is not None
+                and not settings.COMMITTEE_MIN_HOLD_EXEMPT
+                and settings.MIN_HOLD_MINUTES > 0
+                and strategy is not None
+                and not getattr(strategy, "backtest", False)
+                and TradingStrategy._is_discretionary_close(str(signal.get("reason", "")))
+            ):
+                # get_position_held_minutes returns None on first sighting (it
+                # records the clock) -- fail open then, matching the strategy's
+                # own gate. A non-numeric result (broken/mocked strategy) also
+                # fails open so a legitimate exit is never blocked.
+                held_minutes = strategy.get_position_held_minutes(symbol, current_position)
+                if isinstance(held_minutes, (int, float)) and held_minutes < settings.MIN_HOLD_MINUTES:
+                    logger.info(
+                        f"[{symbol}] Min-hold gate: committee discretionary sell "
+                        f"'{signal.get('reason', '')}' held back "
+                        f"({held_minutes:.1f} min < {settings.MIN_HOLD_MINUTES:g} min)"
+                    )
+                    _state.latest_scan_results[symbol] = {
+                        "score": committee_result.score,
+                        "action": "HOLD_MIN_HOLD",
+                        "price": current_price,
+                    }
+                    return
+
+
             if signal["action"] in ["buy", "sell"]:
                 # --- ROLLING SOFT LOSS LIMIT (new-entry block only) ---
                 # If realized P&L over the last LOSS_LIMIT_WINDOW_HOURS is at
@@ -2359,9 +2489,42 @@ async def process_signal_for_symbol(symbol: str, current_price: float, risk_mana
                         await risk_manager.release_position_slot(symbol)
                     logger.error(f"[{symbol}] Order placement failed: {_describe_exception(order_e)}")
                     raise
+                # Key the entry ledger row on the snapshot it actually belongs
+                # to. A genuinely fresh entry creates a snapshot with
+                # committee_result.decision_id, but a SCALE-IN -- and also a
+                # "new entry" that save_decision_snapshot FOLDS into a still-open
+                # snapshot for the symbol -- belongs to that existing snapshot.
+                # Recording the buy under anything else means the snapshot close
+                # (get_entry_fee_estimate keys on the snapshot's decision_id)
+                # misses the fee and under-subtracts the round trip. Resolve the
+                # open snapshot first; fall back to the committee id when none
+                # exists yet (the fresh-entry case, where the snapshot is created
+                # below with that same id). get_open_snapshot is cached per cycle,
+                # so the snapshot block further down re-reads it for free.
+                ledger_decision_id = committee_result.decision_id
+                try:
+                    from src.db import get_open_snapshot
+                    snap = await asyncio.to_thread(get_open_snapshot, symbol)
+                    if snap and snap.get("decision_id"):
+                        ledger_decision_id = snap["decision_id"]
+                except Exception as snap_err:
+                    logger.debug(
+                        f"[{symbol}] snapshot lookup for entry ledger key "
+                        f"failed (non-fatal): {snap_err}"
+                    )
                 await asyncio.to_thread(
                     _persist_order_record, order_result, symbol, signal["action"], client_order_id,
-                    decision_id=committee_result.decision_id,
+                    decision_id=ledger_decision_id,
+                )
+                # Also write the ENTRY-leg fill to the orders ledger (not just
+                # the exit legs). This records the entry fee estimate so the
+                # later snapshot close can subtract the round trip's entry
+                # fee, not only the exit fee (see _record_committee_outcome /
+                # db.get_entry_fee_estimate). Fail-safe: _persist_exit_order
+                # only writes when the order actually filled.
+                await _persist_exit_order(
+                    order_result, symbol, signal["action"], client_order_id,
+                    ledger_decision_id,
                 )
                 # Record the fill time for the ENTRY_RACE_GUARD check above:
                 # the next cycle's positions snapshot may not yet include this

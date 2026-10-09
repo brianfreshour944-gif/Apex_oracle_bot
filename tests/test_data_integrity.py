@@ -56,15 +56,19 @@ class TestExchangeFillDataIntegrity:
 
         # THE ASSERTION THAT MATTERS: filled_avg_price must be non-zero
         assert result["filled_avg_price"] == 50000.00, f"Expected 50000.00, got {result['filled_avg_price']}"
-        # Alpaca is commission-free; Order no longer exposes .commission -> 0.0
-        assert result["commission"] == 0.0, f"Expected 0.0 (commission-free), got {result['commission']}"
+        # Alpaca's Order model no longer exposes .commission, so the bot records
+        # an ESTIMATE derived from ESTIMATED_TAKER_FEE_BPS and flags it.
+        assert result["commission"] > 0.0
+        assert result["commission_estimated"] is True
         assert result["filled_qty"] == 1.0
 
     @pytest.mark.asyncio
-    async def test_create_order_commission_is_zero_alpaca_commission_free(self, exchange):
+    async def test_create_order_estimates_commission_when_exchange_reports_none(self, exchange):
         """REGRESSION: code read Order.commission (absent on alpaca-py>=0.43) and
-        recorded a fabricated value. Alpaca orders are commission-free and the Order model
-        no longer exposes .commission, so the bot must record 0.0 (not raise/fabricate).
+        recorded a fabricated 0.0 for every fill, so realized PnL looked
+        fee-free. The adapter now ESTIMATES the fee from the configured taker
+        rate (ESTIMATED_TAKER_FEE_BPS) and flags it as an estimate rather than
+        pretending the exchange charged nothing.
         """
         fake_filled_order = MagicMock()
         fake_filled_order.id = "ord_123"
@@ -84,7 +88,34 @@ class TestExchangeFillDataIntegrity:
 
         result = await exchange.create_order("BTC/USD", 1.0, "buy", confirm=True, confirm_timeout=2.0)
 
-        assert result["commission"] == 0.0, f"Expected 0.0 (commission-free), got {result['commission']}"
+        expected = 50000.00 * 1.0 * (settings.ESTIMATED_TAKER_FEE_BPS / 10000.0)
+        assert result["commission"] == pytest.approx(expected)
+        assert result["commission_estimated"] is True
+
+    @pytest.mark.asyncio
+    async def test_estimated_commission_uses_filled_notional_on_partial_fill(self, exchange):
+        """The fee is charged on what actually FILLED, so a partial fill
+        (filled_qty < qty) is priced on filled_qty alone -- the estimate must
+        NOT be scaled by an additional filled_qty/qty shortfall factor."""
+        fake_filled_order = MagicMock()
+        fake_filled_order.id = "ord_789"
+        fake_filled_order.symbol = "BTC/USD"
+        fake_filled_order.qty = "1.0"
+        fake_filled_order.filled_qty = "0.75"  # 25% shortfall
+        fake_filled_order.status = "filled"
+        fake_filled_order.side = "buy"
+        fake_filled_order.type = "market"
+        fake_filled_order.filled_avg_price = "50000.00"
+        fake_filled_order.filled_at = datetime.now(UTC).isoformat()
+
+        exchange.trading_client = MagicMock()
+        exchange.trading_client.submit_order = MagicMock(return_value=MagicMock(id="ord_789", status="pending_new"))
+        exchange.trading_client.get_order_by_id = MagicMock(return_value=fake_filled_order)
+
+        result = await exchange.create_order("BTC/USD", 1.0, "buy", confirm=True, confirm_timeout=2.0)
+
+        expected = 50000.00 * 0.75 * (settings.ESTIMATED_TAKER_FEE_BPS / 10000.0)
+        assert result["commission"] == pytest.approx(expected)
 
     @pytest.mark.asyncio
     async def test_create_order_partial_fill_handles_filled_qty(self, exchange):
