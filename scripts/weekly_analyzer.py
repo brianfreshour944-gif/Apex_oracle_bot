@@ -64,6 +64,7 @@ def merge_bans(existing_bans, newly_banned, symbols_metrics, today=None):
     today = today or date.today()
     kept = {}
     lifted = []
+    ttl_lifted = set()
 
     for ban in existing_bans or []:
         symbol = ban.get("symbol")
@@ -87,14 +88,29 @@ def merge_bans(existing_bans, newly_banned, symbols_metrics, today=None):
         age_days = (today - banned_at).days
         if age_days > BAN_TTL_DAYS:
             lifted.append((symbol, f"ban expired after {age_days} days (TTL {BAN_TTL_DAYS})"))
+            ttl_lifted.add(symbol)
             continue
 
         kept[symbol] = {**ban, "banned_at": banned_at.isoformat()}
 
     # Fresh bans win over a lift in the same run (they were computed from the
-    # same metrics, so this only matters for conflicting/stale input files).
+    # same metrics, so this only matters for conflicting/stale input files),
+    # EXCEPT for a symbol whose ban just TTL-expired above: its metrics are
+    # all-time (SELECT ... WHERE status='closed'), so a banned symbol that has
+    # not traded since keeps producing the same fresh ban forever. Letting the
+    # fresh ban re-add it would immediately re-stamp banned_at and make the
+    # TTL a no-op, so the symbol gets a fresh trial window instead.
+    #
+    # Otherwise preserve the ORIGINAL banned_at rather than resetting it to
+    # today: re-stamping reset the TTL clock on every weekly run, so a symbol
+    # that stayed banned could never reach BAN_TTL_DAYS and lift.
     for ban in newly_banned or []:
-        kept[ban["symbol"]] = {**ban, "banned_at": today.isoformat()}
+        symbol = ban["symbol"]
+        if symbol in ttl_lifted:
+            continue
+        prior = kept.get(symbol)
+        banned_at = prior.get("banned_at") if prior else today.isoformat()
+        kept[symbol] = {**ban, "banned_at": banned_at}
 
     return list(kept.values()), lifted
 

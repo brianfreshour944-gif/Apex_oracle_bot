@@ -73,10 +73,27 @@ def test_legacy_ban_without_a_date_starts_its_ttl_now():
 
 
 def test_fresh_ban_wins_over_a_stale_duplicate():
+    """A re-ban updates the reason but must NOT reset banned_at: the metrics
+    are all-time (SELECT ... WHERE status='closed'), so a symbol that stays
+    banned keeps producing the same fresh ban every run. Re-stamping the
+    timestamp on each run reset the TTL clock and made the ban permanent."""
     existing = [{"symbol": "BTC/USD", "reason": "old", "banned_at": "2026-09-17"}]
     newly = [{"symbol": "BTC/USD", "reason": "fresh"}]
     bans, _ = weekly_analyzer.merge_bans(existing, newly, {}, today=TODAY)
-    assert bans == [{"symbol": "BTC/USD", "reason": "fresh", "banned_at": TODAY.isoformat()}]
+    assert bans == [{"symbol": "BTC/USD", "reason": "fresh", "banned_at": "2026-09-17"}]
+
+
+def test_requoting_the_same_ban_does_not_reset_the_ttl():
+    """Regression: a symbol re-banned every run from unchanged all-time
+    metrics must still age out. The first ban's date survives the re-ban, so
+    once BAN_TTL_DAYS have passed the ban lifts even though the fresh metrics
+    keep flagging the symbol."""
+    banned_at = (TODAY - timedelta(days=weekly_analyzer.BAN_TTL_DAYS + 1)).isoformat()
+    existing = [{"symbol": "BTC/USD", "reason": "old", "banned_at": banned_at}]
+    newly = [{"symbol": "BTC/USD", "reason": "still bad (all-time PF)"}]
+    bans, lifted = weekly_analyzer.merge_bans(existing, newly, {}, today=TODAY)
+    assert bans == [], f"a TTL-expired ban must not be re-stamped back into existence: {bans}"
+    assert "expired" in lifted[0][1]
 
 
 def test_ban_entries_without_a_symbol_are_ignored():
