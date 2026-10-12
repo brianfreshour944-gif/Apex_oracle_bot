@@ -201,8 +201,13 @@ class TradingBotSettings(BaseSettings):
 
     # --- Strategy Specific Parameters ---
     PROFIT_TARGET_PCT: float = Field(
-        default=0.03,
-        description="Take profit percentage (3%)",
+        default=0.04,
+        description="Take profit percentage (4%). Raised from 3% on 2026-10-12 so "
+                    "the target is at least as large as STOP_LOSS_PCT: at 3%/4% the "
+                    "reward:risk was 0.75 and the strategy needed a 65.7% win rate "
+                    "just to break even at real (25bps/side) fees. 4%/4% cuts that "
+                    "to 57.5%. Geometry alone is not edge -- validate against a "
+                    "baseline before trusting it.",
         gt=0,
         le=0.5
     )
@@ -373,8 +378,13 @@ class TradingBotSettings(BaseSettings):
     # Used by calculate_position_size to adjust effective risk and filter trades
     # that would have negative expected value after costs.
     TX_COST_FEE_BPS: float = Field(
-        default=5.0,
-        description="Exchange commission fee in basis points (1 bp = 0.01%)",
+        default=25.0,
+        description="Exchange commission fee in basis points (1 bp = 0.01%). "
+                    "Set to 25 bps to match ESTIMATED_TAKER_FEE_BPS -- Alpaca's "
+                    "real crypto taker rate. The previous 5 bps understated the "
+                    "round-trip cost ~3x (20 vs 60 bps with slippage/spread), so "
+                    "trades that looked net-positive passed TX_COST_MIN_EDGE_BPS "
+                    "and were taken at an actual loss. 2026-10-12.",
         ge=0,
         le=100,
     )
