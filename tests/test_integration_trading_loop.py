@@ -1023,5 +1023,120 @@ class TestSameRegimePositionCounting:
         assert _count_same_regime_open_positions("BTC/USD", [{"symbol": "BTCUSD"}], None) == 0
 
 
+class TestBannedSymbolGate:
+    """A ban is an ENTRY restriction, not a hold on an open position. The gate
+    used to be unconditional, so a symbol banned while a position was open
+    could never be exited by a strategy sell/close."""
+
+    @pytest.fixture(autouse=True)
+    def _reset_fill_times(self):
+        import src.bot as bot_mod
+        bot_mod._state.last_fill_times = {}
+        bot_mod._state.protective_stops = {}
+        yield
+        bot_mod._state.last_fill_times = {}
+        bot_mod._state.protective_stops = {}
+
+    @pytest.fixture
+    def mock_exchange(self):
+        ex = AsyncMock(spec=AlpacaExchange)
+        ex.get_positions = AsyncMock(return_value=[])
+        ex.get_latest_bar = AsyncMock()
+        ex.create_order = AsyncMock(return_value={
+            "id": "test_order_123", "filled_avg_price": 50000.0,
+            "filled_qty": 0.1, "commission": 5.0, "status": "filled",
+        })
+        ex.get_account = AsyncMock(return_value={"equity": 10000.0, "cash": 10000.0, "portfolio_value": 10000.0})
+        ex.load = AsyncMock()
+        ex.close = AsyncMock()
+        return ex
+
+    @pytest.fixture
+    def mock_risk_manager(self):
+        rm = AsyncMock(spec=RiskManager)
+        rm.update_account_status = AsyncMock(return_value={
+            "status": "risk_ok", "equity": 10000.0, "cash": 10000.0,
+            "portfolio_value": 10000.0, "drawdown_pct": -2.0, "daily_pnl": 100.0,
+            "open_positions": 0, "current_exposure": 0.0,
+        })
+        rm.is_killswitch_active = MagicMock(return_value=False)
+        rm.check_killswitch_conditions = AsyncMock(return_value=False)
+        rm.check_trailing_stop = MagicMock(return_value="hold")
+        rm.calculate_position_size = MagicMock(return_value=(0.1, "ok"))
+        rm.check_and_reserve_exposure = AsyncMock(return_value=(1000.0, "ok"))
+        rm.reserve_position_slot = AsyncMock(return_value=(True, "ok"))
+        rm.release_position_slot = AsyncMock()
+        rm.peak_prices = {}
+        rm.record_fill_costs = MagicMock()
+        return rm
+
+    async def _signal(self, action):
+        import pandas as pd
+        import polars as pl
+        strat = AsyncMock(spec=TradingStrategy)
+        strat.generate_trading_signal = AsyncMock(return_value={
+            "action": action, "confidence": 0.75, "regime": "trending",
+            "rsi": 55.0, "atr": 500.0, "reason": "test",
+            "features": {"hurst": 0.65, "atr": 500.0},
+        })
+        ex = self._ex
+        ex.get_latest_bar = AsyncMock(return_value=pl.DataFrame({
+            "t": [pd.Timestamp.now(tz="UTC")], "open": [50000.0], "high": [50100.0],
+            "low": [49900.0], "close": [50050.0], "volume": [100.0], "vwap": [50025.0],
+            "trade_count": [100],
+        }))
+        return strat, ex
+
+    @pytest.mark.asyncio
+    async def test_banned_symbol_blocks_buy_entry(self, mock_exchange, mock_risk_manager):
+        self._ex = mock_exchange
+        strat, ex = await self._signal("buy")
+        await process_signal_for_symbol(
+            symbol="BTC/USD", current_price=50050.0, risk_manager=mock_risk_manager,
+            strategy=strat, ex=ex, positions=[], regime_flag=None,
+            banned_symbols={"BTC/USD"},
+        )
+        mock_exchange.create_order.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_banned_flat_skips_signal_generation_and_committee(self, mock_exchange, mock_risk_manager):
+        """A banned symbol with no position can't act this cycle, so it must
+        not pay for the sentiment LLM call or the committee run inside
+        generate_trading_signal(). Previously the ban was checked only after
+        both, so every banned symbol billed a Groq sentiment call per cycle."""
+        self._ex = mock_exchange
+        strat, ex = await self._signal("buy")
+        with patch("src.committee.committee.run_committee", new=AsyncMock()) as rc:
+            await process_signal_for_symbol(
+                symbol="BTC/USD", current_price=50050.0, risk_manager=mock_risk_manager,
+                strategy=strat, ex=ex, positions=[], regime_flag=None,
+                banned_symbols={"BTC/USD"},
+            )
+        strat.generate_trading_signal.assert_not_called()
+        rc.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_banned_symbol_still_allows_exit(self, mock_exchange, mock_risk_manager):
+        """The regression: a sell that closes an open long must reach the exit
+        path even when the symbol is banned. With a real position present and
+        no committee veto, a sell must place a closing order, not be swallowed
+        by the ban gate."""
+        self._ex = mock_exchange
+        pos = [{"symbol": "BTCUSD", "qty": "0.1", "avg_entry_price": 40000.0}]
+        mock_exchange.get_positions = AsyncMock(return_value=pos)
+        strat, ex = await self._signal("sell")
+        from src.committee.models import CommitteeResult
+        fake = CommitteeResult(action="sell", score=0.8, size_multiplier=1.0, entropy=0.0, votes=[])
+        with patch("src.committee.committee.run_committee", new=AsyncMock(return_value=fake)), \
+             patch("src.bot._get_open_snapshot", create=True, return_value=None):
+            await process_signal_for_symbol(
+                symbol="BTC/USD", current_price=50050.0, risk_manager=mock_risk_manager,
+                strategy=strat, ex=ex, positions=pos, regime_flag=None,
+                banned_symbols={"BTC/USD"},
+            )
+        # A closing order was attempted (not blocked by the ban gate).
+        assert mock_exchange.create_order.called, "banned symbol's exit was blocked"
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
