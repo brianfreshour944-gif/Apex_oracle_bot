@@ -1806,6 +1806,27 @@ async def process_signal_for_symbol(symbol: str, current_price: float, risk_mana
                          symbol=symbol, current_price=current_price, action=signal["action"],
                          regime=signal["regime"], rsi=signal.get("rsi", 0.0))
     
+            # ─── FLAT SELL: NO INVENTORY TO CLOSE, SKIP THE COMMITTEE ───
+            # Long-only spot: a "sell" while FLAT has no action -- the sell-qty
+            # cap below would veto it anyway ("no position to sell"). Return
+            # BEFORE the 5-brain committee so a flat bearish symbol doesn't bill
+            # a full committee evaluation every cycle just to be told it has
+            # nothing to close.
+            #
+            # Only short-circuits when FLAT: a sell WITH a position must fall
+            # through so the real closing order is placed. "close" already
+            # bypasses the committee (handled below) and is unaffected.
+            if signal["action"] == "sell" and not current_position:
+                print("\n".join([
+                    "==============================",
+                    f"{symbol}",
+                    "Risk........... VETO",
+                    "FINAL.......... NO TRADE",
+                    "Reason......... No position to sell",
+                    "==============================",
+                ]), flush=True)
+                return
+
             # Bypass committee for hard exits (SL/TP)
             if signal["action"] == "close":
                 pass # proceed directly to close logic below
