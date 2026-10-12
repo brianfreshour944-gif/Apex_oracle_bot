@@ -1219,6 +1219,35 @@ class TestFlatSellShortCircuit:
         mock_exchange.create_order.assert_not_called()
 
     @pytest.mark.asyncio
+    async def test_committee_sell_while_flat_is_not_announced(
+        self, mock_exchange, mock_risk_manager, capsys
+    ):
+        """The REAL live case (this is what the 2026-10-12 logs show): the raw
+        strategy says 'hold' on a flat symbol, but the committee overrides it
+        to 'sell'. A long-only book has nothing to close, so the cycle must end
+        in a clean NO TRADE -- not a printed 'EXECUTE SELL' followed by a
+        'no position to sell' veto. The pre-committee short-circuit cannot see
+        this sell because it only inspects the RAW strategy action."""
+        self._ex = mock_exchange
+        strat, ex = await self._signal("hold")
+        from src.committee.models import CommitteeResult
+        fake = CommitteeResult(
+            action="sell", score=0.75, size_multiplier=1.0, entropy=0.0, votes=[]
+        )
+        with patch(
+            "src.committee.committee.run_committee", new=AsyncMock(return_value=fake)
+        ) as rc:
+            await process_signal_for_symbol(
+                symbol="BTC/USD", current_price=50050.0, risk_manager=mock_risk_manager,
+                strategy=strat, ex=ex, positions=[], regime_flag=None,
+            )
+        rc.assert_called()
+        mock_exchange.create_order.assert_not_called()
+        out = capsys.readouterr().out
+        assert "EXECUTE SELL" not in out, f"premature EXECUTE SELL printed:\n{out}"
+        assert "No position to sell" in out
+
+    @pytest.mark.asyncio
     async def test_sell_with_position_still_reaches_committee_and_closes(
         self, mock_exchange, mock_risk_manager
     ):

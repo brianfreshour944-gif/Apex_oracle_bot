@@ -1970,6 +1970,27 @@ async def process_signal_for_symbol(symbol: str, current_price: float, risk_mana
                 signal["action"] = committee_result.action
                 signal["confidence"] = committee_result.score
 
+                # ─── COMMITTEE-OVERRIDDEN FLAT SELL: NOTHING TO CLOSE ───
+                # The short-circuit above only sees the RAW strategy action.
+                # The committee has no position awareness, so it can turn a
+                # flat "hold"/"buy" into "sell"; a long-only book then has
+                # nothing to close and the sell-qty cap below vetoes it. Return
+                # here instead of falling through, so the cycle never prints a
+                # phantom "EXECUTE SELL" that no order follows (observed live
+                # 2026-10-12: SOL/ETH announced EXECUTE SELL then vetoed "no
+                # position to sell" every cycle). A sell WITH a position falls
+                # through and closes normally.
+                if signal["action"] == "sell" and not current_position:
+                    print("\n".join([
+                        "==============================",
+                        f"{symbol}",
+                        "Risk........... VETO",
+                        "FINAL.......... NO TRADE",
+                        "Reason......... No position to sell",
+                        "==============================",
+                    ]), flush=True)
+                    return
+
             # --- COMMITTEE-OVERRIDE MIN-HOLD GATE ---
             # A held long whose strategy would have emitted a discretionary
             # close (momentum/trend/mean-reversion/breakout/grid/scalp) can
