@@ -319,30 +319,44 @@ class PopulationTrainer:
                 ],
             }
     
-    def apply_best_to_live(self, live_components: dict[str, Any]) -> None:
-        """Apply best hyperparameters to live trading components."""
+    def apply_best_to_live(self, live_components: dict[str, Any]) -> bool:
+        """Apply best hyperparameters to live trading components.
+
+        Returns True only if at least one live component was actually mutated.
+        The live caller passes an empty dict, so nothing is applied; the
+        previous unconditional "Applied best config from worker -1" log fired
+        every cycle even though there was no component to update.
+        """
         best_config = self.get_best_config()
-        
+
+        applied = False
+
         # Apply to meta-learner
         if 'meta_learner' in live_components:
             ml = live_components['meta_learner']
             ml.learning_rate = best_config.learning_rate
             ml.min_weight = best_config.min_weight
             ml.max_weight = best_config.max_weight
-        
+            applied = True
+
         # Apply to committee settings (would need access to committee module)
         if 'committee' in live_components:
             # These would be module-level settings
             pass
-        
+
         # Apply to risk manager
         if 'risk_manager' in live_components:
             rm = live_components['risk_manager']
             rm.base_risk_percent = best_config.base_risk_percent
             # Note: stop_loss_pct etc are typically in settings, not runtime
-        
-        logger.info(f"PBT: Applied best config from worker {best_config.worker_id} to live components")
-    
+            applied = True
+
+        if applied:
+            logger.info(f"PBT: Applied best config from worker {best_config.worker_id} to live components")
+        else:
+            logger.debug("PBT: apply_best_to_live called with no live components to update")
+        return applied
+
     def _save_safely(self) -> None:
         if not self.state_path:
             return
