@@ -87,8 +87,24 @@ class ShadowTrade(Base):
     __tablename__ = "shadow_trades"
     # check_shadow_stops()/process_shadow_signal() both filter on exactly
     # this (candidate_name, symbol, status) triple, ordered by created_at.
+    #
+    # The UNIQUE partial index enforces at most ONE open shadow position per
+    # (candidate, symbol). Without it, the read-then-insert in
+    # _evaluate_shadow_position() is a check-then-act race: two concurrent
+    # evaluations (one thread per symbol via asyncio.to_thread) can both see
+    # "no open trade" and both insert, opening duplicate positions that
+    # corrupt the candidate PnL the monthly cull ranks on. Reproduced
+    # 2026-10-12: 6 simultaneous signals -> 3 open rows.
     __table_args__ = (
         Index("ix_shadow_trades_candidate_symbol_status", "candidate_name", "symbol", "status"),
+        Index(
+            "ux_shadow_trades_open_candidate_symbol",
+            "candidate_name",
+            "symbol",
+            unique=True,
+            sqlite_where=text("status = 'open'"),
+            postgresql_where=text("status = 'open'"),
+        ),
     )
 
     trade_id: Mapped[str] = mapped_column(String(64), primary_key=True)
@@ -454,6 +470,26 @@ def _ensure_indexes() -> None:
         conn.execute(text(
             "CREATE INDEX IF NOT EXISTS ix_shadow_trades_candidate_symbol_status "
             "ON shadow_trades (candidate_name, symbol, status)"
+        ))
+        # Pre-existing DBs may already hold duplicate open shadow rows from
+        # the check-then-act race this unique index closes. The CREATE UNIQUE
+        # INDEX below would fail on them, so first retire every duplicate but
+        # the newest into history (status='closed', realized_pnl left as-is)
+        # -- nothing is deleted, and the candidate's closed-trade record is
+        # preserved for the cull. Runs before the unique index on purpose.
+        conn.execute(text(
+            "UPDATE shadow_trades SET status = 'closed', closed_at = COALESCE(closed_at, created_at) "
+            "WHERE status = 'open' AND trade_id NOT IN ("
+            "  SELECT trade_id FROM ("
+            "    SELECT trade_id, ROW_NUMBER() OVER ("
+            "      PARTITION BY candidate_name, symbol ORDER BY created_at DESC, trade_id DESC"
+            "    ) AS rn FROM shadow_trades WHERE status = 'open'"
+            "  ) WHERE rn = 1"
+            ")"
+        ))
+        conn.execute(text(
+            "CREATE UNIQUE INDEX IF NOT EXISTS ux_shadow_trades_open_candidate_symbol "
+            "ON shadow_trades (candidate_name, symbol) WHERE status = 'open'"
         ))
         conn.commit()
 

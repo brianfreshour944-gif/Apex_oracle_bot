@@ -2,6 +2,7 @@ import datetime
 import json
 import logging
 import os
+import threading
 import uuid
 from typing import Any
 
@@ -19,6 +20,28 @@ logger = logging.getLogger("shadow_arena")
 
 _candidates_cache = {}
 _candidates_cache_mtime = 0.0
+
+# Per-(candidate, symbol) locks serialize the read-then-insert in
+# _evaluate_shadow_position(). The shadow trades for a candidate/symbol are
+# evaluated from one thread per symbol (asyncio.to_thread), and a fresh BUY
+# signal fires on every cycle, so two evaluations can interleave between the
+# "no open trade" SELECT and the INSERT. The unique partial index on
+# shadow_trades is the hard backstop; these locks keep the common path from
+# even attempting the duplicate (and from logging a spurious "Opened BUY" for
+# a row the index then rejects). Bounded by the small, fixed set of
+# candidate/symbol pairs.
+_shadow_locks: dict[tuple[str, str], threading.Lock] = {}
+_shadow_locks_guard = threading.Lock()
+
+
+def _get_shadow_lock(candidate_name: str, symbol: str) -> threading.Lock:
+    key = (candidate_name, symbol)
+    with _shadow_locks_guard:
+        lock = _shadow_locks.get(key)
+        if lock is None:
+            lock = threading.Lock()
+            _shadow_locks[key] = lock
+        return lock
 
 def _invalidate_candidates_cache():
     """Clear the cached candidates so the next get_candidates() call
@@ -158,10 +181,15 @@ def _evaluate_shadow_position(
     open trade for this candidate/symbol once, check stop-loss/profit-target
     against it, and -- only if the stop check didn't already close it --
     apply the new buy/close signal against the SAME row instead of
-    re-querying for it a second time."""
+    re-querying for it a second time.
+
+    The whole check-then-act runs under a per-(candidate, symbol) lock so two
+    concurrent evaluations cannot both observe "no open trade" and each open
+    one; the unique partial index on shadow_trades is the DB-level backstop.
+    """
     try:
         _ensure_tables()
-        with get_db_session() as session:
+        with _get_shadow_lock(candidate_name, symbol), get_db_session() as session:
             stmt = select(ShadowTrade).where(
                 ShadowTrade.candidate_name == candidate_name,
                 ShadowTrade.symbol == symbol,

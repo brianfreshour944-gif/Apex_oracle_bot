@@ -198,6 +198,8 @@ class TestDBRetentionCleanup:
         assert inspect.iscoroutinefunction(bot_mod.run_periodic_db_maintenance), \
             "run_periodic_db_maintenance must be an async function"
 
+    def test_db_maintenance_task_is_started(self):
+        import src.bot as bot_mod
         src, _ = inspect.getsourcelines(bot_mod.run_trading_bot)
         src_text = "".join(src)
         assert "run_periodic_db_maintenance" in src_text, \
