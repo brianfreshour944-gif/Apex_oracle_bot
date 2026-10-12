@@ -272,7 +272,10 @@ async def fetch_real_bars(
             rename_map["Close"] = "close"
         if "Volume" in df.columns:
             rename_map["Volume"] = "volume"
-        df = df.rename(rename_map)
+        # columns= is required: without it pandas renames the INDEX labels
+        # ("Datetime") instead of the column, so this always raised
+        # KeyError: 't' below and the yfinance fallback silently returned None.
+        df = df.rename(columns=rename_map)
         df["t"] = df["t"].astype(str)
         bars = pl.from_pandas(df)
         logger.info(f"Fetched {len(bars)} real bars for {symbol} from yfinance")
