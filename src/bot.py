@@ -2053,18 +2053,27 @@ async def process_signal_for_symbol(symbol: str, current_price: float, risk_mana
                         print("\n".join(dashboard), flush=True)
                         return
     
-                # ─── BANNED SYMBOLS CHECK ───
-                if banned_symbols is None:
-                    banned = get_banned_symbols()
-                else:
-                    banned = banned_symbols
-                if symbol in banned:
-                    dashboard.append("Risk........... VETO")
-                    dashboard.append("FINAL.......... NO TRADE")
-                    dashboard.append("Reason......... Symbol Banned")
-                    dashboard.append("==============================")
-                    print("\n".join(dashboard), flush=True)
-                    return
+                # ─── BANNED SYMBOLS CHECK (ENTRY only) ───
+                # A ban is an ENTRY restriction, not a hold on the position.
+                # This gate used to be unconditional, so a symbol banned while
+                # a position was open could never be exited by a strategy
+                # sell/close (the gate returned first). The main loop's flatten
+                # is entry-agnostic but only runs on a full-account liquidation,
+                # not on a routine ban, so an open long could be stranded until
+                # SL/TP or a killswitch. Restrict the block to entries and let
+                # exits fall through to the close handling below.
+                if signal["action"] == "buy":
+                    if banned_symbols is None:
+                        banned = get_banned_symbols()
+                    else:
+                        banned = banned_symbols
+                    if symbol in banned:
+                        dashboard.append("Risk........... VETO")
+                        dashboard.append("FINAL.......... NO TRADE")
+                        dashboard.append("Reason......... Symbol Banned")
+                        dashboard.append("==============================")
+                        print("\n".join(dashboard), flush=True)
+                        return
 
                 # ─── RECONCILIATION-INCOMPLETE CHECK (CR-12) ───
                 # Startup/retry reconciliation couldn't fetch positions, so we
