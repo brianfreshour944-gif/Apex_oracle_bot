@@ -64,7 +64,14 @@ def main() -> int:
     if not run_script(ppo_trainer):
         logger.error("Evolutionary PPO Trainer failed. Aborting pipeline.")
         sys.exit(1)
-        
+
+    # 3. Mark the $100 buy-and-hold control account to market. This is the bar
+    # the bot must beat; it places no orders and only appends to its own ledger.
+    # A failure here must not abort the research pipeline.
+    control_updater = os.path.join(scripts_dir, "update_paper_control.py")
+    if not run_script(control_updater):
+        logger.warning("Paper control update failed or skipped. Continuing pipeline...")
+
     logger.info("==================================================")
     logger.info(f"NIGHTLY RESEARCH PIPELINE COMPLETED: {datetime.now()}")
     logger.info("==================================================")
