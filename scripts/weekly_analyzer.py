@@ -19,6 +19,15 @@ logger = get_logger("weekly_analyzer")
 # least MIN_TRADES_TO_BAN trades.
 MIN_TRADES_TO_BAN = 5
 MIN_PROFIT_FACTOR = 0.8
+# The ban decision is judged on RECENT closed trades only, within this window.
+# All-time metrics deadlock a banned symbol: a ban blocks entries, so the
+# symbol places no new trades and its all-time profit factor freezes at the bad
+# value that caused the ban -- the "recovery" lift can then never fire, and (even
+# after the TTL below grants a fresh trial) the next run re-bans the symbol from
+# losses that may be months old. A trailing window lets a symbol that trades
+# well after its probationary period escape the ban, while a symbol that keeps
+# losing stays banned on current evidence.
+BAN_METRIC_WINDOW_DAYS = 30
 # ...but a ban must not be permanent: every run used to merge the fresh bans
 # over the persisted file with no removal path at all, so one bad week
 # permanently disabled a symbol with no way back short of hand-deleting
@@ -51,6 +60,48 @@ def _parse_ban_date(value, fallback):
         return date.fromisoformat(str(value))
     except (TypeError, ValueError):
         return fallback
+
+
+def _symbol_metrics(group) -> dict:
+    """Profit-factor style metrics for one symbol's closed trades.
+
+    Pure pandas (no I/O) so the ban/threshold policy can be unit-tested.
+    `profit_factor` is +inf when there are wins and no losses (recovery), and
+    0.0 when there are no wins at all -- never NaN.
+    """
+    total_trades = len(group)
+    winning_trades = len(group[group['realized_pnl'] > 0])
+    win_rate = (winning_trades / total_trades) * 100 if total_trades > 0 else 0.0
+    gross_profit = group[group['realized_pnl'] > 0]['realized_pnl'].sum()
+    gross_loss = abs(group[group['realized_pnl'] <= 0]['realized_pnl'].sum())
+    profit_factor = gross_profit / gross_loss if gross_loss > 0 else float('inf')
+    if gross_profit == 0 and gross_loss == 0:
+        profit_factor = 0.0
+    return {
+        "total_trades": total_trades,
+        "win_rate": win_rate,
+        "profit_factor": profit_factor,
+        "net_pnl": gross_profit - gross_loss,
+    }
+
+
+def _filter_recent_closed(df, window_days: int, today=None):
+    """Rows from ``df`` closed within the last ``window_days`` (for ban review).
+
+    ``df`` comes from ``SELECT * FROM decision_snapshots WHERE status='closed'``
+    so ``closed_at`` is normally populated. Any row whose ``closed_at`` is
+    missing or unparseable is KEPT (fail-closed): if the timestamp column is
+    broken the ban decision must still see every trade rather than silently
+    un-ban the whole book.
+    """
+    if df is None or len(df) == 0:
+        return df
+    if "closed_at" not in df.columns:
+        return df
+    today = today or pd.Timestamp.now(tz="UTC")
+    cutoff = today - pd.Timedelta(days=window_days)
+    closed = pd.to_datetime(df["closed_at"], errors="coerce", utc=True, format="mixed")
+    return df[closed.isna() | (closed >= cutoff)]
 
 
 def merge_bans(existing_bans, newly_banned, symbols_metrics, today=None):
@@ -138,37 +189,32 @@ def main() -> int:
 
         print(f"\n--- Weekly Analysis Report ({len(df)} total trades) ---")
         
-        # Calculate metrics by symbol
+        # Calculate metrics by symbol (all-time -- drives reporting and the
+        # threshold optimizer below).
         symbols_metrics = {}
         for symbol, group in df.groupby('symbol'):
-            total_trades = len(group)
-            winning_trades = len(group[group['realized_pnl'] > 0])
-            
-            win_rate = (winning_trades / total_trades) * 100 if total_trades > 0 else 0.0
-            
-            gross_profit = group[group['realized_pnl'] > 0]['realized_pnl'].sum()
-            gross_loss = abs(group[group['realized_pnl'] <= 0]['realized_pnl'].sum())
-            
-            profit_factor = gross_profit / gross_loss if gross_loss > 0 else float('inf')
-            if gross_profit == 0 and gross_loss == 0:
-                profit_factor = 0.0
-                
-            symbols_metrics[symbol] = {
-                "total_trades": total_trades,
-                "win_rate": win_rate,
-                "profit_factor": profit_factor,
-                "net_pnl": gross_profit - gross_loss
-            }
-            
+            symbols_metrics[symbol] = _symbol_metrics(group)
+
+            m = symbols_metrics[symbol]
             print(f"\n{symbol}:")
-            print(f"  Trades: {total_trades}")
-            print(f"  Win Rate: {win_rate:.1f}%")
-            print(f"  Profit Factor: {profit_factor:.2f}")
-            print(f"  Net PnL: ${gross_profit - gross_loss:.2f}")
-            
+            print(f"  Trades: {m['total_trades']}")
+            print(f"  Win Rate: {m['win_rate']:.1f}%")
+            print(f"  Profit Factor: {m['profit_factor']:.2f}")
+            print(f"  Net PnL: ${m['net_pnl']:.2f}")
+
+        # Ban decisions use only RECENT closed trades (see BAN_METRIC_WINDOW_DAYS).
+        recent_df = _filter_recent_closed(df, BAN_METRIC_WINDOW_DAYS)
+        ban_metrics = {}
+        for symbol, group in recent_df.groupby('symbol'):
+            ban_metrics[symbol] = _symbol_metrics(group)
+        print(
+            f"\n--- Ban Review Window ({BAN_METRIC_WINDOW_DAYS}d, "
+            f"{len(recent_df)} of {len(df)} trades) ---"
+        )
+
         # Ban underperforming symbols
         banned_symbols = []
-        for symbol, metrics in symbols_metrics.items():
+        for symbol, metrics in ban_metrics.items():
             if metrics["total_trades"] >= MIN_TRADES_TO_BAN and metrics["profit_factor"] < MIN_PROFIT_FACTOR:
                 banned_symbols.append({
                     "symbol": symbol,
@@ -191,7 +237,7 @@ def main() -> int:
             except Exception as ban_read_err:
                 logger.warning(f"Could not read existing bans ({ban_read_err}) - starting a fresh list.")
 
-        merged_bans_list, lifted_bans = merge_bans(existing_bans, banned_symbols, symbols_metrics)
+        merged_bans_list, lifted_bans = merge_bans(existing_bans, banned_symbols, ban_metrics)
         merged_bans = {b["symbol"]: b for b in merged_bans_list}
 
         with open(ban_file, 'w') as f:
