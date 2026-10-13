@@ -484,6 +484,51 @@ class TestFullTradingLoop:
             _state.position_adds.pop(symbol, None)
 
     @pytest.mark.asyncio
+    async def test_scale_in_veto_does_not_leave_phantom_execute_buy(
+        self, mock_exchange, mock_strategy, mock_risk_manager, capsys
+    ):
+        """The live 2026-10-13 case: the order path prints "FINAL... EXECUTE BUY"
+        before the scale-in gates run, so a vetoed add left EXECUTE BUY as the
+        console's last visible verdict with no order behind it (five phantom
+        ETH/USD lines in a row, each vetoed by the scale-in timer 0.2s later).
+        The dashboard must end in VETO instead -- matching the flat-sell and
+        entry-race-guard paths."""
+        import time as _time
+
+        from src.bot import _state
+        from src.config import POSITION_ADD_MIN_SECONDS
+
+        symbol = "BTC/USD"
+        current_price = 50050.0
+
+        async def _approve_in_full(notional, current_exposure=None):
+            return (notional, "ok")
+        mock_risk_manager.check_and_reserve_exposure = AsyncMock(side_effect=_approve_in_full)
+
+        # A recent add on an already-open position -> Gate 2 (min time) vetoes.
+        _state.position_adds[symbol] = {
+            "count": 1, "last_add_time": _time.time(), "last_add_score": 0.0,
+        }
+        try:
+            existing_position = {"symbol": symbol, "qty": "0.1", "avg_entry_price": 49000.0, "market_value": 5000.0}
+            mock_exchange.get_positions = AsyncMock(return_value=[existing_position])
+
+            await process_signal_for_symbol(
+                symbol=symbol, current_price=current_price, risk_manager=mock_risk_manager,
+                strategy=mock_strategy, ex=mock_exchange, positions=[existing_position],
+                regime_flag=None, banned_symbols=set(),
+            )
+
+            mock_exchange.create_order.assert_not_called()
+            out = capsys.readouterr().out
+            assert f"< {POSITION_ADD_MIN_SECONDS}s)" in out, f"scale-in veto not printed:\n{out}"
+            assert "FINAL.......... VETO" in out, f"no VETO verdict printed:\n{out}"
+            # The veto must be the LAST visible verdict, not the EXECUTE BUY.
+            assert out.rstrip().endswith("=============================="), out[-200:]
+            assert out.index("FINAL.......... EXECUTE BUY") < out.index("FINAL.......... VETO"), out
+        finally:
+            _state.position_adds.pop(symbol, None)
+
     async def test_scale_in_entry_fee_is_summed_via_open_snapshot_decision_id(
         self, mock_exchange, mock_strategy, mock_risk_manager
     ):

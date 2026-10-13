@@ -58,6 +58,23 @@ def _describe_exception(e: Exception) -> str:
     return str(e)
 
 
+def _announce_order_veto(dashboard: list[str], reason: str) -> None:
+    """Re-print the dashboard with a VETO verdict after a post-announcement gate.
+
+    The order path prints "FINAL.......... EXECUTE BUY" *before* the scale-in,
+    exposure, slot and exchange-minimum gates run, so any of those vetoing the
+    order left the console's last visible verdict as EXECUTE BUY with nothing
+    behind it (observed live 2026-10-13: five phantom ETH/USD EXECUTE BUY lines
+    in a row, each vetoed by the scale-in timer 0.2s later). Mutating the
+    dashboard in place and reprinting makes the veto the final verdict, matching
+    what the flat-sell and entry-race-guard paths already do.
+    """
+    dashboard.append("FINAL.......... VETO")
+    dashboard.append(f"Reason......... {reason}")
+    dashboard.append("==============================")
+    print("\n".join(dashboard), flush=True)
+
+
 # Structured logging setup
 class StructuredLogger:
     """Structured JSON logger for production observability."""
@@ -2327,10 +2344,7 @@ async def process_signal_for_symbol(symbol: str, current_price: float, risk_mana
                         # verdict for this cycle (observed 2026-10-05: the
                         # SOL veto was correct but looked like a phantom
                         # announcement because nothing followed it).
-                        dashboard.append("FINAL.......... VETO")
-                        dashboard.append("Reason......... No position to sell (order would be rejected)")
-                        dashboard.append("==============================")
-                        print("\n".join(dashboard), flush=True)
+                        _announce_order_veto(dashboard, "No position to sell (order would be rejected)")
                         return
                     available = float(sell_pos["qty"])
                     # leave tiny dust, use 0.99 cap to avoid rounding rejection
@@ -2339,6 +2353,7 @@ async def process_signal_for_symbol(symbol: str, current_price: float, risk_mana
                         logger.warning(f"[{symbol}] Sell qty capped {position_size} -> {max_sell} (available {available})")
                         position_size = max_sell
                     if position_size <= 0:
+                        _announce_order_veto(dashboard, "Sell size rounded to zero after capping to available position")
                         return
     
                 # ENTRY_RACE_GUARD: positions are fetched once per cycle and
@@ -2361,13 +2376,9 @@ async def process_signal_for_symbol(symbol: str, current_price: float, risk_mana
                             f"positions snapshot -- re-entering now risks a duplicate "
                             f"full-size entry."
                         )
-                        dashboard.append("FINAL.......... VETO")
-                        dashboard.append(
-                            f"Reason......... Entry race guard "
-                            f"({_since_fill:.0f}s since last fill)"
+                        _announce_order_veto(
+                            dashboard, f"Entry race guard ({_since_fill:.0f}s since last fill)"
                         )
-                        dashboard.append("==============================")
-                        print("\n".join(dashboard), flush=True)
                         return
 
                 # Atomically check and reserve exposure to prevent a race condition
@@ -2388,6 +2399,7 @@ async def process_signal_for_symbol(symbol: str, current_price: float, risk_mana
                 )
                 if approved_notional <= 0:
                     logger.warning(f"[{symbol}] Order vetoed: {reserve_reason}")
+                    _announce_order_veto(dashboard, reserve_reason)
                     return
                 
                 if approved_notional < notional:
@@ -2398,6 +2410,7 @@ async def process_signal_for_symbol(symbol: str, current_price: float, risk_mana
                     if position_size <= 0:
                         logger.warning(f"[{symbol}] Order vetoed: scaled position size rounded to zero")
                         await risk_manager.release_reserved_exposure(approved_notional)
+                        _announce_order_veto(dashboard, "Position size rounded to zero after exposure scaling")
                         return
                 
                 # Position pyramid/scale-in gates: prevent unlimited re-buying
@@ -2418,12 +2431,18 @@ async def process_signal_for_symbol(symbol: str, current_price: float, risk_mana
                         if add_info["count"] >= MAX_POSITION_ADDS:
                             logger.info(f"[{symbol}] Scale-in vetoed: max adds ({MAX_POSITION_ADDS}) reached (current: {add_info['count']})")
                             await risk_manager.release_reserved_exposure(approved_notional)
+                            _announce_order_veto(dashboard, f"Scale-in: max adds ({MAX_POSITION_ADDS}) reached")
                             return
                             
                         # Gate 2: Minimum time since last add
                         if now - add_info["last_add_time"] < POSITION_ADD_MIN_SECONDS:
                             logger.info(f"[{symbol}] Scale-in vetoed: minimum time between adds not met ({now - add_info['last_add_time']:.0f}s < {POSITION_ADD_MIN_SECONDS}s)")
                             await risk_manager.release_reserved_exposure(approved_notional)
+                            _announce_order_veto(
+                                dashboard,
+                                f"Scale-in: minimum time between adds not met "
+                                f"({now - add_info['last_add_time']:.0f}s < {POSITION_ADD_MIN_SECONDS}s)",
+                            )
                             return
                             
                         # Gate 3: Minimum score improvement
@@ -2431,6 +2450,7 @@ async def process_signal_for_symbol(symbol: str, current_price: float, risk_mana
                         if committee_score - add_info["last_add_score"] < POSITION_ADD_MIN_SCORE_INCREASE:
                             logger.info(f"[{symbol}] Scale-in vetoed: insufficient score improvement ({committee_score:.3f} - {add_info['last_add_score']:.3f} < {POSITION_ADD_MIN_SCORE_INCREASE})")
                             await risk_manager.release_reserved_exposure(approved_notional)
+                            _announce_order_veto(dashboard, "Scale-in: insufficient score improvement")
                             return
                             
                         # All gates passed - apply size decay
@@ -2465,6 +2485,7 @@ async def process_signal_for_symbol(symbol: str, current_price: float, risk_mana
                     if not slot_ok:
                         logger.warning(f"[{symbol}] Order vetoed: {slot_reason}")
                         await risk_manager.release_reserved_exposure(approved_notional)
+                        _announce_order_veto(dashboard, slot_reason)
                         return
 
                 # Final exchange-minimum-order-size check for a fresh/added BUY.
@@ -2552,6 +2573,7 @@ async def process_signal_for_symbol(symbol: str, current_price: float, risk_mana
                                     # by reading the code, 2026-09-22.
                                     if is_new_entry:
                                         await risk_manager.release_position_slot(symbol)
+                                    _announce_order_veto(dashboard, "Bumping to exchange minimum needs more exposure headroom than available")
                                     return
                                 approved_notional += extra_approved
                             logger.info(
@@ -2570,6 +2592,11 @@ async def process_signal_for_symbol(symbol: str, current_price: float, risk_mana
                             await risk_manager.release_reserved_exposure(approved_notional)
                             if is_new_entry:
                                 await risk_manager.release_position_slot(symbol)
+                            _announce_order_veto(
+                                dashboard,
+                                f"Final size ${final_notional:.2f} is well below the "
+                                f"${min_order_usd:.2f} exchange minimum",
+                            )
                             return
 
                 # Place order
