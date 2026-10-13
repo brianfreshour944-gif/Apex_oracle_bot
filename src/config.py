@@ -727,11 +727,13 @@ class TradingBotSettings(BaseSettings):
     ADVERSARIAL_SCORE_FLOOR: float = Field(
         default=0.55,
         description="HIGH-disagreement adversarial veto floor: an entry whose DIRECTIONAL "
-                    "disagreement level is HIGH and whose committee score is below this "
-                    "floor is rejected. Keep near the historical 0.55 for maximum "
-                    "conviction; lower it (e.g. 0.30) to let weaker-consensus entries "
-                    "through so the paper account generates real trade experiences "
-                    "for the nightly retrain. Read by src/trade_decision.py.",
+                    "disagreement level is HIGH and whose leading-direction share of the "
+                    "directional votes (calculate_directional_majority) is below this floor "
+                    "is rejected. A 2-1 directional majority (0.67) passes; an even buy/sell "
+                    "split (0.50) is rejected. Keep near the historical 0.55 for maximum "
+                    "conviction; lower it to let weaker-majority entries through so the "
+                    "paper account generates real trade experiences for the nightly "
+                    "retrain. Read by src/trade_decision.py.",
         ge=0.0,
         le=1.0,
     )

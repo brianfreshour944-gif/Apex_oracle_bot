@@ -93,6 +93,39 @@ def calculate_directional_entropy(votes: list[BrainVote]) -> float:
     )
 
 
+def calculate_directional_majority(votes: list[BrainVote]) -> float:
+    """Share of DIRECTIONAL votes held by the leading directional action.
+
+    The adversarial veto compares *disagreement* to *conviction*. Neither of the
+    committee's existing scores is calibrated for that:
+
+      - ``committee_result.score`` divides the winning action's weighted
+        confidence by every non-abstention weight (HOLD included), so it is
+        structurally capped well below the 0.55 floor and rejects a decisive
+        directional majority (live 2026-10-12: ETH/USD 2 BUY vs 1 SELL scored
+        0.35, vetoed 7 times).
+      - a weighted directional share is little better: the same case is 0.47,
+        still under 0.55, while a genuine 2-2 buy/sell split is 0.37 -- too
+        little separation to place a floor between them.
+
+    Counting votes over the directional voter set gives the clean split the
+    floor expects: a 2-1 directional majority is 0.67 (pass), a 2-2 tie is 0.50
+    and a 1-1 tie is 0.50 (veto). Confidence is already gated by the committee
+    (it only emits a directional action when its weighted score clears the
+    entry threshold and >= MIN_ENTRY_DIRECTIONAL_VOTES brains agree), so what
+    remains for the veto is decisiveness -- how lopsided the directional vote
+    is -- which is exactly this ratio. Returns 0.0 when no directional vote
+    exists. ``calculate_vote_entropy``/``score`` are deliberately unchanged.
+    """
+    directional = [v for v in votes if v.action in DIRECTIONAL_ACTIONS]
+    if not directional:
+        return 0.0
+    counts: dict[str, int] = defaultdict(int)
+    for v in directional:
+        counts[v.action] += 1
+    return max(counts.values()) / len(directional)
+
+
 def disagreement_from_entropy(entropy: float) -> str:
     """Map committee vote entropy to a discrete brain-disagreement level.
 

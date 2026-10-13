@@ -11,6 +11,15 @@ the ordinary "one directional brain, three HOLDs" pattern read as HIGH
 disagreement with a diluted score and every symbol was rejected every cycle
 (live log: BTC 0.811/0.230, SOL 0.971/0.391, ETH 1.371/0.195, all
 VETO_ADVERSARIAL). The veto now consumes calculate_directional_entropy().
+
+Third regression (this file's final tests): even with the directional entropy
+the veto still compared disagreement against the committee's all-vote score,
+which divides by HOLD weight too. A decisive 2-1 directional majority is
+structurally capped below the 0.55 floor, so the veto rejected exactly the
+pattern it exists to allow -- live 2026-10-12, ETH/USD 2 BUY vs 1 SELL scored
+0.35 and was vetoed 7 times. The veto now compares against
+calculate_directional_majority() (leading direction's share of DIRECTIONAL
+votes), so a 2-1 majority passes while a genuine 2-2 split still vetoes.
 """
 import math
 
@@ -19,9 +28,11 @@ import pytest
 from src.committee.models import (
     BrainVote,
     calculate_directional_entropy,
+    calculate_directional_majority,
     calculate_vote_entropy,
     disagreement_from_entropy,
 )
+from src.trade_decision import adversarial_veto_reasons
 
 
 def _vote(name: str, action: str) -> BrainVote:
@@ -130,6 +141,75 @@ def test_directional_entropy_all_abstentions_is_zero():
     votes = [_vote("a", "hold"), _vote("b", "stand_aside"), _vote("c", "skip")]
     assert calculate_directional_entropy(votes) == pytest.approx(0.0, abs=1e-9)
     assert calculate_directional_entropy([]) == pytest.approx(0.0, abs=1e-9)
+
+
+# ── Directional majority (the metric the adversarial veto now consumes) ───────
+# Every case below is the exact vote set from the live 2026-10-12 paper log.
+
+class _FakeResult:
+    """Minimal stand-in for CommitteeResult: only .votes and .score are read."""
+    def __init__(self, votes, score=0.35):
+        self.votes = votes
+        self.score = score
+
+
+def test_directional_majority_is_leading_direction_share():
+    assert calculate_directional_majority(
+        _weighted(LOW_VOL_WEIGHTS, [("transformer", "buy", 0.7), ("quant", "buy", 0.7),
+                                    ("momentum", "hold", 0.0), ("sentinel", "hold", 0.0),
+                                    ("llm", "sell", 0.7)])
+    ) == pytest.approx(2 / 3, abs=1e-9)
+    assert calculate_directional_majority([]) == pytest.approx(0.0, abs=1e-9)
+    assert calculate_directional_majority(
+        [_vote("a", "hold"), _vote("b", "stand_aside")]
+    ) == pytest.approx(0.0, abs=1e-9)
+
+
+def test_live_two_to_one_majority_is_not_vetoed():
+    """Live ETH/USD: 2 brains BUY (0.67/0.75) vs 1 LLM SELL (0.67), HOLDs in
+    between. The all-vote score was 0.35 (< 0.55) so the veto fired 7 times;
+    the directional majority is 0.67 (>= 0.55) so it must pass now."""
+    votes = _weighted(LOW_VOL_WEIGHTS, [
+        ("transformer", "buy", 0.67), ("quant", "buy", 0.75), ("momentum", "hold", 0.0),
+        ("sentinel", "hold", 0.0), ("llm", "sell", 0.67),
+    ])
+    signal = {"brain_disagreement": disagreement_from_entropy(calculate_directional_entropy(votes))}
+    assert signal["brain_disagreement"] == "HIGH"
+    assert adversarial_veto_reasons(signal, _FakeResult(votes, score=0.35)) == []
+
+
+def test_live_two_to_one_sell_majority_is_not_vetoed():
+    votes = _weighted(LOW_VOL_WEIGHTS, [
+        ("transformer", "sell", 0.35), ("quant", "buy", 0.75), ("momentum", "hold", 0.0),
+        ("sentinel", "hold", 0.0), ("llm", "sell", 0.70),
+    ])
+    signal = {"brain_disagreement": disagreement_from_entropy(calculate_directional_entropy(votes))}
+    assert signal["brain_disagreement"] == "HIGH"
+    assert adversarial_veto_reasons(signal, _FakeResult(votes, score=0.28)) == []
+
+
+def test_genuine_two_two_split_still_vetoes():
+    """The gate's purpose: an even buy/sell fight (majority 0.50) with HIGH
+    disagreement is still rejected."""
+    votes = _weighted(LOW_VOL_WEIGHTS, [
+        ("transformer", "buy", 0.7), ("quant", "sell", 0.7), ("momentum", "buy", 0.7),
+        ("sentinel", "sell", 0.7), ("llm", "hold", 0.0),
+    ])
+    signal = {"brain_disagreement": disagreement_from_entropy(calculate_directional_entropy(votes))}
+    assert signal["brain_disagreement"] == "HIGH"
+    reasons = adversarial_veto_reasons(signal, _FakeResult(votes, score=0.37))
+    assert reasons and "directional majority" in reasons[0]
+
+
+def test_high_disagreement_but_clear_majority_passes():
+    """A 3-1 directional majority (0.75) with one dissenter is decisive enough
+    to trade even though the entropy reads HIGH."""
+    votes = _weighted(LOW_VOL_WEIGHTS, [
+        ("transformer", "buy", 0.7), ("quant", "buy", 0.7), ("momentum", "buy", 0.7),
+        ("sentinel", "sell", 0.7), ("llm", "hold", 0.0),
+    ])
+    signal = {"brain_disagreement": disagreement_from_entropy(calculate_directional_entropy(votes))}
+    assert adversarial_veto_reasons(signal, _FakeResult(votes, score=0.40)) == []
 
 
 def test_directional_entropy_max_is_log2_of_two():

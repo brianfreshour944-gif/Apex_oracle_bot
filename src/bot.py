@@ -1835,6 +1835,7 @@ async def process_signal_for_symbol(symbol: str, current_price: float, risk_mana
                 from src.committee.committee import run_committee
                 from src.committee.models import (
                     calculate_directional_entropy,
+                    calculate_directional_majority,
                     disagreement_from_entropy,
                 )
                 committee_result = await run_committee(symbol, current_price, signal)
@@ -1859,6 +1860,13 @@ async def process_signal_for_symbol(symbol: str, current_price: float, risk_mana
                     getattr(committee_result, "votes", None) or []
                 )
                 signal["brain_disagreement"] = disagreement_from_entropy(directional_entropy)
+                # Directional majority (leading direction's share of the
+                # DIRECTIONAL votes) is what the adversarial veto's floor
+                # compares against -- NOT committee_result.score, which is
+                # diluted by HOLD weight and structurally too low to clear it.
+                directional_majority = calculate_directional_majority(
+                    getattr(committee_result, "votes", None) or []
+                )
     
                 # ─── BUILD REGIME DASHBOARD ───
                 dashboard = []
@@ -1902,7 +1910,7 @@ async def process_signal_for_symbol(symbol: str, current_price: float, risk_mana
                 dashboard.append(f"Committee...... {committee_action}")
                 dashboard.append(
                     f"Disagreement... {signal['brain_disagreement']} "
-                    f"(directional entropy {directional_entropy:.2f}, score {committee_result.score:.2f}, "
+                    f"(directional entropy {directional_entropy:.2f}, directional majority {directional_majority:.2f}, "
                     f"veto floor {ADVERSARIAL_SCORE_FLOOR:.2f})"
                 )
                 dashboard.append("")

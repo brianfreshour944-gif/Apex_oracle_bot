@@ -14,20 +14,18 @@ results for identical inputs.
 import math
 from typing import Any
 
+from src.committee.models import calculate_directional_majority
 from src.config import settings
 from src.risk import apply_uncertainty_scaling
 
 # Score floor for the HIGH-disagreement adversarial veto: genuine directional
-# disagreement paired with a weak conviction score (< this) is rejected. It
-# applies to the DIRECTIONAL disagreement level -- see
-# src/committee/models.py:calculate_directional_entropy for why abstentions
-# must not count as disagreement here.
+# disagreement paired with NO clear directional majority (leading direction's
+# share of directional votes < this) is rejected. It applies to the DIRECTIONAL
+# disagreement level -- see src/committee/models.py:calculate_directional_entropy
+# for why abstentions must not count as disagreement, and
+# calculate_directional_majority for the conviction metric compared here.
 # Configurable via settings (ADVERSARIAL_SCORE_FLOOR, default 0.55) so the
-# deployed paper account can lower it (e.g. 0.30) without a code change:
-# with live committee scores typically 0.12-0.28, the historical 0.55 floor
-# vetoed every entry and starved the nightly retrain of real trade outcomes
-# (verified 2026-10-05 from Coolify container logs: 137 adversarial vetoes,
-# zero executed trades in 111 cycles).
+# deployed paper account can lower it without a code change.
 ADVERSARIAL_SCORE_FLOOR = settings.ADVERSARIAL_SCORE_FLOOR
 
 # Base edge by regime, used to estimate expected return for sizing.
@@ -55,9 +53,14 @@ def adversarial_veto_reasons(
     Brain C: the regime has enough realized outcomes to be judged and failed
     validation. "No validation data yet" is not evidence of overfitting, so a
     regime below ``validation_min_trades`` is never vetoed here.
-    Disagreement: HIGH directional disagreement with a score below
-    ADVERSARIAL_SCORE_FLOOR. ``signal["brain_disagreement"]`` must already be
-    set by the caller.
+    Disagreement: HIGH directional disagreement with no clear directional
+    majority (leading direction's share of directional votes below
+    ADVERSARIAL_SCORE_FLOOR). ``signal["brain_disagreement"]`` must already be
+    set by the caller. The majority is measured on the DIRECTIONAL voters only
+    (``calculate_directional_majority``), matching the voter set behind
+    ``brain_disagreement`` -- the committee's all-vote score divides by HOLD
+    weight too and is structurally too low to ever clear the floor for a
+    decisive 2-1 directional majority (see calculate_directional_majority).
     """
     reasons: list[str] = []
 
@@ -78,11 +81,13 @@ def adversarial_veto_reasons(
             )
 
     brain_disagreement = signal.get("brain_disagreement", "LOW")
-    if brain_disagreement == "HIGH" and committee_result.score < ADVERSARIAL_SCORE_FLOOR:
-        reasons.append(
-            f"Brain disagreement HIGH (directional) + score "
-            f"{committee_result.score:.2f} < {ADVERSARIAL_SCORE_FLOOR:.2f}"
-        )
+    if brain_disagreement == "HIGH":
+        directional_majority = calculate_directional_majority(getattr(committee_result, "votes", None) or [])
+        if directional_majority < ADVERSARIAL_SCORE_FLOOR:
+            reasons.append(
+                f"Brain disagreement HIGH (directional) + directional majority "
+                f"{directional_majority:.2f} < {ADVERSARIAL_SCORE_FLOOR:.2f}"
+            )
     return reasons
 
 
