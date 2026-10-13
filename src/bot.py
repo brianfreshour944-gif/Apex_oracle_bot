@@ -1874,6 +1874,13 @@ async def process_signal_for_symbol(symbol: str, current_price: float, risk_mana
                 dashboard.append(f"Regime........ {regime_str}")
                 dashboard.append(f"Hurst......... {hurst:.2f}")
                 dashboard.append(f"ATR........... {atr_pct:.1f}%")
+                # Raw RSI is what drives the quant brain's vote (sell when
+                # 60 < RSI <= 75). It was only ever emitted on the DEBUG-level
+                # "[SCAN] Signal" line, which the INFO-level console never
+                # shows -- so a quant brain pinned at SELL by a parked RSI was
+                # invisible in the dashboard. Surfacing it here makes the
+                # committee's inputs auditable at a glance.
+                dashboard.append(f"RSI........... {float(signal.get('rsi', 0.0)):.1f}")
                 dashboard.append("")
                 
                 for v in committee_result.votes:

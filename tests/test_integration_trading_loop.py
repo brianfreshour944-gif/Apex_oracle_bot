@@ -1268,6 +1268,34 @@ class TestFlatSellShortCircuit:
         rc.assert_called()
         assert mock_exchange.create_order.called, "sell with a position was blocked"
 
+    @pytest.mark.asyncio
+    async def test_dashboard_reports_raw_rsi(self, mock_exchange, mock_risk_manager, capsys):
+        """The dashboard must surface the raw RSI that drives the quant brain.
+
+        Live evidence (2026-10-12): quant voted SELL 0.75 in 533/533 evals
+        because RSI sat in the 60-75 sell band, yet the INFO-level dashboard
+        never showed RSI (only the DEBUG "[SCAN] Signal" line did), so the
+        pinned brain was invisible. Pin the new line so it cannot regress."""
+        self._ex = mock_exchange
+        pos = [{"symbol": "BTCUSD", "qty": "0.1", "avg_entry_price": 40000.0}]
+        mock_exchange.get_positions = AsyncMock(return_value=pos)
+        strat, ex = await self._signal("hold")
+        strat.generate_trading_signal = AsyncMock(return_value={
+            "action": "hold", "confidence": 0.5, "regime": "sideways",
+            "rsi": 67.3, "atr": 500.0, "reason": "test",
+            "features": {"hurst": 0.52, "atr": 500.0},
+        })
+        from src.committee.models import CommitteeResult
+        fake = CommitteeResult(action="hold", score=0.0, size_multiplier=0.0, entropy=0.0, votes=[])
+        with patch("src.committee.committee.run_committee", new=AsyncMock(return_value=fake)), \
+             patch("src.bot._get_open_snapshot", create=True, return_value=None):
+            await process_signal_for_symbol(
+                symbol="BTC/USD", current_price=50050.0, risk_manager=mock_risk_manager,
+                strategy=strat, ex=ex, positions=pos, regime_flag=None,
+            )
+        out = capsys.readouterr().out
+        assert "RSI........... 67.3" in out, f"raw RSI missing from dashboard:\n{out}"
+
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
