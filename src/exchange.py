@@ -8,6 +8,7 @@ import time
 from typing import Any, Protocol, runtime_checkable
 
 import polars as pl
+from alpaca.common.enums import Sort
 from alpaca.common.exceptions import APIError
 from alpaca.data.historical.crypto import CryptoHistoricalDataClient
 from alpaca.data.requests import CryptoBarsRequest, CryptoLatestBarRequest
@@ -361,19 +362,31 @@ class AlpacaExchange:
             
         start_time = end_time - max(delta, datetime.timedelta(hours=1))
         
+        # sort=DESC is required: `start` deliberately over-covers the window
+        # (1.5x) so `limit` always truncates. alpaca-py defaults sort to ASC,
+        # so without this the API returns the OLDEST `limit` bars of the
+        # window instead of the newest -- e.g. a 100-bar daily request spans
+        # 150 days but yields bars ~50 days stale, freezing RSI/ATR/Hurst on
+        # months-old data (seen live: ETH RSI 87 on a window whose real RSI
+        # was 29). 2026-10-13.
         request_params = CryptoBarsRequest(
             symbol_or_symbols=symbol,
             timeframe=tf,
             start=start_time,
             end=end_time,
-            limit=limit
+            limit=limit,
+            sort=Sort.DESC,
         )
 
         try:
             bars_df = await self.circuit_breaker.call(asyncio.to_thread, self.data_client.get_crypto_bars, request_params)
             if bars_df.data and symbol in bars_df.data:
-                # Get the list of Bar objects
-                bars = bars_df.data[symbol]
+                # Get the list of Bar objects, oldest -> newest. sort=DESC above
+                # is needed to make `limit` truncate to the NEWEST bars, but the
+                # rest of the pipeline (latest_features = df.iloc[-1], latest_bar_ts
+                # = last iterated, _calculate_rsi on close_arr) assumes ascending
+                # order -- so restore it here.
+                bars = sorted(bars_df.data[symbol], key=lambda b: b.timestamp)
                 
                 # Convert to dict format expected by downstream
                 data_list = []

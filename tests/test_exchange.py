@@ -521,3 +521,51 @@ class TestProtectiveStopLimit:
         exchange.trading_client = MagicMock()
         exchange.trading_client.cancel_order_by_id = MagicMock(side_effect=RuntimeError("network down"))
         assert await exchange.cancel_order("stop_2") is False
+
+
+class TestGetBarsNewestWindow:
+    """get_bars must return the NEWEST `limit` bars, not the oldest.
+
+    Regression (2026-10-13): get_bars over-covers the window on purpose
+    (start = now - 1.5 * limit * tf) so `limit` always truncates. But
+    alpaca-py's CryptoBarsRequest defaults to sort=ASC, so the API returned
+    the OLDEST `limit` bars of that window -- e.g. a 100-bar daily request
+    spanning 150 days yielded bars ~50 days stale. RSI/ATR/Hurst were then
+    computed on months-old data: ETH showed RSI 87.0 live while its real
+    daily RSI was ~29. Fix: request sort=DESC (newest first) and re-sort the
+    returned bars oldest -> newest for the rest of the pipeline.
+    """
+
+    @pytest.mark.asyncio
+    async def test_requests_newest_bars_and_returns_ascending(self, exchange):
+        from datetime import UTC, datetime, timedelta
+
+        from alpaca.common.enums import Sort
+
+        captured = {}
+
+        class _Bar:
+            def __init__(self, ts):
+                self.timestamp = ts
+                self.open = self.high = self.low = self.close = 100.0
+                self.volume = 1.0
+                self.vwap = 100.0
+                self.trade_count = 1
+
+        class _Bars:
+            # Newest-first, exactly as a sort=DESC API response arrives.
+            def __init__(self):
+                now = datetime.now(UTC)
+                self.data = {"BTC/USD": [_Bar(now - timedelta(days=i)) for i in range(3)]}
+
+        class _Client:
+            def get_crypto_bars(self, params):
+                captured["params"] = params
+                return _Bars()
+
+        exchange.data_client = _Client()
+        out = await exchange.get_bars("BTC/USD", "1D", 3)
+
+        assert captured["params"].sort == Sort.DESC, "must request newest-first"
+        # Output order must be oldest -> newest (downstream uses iloc[-1] as latest).
+        assert out["timestamp"].to_list() == sorted(out["timestamp"].to_list())
