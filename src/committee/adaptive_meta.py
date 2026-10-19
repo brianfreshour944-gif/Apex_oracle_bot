@@ -42,6 +42,11 @@ VALIDATION_MIN_SHARPE = getattr(_settings, "ADAPTIVE_MIN_SHARPE", 0.5)
 VALIDATION_MIN_WIN_RATE = getattr(_settings, "ADAPTIVE_MIN_WIN_RATE", 0.52)
 VALIDATION_HOLDOUT_FRACTION = getattr(_settings, "ADAPTIVE_HOLDOUT_FRACTION", 0.3)
 
+# A single brain's weight moving by at least this much counts as a "material"
+# change worth alerting on. Matches src.metrics.alert_weight_change's default
+# threshold so the two agree on what "material" means.
+MATERIAL_WEIGHT_DELTA = 0.05
+
 
 @dataclass
 class BrainScore:
@@ -329,6 +334,12 @@ class AdaptiveMetaLearner:
         self.weights[regime] = new
         report.new_weights = new
         report.max_delta = max((abs(new[b] - old.get(b, 0.0)) for b in new), default=0.0)
+        # Flag a change large enough to alert on. Both consumers
+        # (bot._record_committee_outcome -> alert_weight_change, and
+        # strategy_selector.record_strategy_outcome) gate on this field, so it
+        # must actually be set -- it was declared but never assigned, leaving
+        # the weight-change alert permanently dead.
+        report.material_change = report.max_delta >= MATERIAL_WEIGHT_DELTA
         
         # Compute drift vs equal-weight baseline
         report.drift_vs_equal, report.drift_l2_norm = self._compute_drift_vs_equal(new)

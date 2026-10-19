@@ -14,7 +14,7 @@ import json
 import pytest
 
 from src.committee import outcome_tracker
-from src.committee.adaptive_meta import BRAINS, AdaptiveMetaLearner
+from src.committee.adaptive_meta import BRAINS, MATERIAL_WEIGHT_DELTA, AdaptiveMetaLearner
 from src.committee.models import BrainVote
 
 
@@ -178,3 +178,46 @@ def test_outcome_tracker_from_snapshot_and_apply(tmp_path):
     applied = outcome_tracker.apply_to_learner(learner, [ex])
     assert applied == 1
     assert learner.weights["uptrend"]["transformer"] > before["transformer"]
+
+
+def test_material_change_true_on_large_weight_shift(tmp_path):
+    """A big one-shot weight move must flag material_change.
+
+    Regression: UpdateReport.material_change was declared but never assigned,
+    so it stayed False forever and the weight-change alert in
+    bot._record_committee_outcome (and the strategy-weight log in
+    strategy_selector) could never fire.
+    """
+    learner = AdaptiveMetaLearner(state_path=str(tmp_path / "s.json"), learning_rate=0.9)
+    report = learner.update(
+        _snapshot("uptrend", "buy", {"transformer": "buy", "momentum": "sell"}),
+        {"net_pnl": 100.0},
+    )
+    assert report.max_delta >= MATERIAL_WEIGHT_DELTA
+    assert report.material_change is True
+
+
+def test_material_change_false_on_tiny_weight_shift(tmp_path):
+    """A negligible weight nudge must NOT flag material_change.
+
+    Guards the other direction: a fix that hard-codes material_change=True
+    would spam the alert on every closed trade.
+    """
+    learner = AdaptiveMetaLearner(state_path=str(tmp_path / "s.json"), learning_rate=0.0001)
+    report = learner.update(
+        _snapshot("uptrend", "buy", {"transformer": "buy"}),
+        {"net_pnl": 100.0},
+    )
+    assert report.max_delta < MATERIAL_WEIGHT_DELTA
+    assert report.material_change is False
+
+
+def test_material_change_false_when_no_gradable_signal(tmp_path):
+    """Flat PnL leaves weights untouched, so nothing is material."""
+    learner = AdaptiveMetaLearner(state_path=str(tmp_path / "s.json"), learning_rate=0.9)
+    report = learner.update(
+        _snapshot("uptrend", "buy", {"transformer": "buy"}),
+        {"net_pnl": 0.0},
+    )
+    assert report.material_change is False
+    assert report.max_delta == 0.0
