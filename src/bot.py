@@ -33,6 +33,7 @@ from src.logging_config import (
     log_training_job_result,
     log_training_job_start,
 )
+from src.paper_guard import PaperTradingViolation
 from src.persistent_state import PersistentBotState
 from src.population_trainer import get_pbt_trainer
 from src.risk import RiskManager
@@ -3663,8 +3664,17 @@ async def run_trading_bot() -> None:
         except RuntimeError as e:
             # Re-raise ONLY authentication/configuration errors which are fatal
             # Other RuntimeErrors (network issues, etc.) should fall through to offline mode
-            if "authentication failed" in str(e).lower() or "unauthorized" in str(e).lower():
+            msg = str(e).lower()
+            if "authentication failed" in msg or "unauthorized" in msg:
                 logger.error(f"Alpaca authentication failed (fatal): {e}")
+                raise
+            # A paper-trading violation or an unverifiable account is a permanent
+            # CONFIGURATION fault, not a transient one. Retrying it forever in
+            # offline mode would hide the real problem, so fail fast and loudly
+            # exactly like an auth failure. (Transient network errors still fall
+            # through to offline/retry mode below.)
+            if isinstance(e, PaperTradingViolation) or "not verified for order placement" in msg:
+                logger.error(f"Paper-trading guard refused to enable trading (fatal): {e}")
                 raise
             # Other RuntimeErrors - treat as transient, start in offline mode
             logger.warning(f"Alpaca exchange connection failed on startup: {e}. Bot will start in offline/retry mode.")

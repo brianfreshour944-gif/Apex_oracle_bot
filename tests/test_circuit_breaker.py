@@ -11,6 +11,7 @@ import pytest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
 from src.circuit_breaker import CircuitBreaker, CircuitState
+from tests.helpers import paper_trading_client
 
 
 class TestCircuitBreaker:
@@ -232,7 +233,7 @@ class TestCircuitBreakerIntegration:
         with patch.object(AlpacaExchange, '__init__', lambda self: None):
             exchange = AlpacaExchange()
             exchange.circuit_breaker = CircuitBreaker("test_get_account", failure_threshold=2, open_seconds=60)
-            exchange.trading_client = MagicMock()
+            exchange.trading_client = paper_trading_client()
             exchange.trading_client.get_account = MagicMock(side_effect=RuntimeError("API down"))
 
             for _ in range(2):
@@ -262,7 +263,7 @@ class TestCircuitBreakerIntegration:
         with patch.object(AlpacaExchange, '__init__', lambda self: None):
             exchange = AlpacaExchange()
             exchange.circuit_breaker = CircuitBreaker("test_get_positions", failure_threshold=1, open_seconds=60)
-            exchange.trading_client = MagicMock()
+            exchange.trading_client = paper_trading_client()
             exchange.trading_client.get_all_positions = MagicMock(side_effect=RuntimeError("API down"))
 
             with pytest.raises(RuntimeError):
@@ -278,7 +279,7 @@ class TestCircuitBreakerIntegration:
         with patch.object(AlpacaExchange, '__init__', lambda self: None):
             exchange = AlpacaExchange()
             exchange.circuit_breaker = CircuitBreaker("test_create_order", failure_threshold=1, open_seconds=60)
-            exchange.trading_client = MagicMock()
+            exchange.trading_client = paper_trading_client()
             exchange.trading_client.submit_order = MagicMock(side_effect=RuntimeError("API down"))
 
             with pytest.raises(RuntimeError):
@@ -307,7 +308,7 @@ class TestCircuitBreakerIntegration:
             mock_order.filled_at = None
             mock_order.status = MagicMock()
             mock_order.status.value = "filled"
-            exchange.trading_client = MagicMock()
+            exchange.trading_client = paper_trading_client()
             exchange.trading_client.submit_order = MagicMock(return_value=mock_order)
 
             # Without bypass — should fail fast
@@ -334,7 +335,7 @@ class TestCircuitBreakerIntegration:
                 symbol="BTC/USD", qty=1.0, avg_entry_price=49000.0,
                 market_value=50000.0, unrealized_pl=1000.0, unrealized_plpc=0.02,
             )
-            exchange.trading_client = MagicMock()
+            exchange.trading_client = paper_trading_client()
             exchange.trading_client.get_all_positions = MagicMock(return_value=[mock_position])
 
             # Without bypass — should fail fast
@@ -371,7 +372,7 @@ class TestCircuitBreakerIntegration:
                     raise ConnectionError("transient error")
                 return mock_order
 
-            exchange.trading_client = MagicMock()
+            exchange.trading_client = paper_trading_client()
             exchange.trading_client.submit_order = MagicMock(side_effect=flaky_submit)
 
             result = await exchange.create_order("BTCUSD", 1.0, "sell", confirm=False, bypass_circuit_breaker=True)
