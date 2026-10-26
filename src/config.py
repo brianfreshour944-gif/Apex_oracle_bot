@@ -1,5 +1,6 @@
 """Modern configuration system using Pydantic Settings V2 with environment variable validation."""
 
+import os
 from urllib.parse import urlsplit, urlunsplit
 
 from pydantic import Field, computed_field, field_validator, model_validator
@@ -685,6 +686,20 @@ class TradingBotSettings(BaseSettings):
         default="data/adaptive_meta_state.json",
         description="Path to the atomically-persisted adaptive learner JSON state",
     )
+    PERFORMANCE_TRACKER_STATE_PATH: str = Field(
+        default=os.path.join("data", "performance_tracker_state.json"),
+        description="Path to the performance-tracker JSON state used for decay "
+                    "monitoring. Overridable so the test suite can redirect it to "
+                    "a temp dir -- otherwise tests that record strategy outcomes "
+                    "append synthetic trades to the real runtime file.",
+    )
+    FEATURE_DRIFT_STATE_PATH: str = Field(
+        default=os.path.join("data", "feature_drift_state.json"),
+        description="Path to the feature-drift monitor JSON state (PSI/KS "
+                    "windows). Overridable so the test suite can redirect it to a "
+                    "temp dir -- otherwise tests that record features write to the "
+                    "real runtime file.",
+    )
     ADAPTIVE_LEARNING_RATE: float = Field(
         default=0.10,
         description="Exponential reward learning rate for per-brain weight updates",
@@ -948,6 +963,8 @@ STATUS_PORT = settings.STATUS_PORT
 BOT_NAME = settings.BOT_NAME
 ADAPTIVE_ML_ENABLED = settings.ADAPTIVE_ML_ENABLED
 ADAPTIVE_STATE_PATH = settings.ADAPTIVE_STATE_PATH
+PERFORMANCE_TRACKER_STATE_PATH = settings.PERFORMANCE_TRACKER_STATE_PATH
+FEATURE_DRIFT_STATE_PATH = settings.FEATURE_DRIFT_STATE_PATH
 ADAPTIVE_LEARNING_RATE = settings.ADAPTIVE_LEARNING_RATE
 ADAPTIVE_MIN_WEIGHT = settings.ADAPTIVE_MIN_WEIGHT
 ADAPTIVE_MAX_WEIGHT = settings.ADAPTIVE_MAX_WEIGHT

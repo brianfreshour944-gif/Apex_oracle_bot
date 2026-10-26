@@ -13,11 +13,10 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from src.config import settings
 from src.logging_config import get_logger
 
 logger = get_logger("feature_drift")
-
-_STATE_PATH = os.path.join("data", "feature_drift_state.json")
 
 # Drift detection thresholds (per feature)
 PSI_THRESHOLDS = {
@@ -132,8 +131,10 @@ def _classify_drift(psi: float, ks_pvalue: float) -> str:
 class FeatureDriftMonitor:
     """Monitors feature distributional drift using PSI and KS tests."""
     
-    def __init__(self, state_path: str = _STATE_PATH):
-        self.state_path = state_path
+    def __init__(self, state_path: str | None = None):
+        # Resolve at construction time, not import time, so an env-var override
+        # (e.g. the test suite redirecting to a temp dir) is always honoured.
+        self.state_path = state_path or settings.FEATURE_DRIFT_STATE_PATH
         self._state: dict[str, Any] = {
             "reference_windows": {},      # feature -> { "values": [], "window_start": iso_ts }
             "monitor_windows": {},        # feature -> { "values": [], "window_start": iso_ts }

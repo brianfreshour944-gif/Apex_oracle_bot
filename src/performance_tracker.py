@@ -14,11 +14,10 @@ from typing import Any
 
 import numpy as np
 
+from src.config import settings
 from src.logging_config import get_logger
 
 logger = get_logger("performance_tracker")
-
-_STATE_PATH = os.path.join("data", "performance_tracker_state.json")
 
 # Decay detection thresholds
 MIN_TRADES_FOR_STATS = 10
@@ -96,8 +95,10 @@ def _compute_extended_stats(returns: list[float], pnls: list[float]) -> dict[str
 class PerformanceTracker:
     """Tracks and reports strategy/regime performance for decay detection."""
 
-    def __init__(self, state_path: str = _STATE_PATH):
-        self.state_path = state_path
+    def __init__(self, state_path: str | None = None):
+        # Resolve at construction time, not import time, so an env-var override
+        # (e.g. the test suite redirecting to a temp dir) is always honoured.
+        self.state_path = state_path or settings.PERFORMANCE_TRACKER_STATE_PATH
         self._state: dict[str, Any] = {}
         self._load_state()
 

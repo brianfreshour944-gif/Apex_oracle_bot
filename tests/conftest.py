@@ -40,6 +40,18 @@ os.environ.setdefault("ALPACA_SECRET_KEY", "test_dummy_secret")
 _TEST_STATE_DIR = tempfile.mkdtemp(prefix="apex_test_state_")
 os.environ["DATABASE_URL"] = "sqlite:///" + os.path.join(_TEST_STATE_DIR, "bot.db").replace("\\", "/")
 os.environ["ADAPTIVE_STATE_PATH"] = os.path.join(_TEST_STATE_DIR, "adaptive_meta_state.json")
+# The performance tracker's state path is likewise a RELATIVE default
+# (data/performance_tracker_state.json). tests/test_strategy_selector_seeding.py
+# calls record_strategy_outcome(), which writes through the process-wide
+# singleton to that real file -- a full-suite run appended one synthetic trade
+# (pnl=5.0, return_pct=2.0) every time, corrupting decay-monitoring state with
+# fixture data. Redirect it here so the suite can never touch the real file.
+os.environ["PERFORMANCE_TRACKER_STATE_PATH"] = os.path.join(_TEST_STATE_DIR, "performance_tracker_state.json")
+# Same defect class, separate file: src/feature_drift_monitor.py also hardcoded
+# a RELATIVE default (data/feature_drift_state.json), so the suite wrote the real
+# runtime file via strategies.py:470 -> record_features_for_drift -> _save_state().
+# (Verified: its mtime advanced across full-suite runs.) Redirect it too.
+os.environ["FEATURE_DRIFT_STATE_PATH"] = os.path.join(_TEST_STATE_DIR, "feature_drift_state.json")
 os.environ["APEX_LIVE_BUFFER_PATH"] = os.path.join(_TEST_STATE_DIR, "live_experiences.jsonl")
 os.environ["APEX_MODEL_STORE_DIR"] = os.path.join(_TEST_STATE_DIR, "models")
 atexit.register(shutil.rmtree, _TEST_STATE_DIR, ignore_errors=True)
