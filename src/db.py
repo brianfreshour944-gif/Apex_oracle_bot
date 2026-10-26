@@ -155,6 +155,25 @@ class OrderRecord(Base):
     filled_qty: Mapped[float] = mapped_column(Float, default=0.0)
     filled_avg_price: Mapped[float] = mapped_column(Float, default=0.0)
     commission: Mapped[float] = mapped_column(Float, default=0.0)
+    # Provenance of `commission`. NULL = unknown -- never assume "verified".
+    #   "estimated" = derived from ESTIMATED_TAKER_FEE_BPS by the exchange
+    #                 adapter (Alpaca reports no fee on the Order model), NOT
+    #                 an exchange-observed charge.
+    #   "exchange"  = a nonzero commission the adapter observed directly.
+    # A stored 0.0 with NULL provenance means "no fee recorded", which is NOT
+    # the same as "no fee charged". Historical rows keep NULL.
+    fee_source: Mapped[str | None] = mapped_column(String(16), nullable=True, default=None)
+    # Submission-time quote snapshot (2026-10-25, W1 instrumentation). Captured
+    # from the NBBO immediately BEFORE the order was submitted, so it is
+    # contemporaneous with the decision -- NOT a post-fill price. All three are
+    # nullable and mean "not captured" when NULL; a NULL must never be read as a
+    # zero spread or a zero cost. `mid_at_submit`/`spread_at_submit` are in price
+    # units; `quote_ts` is the exchange timestamp of the captured quote.
+    mid_at_submit: Mapped[float | None] = mapped_column(Float, nullable=True, default=None)
+    spread_at_submit: Mapped[float | None] = mapped_column(Float, nullable=True, default=None)
+    quote_ts: Mapped[datetime.datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, default=None
+    )
     status: Mapped[str] = mapped_column(String(32), default="new")
     type: Mapped[str] = mapped_column(String(16), default="market")
     time_in_force: Mapped[str] = mapped_column(String(16), default="ioc")
@@ -235,6 +254,10 @@ def save_order_record(
     filled_qty: float = 0.0,
     filled_avg_price: float = 0.0,
     commission: float = 0.0,
+    fee_source: str | None = None,
+    mid_at_submit: float | None = None,
+    spread_at_submit: float | None = None,
+    quote_ts: datetime.datetime | None = None,
     status: str = "new",
     type: str = "market",
     time_in_force: str = "ioc",
@@ -255,6 +278,10 @@ def save_order_record(
                 filled_qty=float(filled_qty),
                 filled_avg_price=float(filled_avg_price),
                 commission=float(commission),
+                fee_source=fee_source,
+                mid_at_submit=mid_at_submit,
+                spread_at_submit=spread_at_submit,
+                quote_ts=quote_ts,
                 status=status,
                 type=type,
                 time_in_force=time_in_force,
@@ -494,11 +521,49 @@ def _ensure_indexes() -> None:
         conn.commit()
 
 
+def _ensure_additive_columns() -> None:
+    """Idempotently add columns introduced after a table already existed.
+
+    ``create_all()`` only issues CREATE TABLE for tables that do not exist yet,
+    so it silently skips new columns on an already-deployed database. This adds
+    them with ALTER TABLE, guarded by a dialect-agnostic column inspection so it
+    is a no-op once present (SQLite has no ``ADD COLUMN IF NOT EXISTS``, and
+    ``PRAGMA table_info`` is SQLite-only). Additive and nullable only -- no
+    existing row is rewritten and no data is dropped.
+    """
+    additions = {
+        "orders": [
+            ("fee_source", "VARCHAR(16)"),
+            ("mid_at_submit", "FLOAT"),
+            ("spread_at_submit", "FLOAT"),
+            ("quote_ts", "DATETIME"),
+        ],
+    }
+    try:
+        from sqlalchemy import inspect as sa_inspect
+        engine = get_engine()
+        inspector = sa_inspect(engine)
+        existing_tables = set(inspector.get_table_names())
+        for table, columns in additions.items():
+            if table not in existing_tables:
+                continue  # table not created yet; create_all will handle it
+            existing = {c["name"] for c in inspector.get_columns(table)}
+            for name, ddl_type in columns:
+                if name in existing:
+                    continue
+                with engine.begin() as conn:
+                    conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {name} {ddl_type}"))
+                logger.info(f"Added missing column {table}.{name} ({ddl_type})")
+    except Exception as e:
+        logger.warning(f"_ensure_additive_columns failed (non-fatal): {e}")
+
+
 def _ensure_tables() -> None:
     global _tables_ensured
     if not _tables_ensured:
         Base.metadata.create_all(get_engine())
         _ensure_indexes()
+        _ensure_additive_columns()
         _tables_ensured = True
 
 def _recovery_from_corruption() -> None:
@@ -719,6 +784,9 @@ def init_db() -> bool:
         # models. Explicitly (and idempotently) ensure they exist on already-
         # deployed databases too.
         _ensure_indexes()
+        # Same reason, for columns: create_all() skips new columns on tables
+        # that already exist, so add any missing ones here.
+        _ensure_additive_columns()
 
         logger.info(f"Database connected: {settings.DATABASE_URL}")
         # Consume the flag: report recoveries seen up to this call, then clear

@@ -11,7 +11,7 @@ import polars as pl
 from alpaca.common.enums import Sort
 from alpaca.common.exceptions import APIError
 from alpaca.data.historical.crypto import CryptoHistoricalDataClient
-from alpaca.data.requests import CryptoBarsRequest, CryptoLatestBarRequest
+from alpaca.data.requests import CryptoBarsRequest, CryptoLatestBarRequest, CryptoLatestQuoteRequest
 from alpaca.data.timeframe import TimeFrame, TimeFrameUnit
 
 # Import alpaca-py components
@@ -193,6 +193,7 @@ class BaseExchange(Protocol):
     async def close(self) -> None: ...
     async def get_account(self) -> dict[str, Any]: ...
     async def get_bars(self, symbol: str, timeframe: str = "1D", limit: int = 100, end: datetime.datetime | None = None) -> pl.DataFrame: ...
+    async def get_latest_quote(self, symbol: str) -> dict[str, float] | None: ...
     async def get_positions(self, bypass_circuit_breaker: bool = False) -> list[dict[str, Any]]: ...
     async def create_order(self, symbol: str, qty: float, side: str, type: str = "market", time_in_force: str = "ioc", client_order_id: str | None = None, bypass_circuit_breaker: bool = False) -> dict[str, Any]: ...
     async def submit_protective_stop(self, symbol: str, qty: float, stop_price: float, limit_price: float, client_order_id: str | None = None, bypass_circuit_breaker: bool = False) -> dict[str, Any]: ...
@@ -442,6 +443,46 @@ class AlpacaExchange:
             logger.warning(f"Failed to fetch latest bar for {symbol}: {e}")
 
         return pl.DataFrame()
+
+    async def get_latest_quote(self, symbol: str) -> dict[str, float] | None:
+        """Fetch the latest NBBO quote for a crypto symbol.
+
+        Returns ``{"bid", "ask", "mid", "spread", "quote_ts"}`` (``quote_ts`` is
+        an ISO-8601 string) or ``None`` when a quote cannot be obtained. This is
+        a measurement helper: it NEVER raises, so a quote outage can never block
+        or fail an order path. Callers must treat ``None`` as "quote not
+        captured" -- never as a zero spread or a zero cost.
+
+        ``spread`` is in price units (``ask - bid``); ``mid`` is the midpoint.
+
+        Deliberately does NOT call ``load()``: re-initializing clients from
+        inside an order path would replace an already-loaded trading client and
+        could trigger a live credential round-trip. If the data client is not
+        yet loaded, the quote is simply not captured (returns None).
+        """
+        try:
+            if not self.data_client:
+                return None
+            request_params = CryptoLatestQuoteRequest(symbol_or_symbols=symbol)
+            quotes = await asyncio.to_thread(self.data_client.get_crypto_latest_quote, request_params)
+            quote = quotes.get(symbol) if hasattr(quotes, "get") else None
+            if quote is None:
+                return None
+            bid = float(quote.bid_price)
+            ask = float(quote.ask_price)
+            if bid <= 0.0 or ask <= 0.0:
+                return None
+            ts = getattr(quote, "timestamp", None)
+            return {
+                "bid": bid,
+                "ask": ask,
+                "mid": (bid + ask) / 2.0,
+                "spread": ask - bid,
+                "quote_ts": ts.isoformat() if hasattr(ts, "isoformat") else (str(ts) if ts is not None else None),
+            }
+        except Exception as e:
+            logger.debug(f"Latest quote unavailable for {symbol} (non-fatal): {e}")
+            return None
 
     def invalidate_bars_cache(self, symbol: str | None = None, timeframe: str | None = None) -> int:
         """
@@ -791,6 +832,18 @@ class AlpacaExchange:
                 order_kwargs["client_order_id"] = client_order_id
             request = MarketOrderRequest(**order_kwargs)
 
+        # Capture the submission-time quote BEFORE submitting, so the recorded
+        # mid/spread is contemporaneous with the decision rather than the
+        # post-fill market. Gated by CAPTURE_SUBMISSION_QUOTE and
+        # failure-isolated: a quote outage must never block an order. Bound
+        # outside the try so the except/retry paths below can still attach it.
+        submission_quote: dict[str, float] | None = None
+        if getattr(settings, "CAPTURE_SUBMISSION_QUOTE", False):
+            try:
+                submission_quote = await self.get_latest_quote(symbol)
+            except Exception as quote_err:
+                logger.debug(f"Submission-quote capture skipped for {symbol} (non-fatal): {quote_err}")
+
         try:
             if bypass_circuit_breaker:
                 order = await asyncio.to_thread(self.trading_client.submit_order, request)
@@ -803,6 +856,7 @@ class AlpacaExchange:
                 "qty": float(order.qty) if order.qty else 0.0,
                 "status": str(order.status.value) if hasattr(order.status, "value") else str(order.status),
             }
+            order_info["submission_quote"] = submission_quote
         except Exception as submit_err:
             existing = None
             if client_order_id is not None and not _is_circuit_open_error(submit_err):
@@ -840,6 +894,10 @@ class AlpacaExchange:
             )
             order_id = existing["id"]
             order_info = existing
+            # An existing order recovered from a prior submission has no fresh
+            # quote of its own; carry this attempt's capture rather than a
+            # stale one from the original dict.
+            order_info.setdefault("submission_quote", submission_quote)
 
         # Cache for idempotency
         if client_order_id is not None:

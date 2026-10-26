@@ -424,6 +424,14 @@ class TradingBotSettings(BaseSettings):
         ge=0,
         le=1000,
     )
+    CAPTURE_SUBMISSION_QUOTE: bool = Field(
+        default=False,
+        description="If True, snapshot the NBBO (bid/ask/mid/spread + quote "
+                    "timestamp) immediately before each order submission and "
+                    "persist it on the order row. Measurement only: the capture "
+                    "is failure-isolated and never blocks or alters an order, and "
+                    "a missing quote is stored NULL (never as a zero spread).",
+    )
 
     # --- Multi-Timeframe Feature Engineering ---
     FEATURE_TIMEFRAMES: str = Field(

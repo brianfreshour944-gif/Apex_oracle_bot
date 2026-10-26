@@ -1348,6 +1348,27 @@ def _persist_order_record(
     """
     from src.db import save_order_record
     try:
+        # Fee provenance (2026-10-25): the exchange adapter cannot observe a
+        # fee, so it ESTIMATES one and flags ``commission_estimated`` in the
+        # result dict. Persist that provenance so a stored fee is never
+        # mistaken for an exchange-verified charge. Derived here -- the single
+        # ledger-write funnel -- so it cannot drift from the adapter's flag.
+        _commission = float(order_result.get("commission", 0.0) or 0.0)
+        if order_result.get("commission_estimated"):
+            _fee_source: str | None = "estimated"
+        elif _commission > 0.0:
+            _fee_source = "exchange"   # a nonzero fee observed directly
+        else:
+            _fee_source = None         # no fee recorded -> unknown, NOT free
+
+        # Submission-quote provenance (2026-10-25, W1). The adapter snapshots the
+        # NBBO before submitting and returns it as ``submission_quote``; a missing
+        # or partial quote persists as NULL -- never as a zero spread/cost.
+        _quote = order_result.get("submission_quote") or {}
+        _mid = _quote.get("mid") if isinstance(_quote, dict) else None
+        _spread = _quote.get("spread") if isinstance(_quote, dict) else None
+        _quote_ts = _parse_order_timestamp(_quote.get("quote_ts")) if isinstance(_quote, dict) else None
+
         save_order_record(
             order_id=str(order_result.get("id", client_order_id or "unknown")),
             decision_id=decision_id,
@@ -1356,7 +1377,11 @@ def _persist_order_record(
             qty=float(order_result.get("qty", 0.0) or 0.0),
             filled_qty=float(order_result.get("filled_qty", 0.0) or 0.0),
             filled_avg_price=float(order_result.get("filled_avg_price", 0.0) or 0.0),
-            commission=float(order_result.get("commission", 0.0) or 0.0),
+            commission=_commission,
+            fee_source=_fee_source,
+            mid_at_submit=float(_mid) if _mid is not None else None,
+            spread_at_submit=float(_spread) if _spread is not None else None,
+            quote_ts=_quote_ts,
             status=str(order_result.get("status", "unknown")),
             type=order_type,
             time_in_force=time_in_force,
