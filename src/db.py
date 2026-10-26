@@ -75,6 +75,28 @@ class DecisionSnapshot(Base):
     realized_pnl: Mapped[float] = mapped_column(Float, default=0.0)
     return_pct: Mapped[float] = mapped_column(Float, default=0.0)
     holding_period_sec: Mapped[float] = mapped_column(Float, default=0.0)
+    # Machine-readable trust status of realized_pnl/return_pct. One of
+    # "reconciled" or "unreconciled". NULL on rows written before this column
+    # existed, which must be treated as "unknown" -- never as reconciled.
+    #
+    # IMPORTANT SCOPE (2026-10-25 review): "reconciled" means the P&L was
+    # REBUILT FROM THE ORDER LEDGER and the arithmetic balanced -- quantities
+    # tied out within tolerance, and both legs carried a NONZERO commission.
+    # It does NOT mean the fees are VERIFIED. `commission` is an estimated
+    # value on this deployment (Alpaca reports none; the adapter derives it
+    # from ESTIMATED_TAKER_FEE_BPS) and the estimate flag is not persisted, so
+    # a nonzero commission proves a cost was recorded, not that the cost is
+    # accurate. Read "reconciled" as "internally consistent reconstruction
+    # with recorded fees", never as "audited against exchange billing".
+    # Separating accounting reconciliation from fee verification would need a
+    # fee-provenance column and is a deliberate follow-up, not part of this
+    # change. The LABEL itself never gates trading, risk, or committee
+    # behavior; but the realized_pnl/return_pct values it describes DO reach
+    # consumers, some of which (e.g. the rolling loss limit) use every closed
+    # row regardless of this status. Do not read "unreconciled" as excluded
+    # from decisions -- it is a data-quality warning, not an exclusion
+    # guarantee.
+    outcome_status: Mapped[str | None] = mapped_column(String(16), nullable=True, default=None)
     created_at: Mapped[datetime.datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.datetime.now(datetime.UTC)
     )
@@ -362,6 +384,335 @@ def get_entry_fee_estimate(
         return 0.0
 
 
+# Relative quantity tolerance, used ONLY as a coarse pre-filter on total
+# bought-vs-sold quantity. It is NOT the certifying step: a residual that passes
+# here is still rejected by the fee classifier below unless it matches a
+# supported fee convention (see reconstruct_position_outcome). Measured on the
+# deployed ledger, every reconciled round trip shows residual_qty == buy_qty *
+# ESTIMATED_TAKER_FEE_BPS/10000 == 0.0025 (entry fee withheld in the base asset),
+# so 0.005 = 2x that admits the real fee-sized residual while the observed 3.93
+# (393%) outlier fails closed. It is relative (divided by buy_qty), so it is
+# scale-free across assets. A sub-tolerance residual that does NOT match the
+# recorded fee rate is still classified "unexplained_residual" -> unreconciled.
+_QTY_RECONCILE_TOLERANCE = 0.005
+
+
+def _count_position_lifecycles(ordered_legs: list[tuple[str, float]]) -> int:
+    """Count distinct position lifecycles in time order.
+
+    A lifecycle is: flat -> accumulate buys -> sell back down to flat. A new
+    lifecycle begins only when a buy arrives while the position is already flat,
+    so a normal scale-in (buy, buy, sell, sell) counts as one and a reused
+    decision_id holding two separate round trips counts as two.
+
+    "Flat" cannot be exact: the withheld entry fee means a full exit leaves
+    ``sold == bought * (1 - fee_rate)``, not ``bought``. A cycle is therefore
+    treated as closed once cumulative sells reach ``(1 - tol)`` of cumulative
+    buys, which the 25 bps deployed fee clears comfortably.
+
+    LIMITATION (2026-10-25 review, accepted, unchanged): this threshold is a
+    heuristic, not a proof of position identity. It closes a cycle when sells
+    reach ``(1 - tol)`` of buys, which is EARLIER than exact flat (1.0) and so
+    errs toward SPLITTING (fail-closed: a spurious split yields
+    ``multiple_position_lifecycles`` -> unreconciled). It does NOT, however,
+    never merge: if an interior exit leaves a residual LARGER than ``tol``, the
+    cycle stays open and a later buy is folded into it. If the aggregate later
+    returns to flat, the merged row is certified "reconciled" as a single
+    lifecycle. The trigger is a residual ABOVE ``tol``, which does NOT depend on
+    the fee rate alone: a genuine partial exit (partial fill or scale-out) at the
+    deployed 25 bps fee reaches it just as a >0.5% fee rate would. The counter's
+    behavior is a function of cumulative quantities and their order, not of the
+    configured fee. The threshold is retained deliberately -- hardening it
+    changes the classification and is a separate, behavior-affecting change.
+    """
+    bought = sold = 0.0
+    lifecycles = 0
+    open_cycle = False
+    for side, qty in ordered_legs:
+        if side == "buy":
+            if not open_cycle:
+                lifecycles += 1
+                open_cycle = True
+            bought += qty
+        else:
+            sold += qty
+            if open_cycle and bought > 0 and sold >= bought * (1.0 - _QTY_RECONCILE_TOLERANCE):
+                open_cycle = False
+    return lifecycles
+
+
+def _has_ambiguous_reentry(ordered_legs: list[tuple[str, float]]) -> bool:
+    """True if a buy arrives while the open cycle has already had a SELL and the
+    residual is still larger than the tolerance.
+
+    That history is consistent with a PARTIAL EXIT followed by a fresh position,
+    which cannot be distinguished from a scale-in re-entry of the leftover. The
+    aggregate may still return to flat, so the quantity gate passes and the row
+    would otherwise be certified -- a false certification (2026-10-25 review).
+    Such histories are therefore failed closed.
+    """
+    bought = sold = 0.0
+    sold_since_open = 0.0
+    open_cycle = False
+    for side, qty in ordered_legs:
+        if side == "buy":
+            if (open_cycle and sold_since_open > 0 and bought > 0
+                    and (bought - sold) / bought > _QTY_RECONCILE_TOLERANCE):
+                return True
+            if not open_cycle:
+                open_cycle = True
+                sold_since_open = 0.0
+            bought += qty
+        else:
+            sold += qty
+            sold_since_open += qty
+            if open_cycle and bought > 0 and sold >= bought * (1.0 - _QTY_RECONCILE_TOLERANCE):
+                open_cycle = False
+    return False
+
+
+def reconstruct_position_outcome(
+    decision_id: str,
+    *,
+    exit_price: float | None = None,
+    exit_qty: float | None = None,
+    exit_commission: float = 0.0,
+    entry_price: float | None = None,
+    entry_qty: float | None = None,
+) -> dict[str, Any]:
+    """Rebuild a closed position's realized outcome from the order ledger.
+
+    A position can be entered in several buys (scale-in) and exited in several
+    sells (scale-out). The previous implementation closed the snapshot on the
+    FIRST exit fill and computed P&L from that one leg's quantity, which
+    charged the whole position's entry fee against a dust-sized gross and could
+    even flip the sign of the result (2026-10-25 accounting audit). This
+    reconstructs from EVERY linked fill.
+
+    Cash-flow definition (this is what an account actually earns):
+      cash_out_on_buys  = sum(buy.filled_qty * buy.filled_avg_price)
+      cash_in_on_sells  = sum(sell.filled_qty * sell.filled_avg_price) - exit_fees
+      realized_pnl      = cash_in_on_sells - cash_out_on_buys - entry_fees_in_quote
+
+    Fee convention, established from the deployed fills themselves rather than
+    assumed. The schema records no fee *currency*, so the convention is read off
+    the fill quantities, which are the primary evidence:
+
+      * The ENTRY fee is withheld in the BASE asset. On every fully-closed row
+        of the deployed ledger ``sell_qty == buy_qty * (1 - 0.0025)`` exactly --
+        the position that gets sold is the bought quantity net of the entry fee,
+        so the entry fee is already inside ``proceeds`` and must NOT be
+        subtracted a second time. (Independently: ``filled_qty == qty`` on every
+        leg, so this is not a partial-fill artifact.)
+      * The EXIT fee is charged in QUOTE: the whole net position is sold and the
+        fee is deducted from the cash received, so it IS subtracted in full.
+
+    The fee convention is therefore resolved by a two-way classifier, not by a
+    partial-fee formula. The residual quantity fraction (``residual_qty /
+    buy_qty``) is compared against the recorded entry fee rate
+    (``entry_fees / position_basis``):
+
+      * residual matches the fee rate -> the entry fee was withheld in BASE, so
+        it is already inside the reduced ``proceeds``; ``entry_fee_unaccounted``
+        is 0 and the fee is NOT subtracted again.
+      * residual is ~0 -> the entry fee was charged in QUOTE as a separate cash
+        charge; ``entry_fee_unaccounted`` is the full ``entry_fees``.
+      * neither -> the residual is not explained by any supported convention, so
+        the true cost is unknown: fail closed as "unexplained_residual".
+
+    Supported conventions (both are recognised; anything else fails closed):
+    entry fee withheld in the BASE asset, or charged in the QUOTE asset. The
+    schema records no fee *currency* for any fill, so the convention is inferred
+    from the recorded quantities -- which are the primary evidence -- and an
+    ambiguous or missing fee record can never produce a certified net P&L: a row
+    whose residual fits neither branch, or whose entry commission is missing
+    while its quantity shows withholding, is returned "unreconciled".
+
+    The caller's own observed exit fill (``exit_price``/``exit_qty``/
+    ``exit_commission``) is used ONLY as a substitute exit leg when the ledger
+    holds no sell for this decision_id (e.g. the fire-and-forget ledger write
+    failed). Likewise ``entry_price``/``entry_qty`` substitute for a missing
+    ledger buy. When a leg is substituted the row is labelled "unreconciled" --
+    only a round trip assembled entirely from the ledger is "reconciled".
+
+    Fail-closed: if neither the ledger nor the fallbacks can supply an entry and
+    an exit, or the bought and sold quantities do not reconcile within
+    ``_QTY_RECONCILE_TOLERANCE``, the result is marked "unreconciled" and the
+    numeric fields are None -- a partial ledger calculation is NEVER presented
+    as the actual P&L.
+    """
+    try:
+        _ensure_tables()
+        with get_db_session() as session:
+            rows = session.execute(
+                select(OrderRecord).where(OrderRecord.decision_id == decision_id)
+            ).scalars().all()
+
+        def _filled(r: OrderRecord) -> bool:
+            return float(r.filled_qty or 0.0) > 0.0 and float(r.filled_avg_price or 0.0) > 0.0
+
+        buys = [r for r in rows if str(r.side).lower() == "buy" and _filled(r)]
+        sells = [r for r in rows if str(r.side).lower() == "sell" and _filled(r)]
+
+        # A reused decision_id holding more than one round trip cannot be summed
+        # into a single outcome: the legs belong to different position lifecycles
+        # and their P&L must not be merged. Detect that from the time-ordered fill
+        # sequence and fail closed rather than silently combining them (the real
+        # `c6a6d0423cc2` case is exactly this).
+        if buys and sells:
+            def _ts(r: OrderRecord) -> float:
+                # Execution order, not submission order: a lifecycle is defined
+                # by when fills actually landed. Prefer filled_at and fall back
+                # to submitted_at only when the fill time is absent. (Measured
+                # on the deployed ledger: 24/73 legs lack filled_at, and on all
+                # 13 multi-leg decisions the submit- and fill-orderings agree,
+                # so the fallback cannot change a lifecycle count there.)
+                dt = r.filled_at or r.submitted_at
+                if dt is None:
+                    return 0.0
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=datetime.UTC)
+                return dt.timestamp()
+
+            ordered = [
+                (str(r.side).lower(), float(r.filled_qty))
+                for r in sorted((r for r in rows if _filled(r)), key=_ts)
+            ]
+            lifecycles = _count_position_lifecycles(ordered)
+            if lifecycles > 1 or _has_ambiguous_reentry(ordered):
+                return {
+                    "realized_pnl": None, "return_pct": None,
+                    "outcome_status": "unreconciled",
+                    "reason": ("multiple_position_lifecycles" if lifecycles > 1
+                               else "ambiguous_lifecycle_history"),
+                    "lifecycles": lifecycles,
+                }
+
+        legs = [(float(r.filled_qty), float(r.filled_avg_price), float(r.commission or 0.0)) for r in buys]
+        exit_legs = [(float(r.filled_qty), float(r.filled_avg_price), float(r.commission or 0.0)) for r in sells]
+        from_ledger = bool(buys) and bool(sells)
+
+        # Substitute a missing leg from the caller's observed values. Only the
+        # exit leg is substitutable in practice (the live path always persists
+        # the entry buys); the entry fallback covers a snapshot with no ledger
+        # buy at all, which is then explicitly labelled unreconciled.
+        if not exit_legs and exit_price and exit_qty and float(exit_price) > 0 and float(exit_qty) > 0:
+            exit_legs = [(float(exit_qty), float(exit_price), abs(float(exit_commission or 0.0)))]
+        if not legs and entry_price and entry_qty and float(entry_price) > 0 and float(entry_qty) > 0:
+            legs = [(float(entry_qty), float(entry_price), 0.0)]
+
+        if not legs:
+            return {
+                "realized_pnl": None, "return_pct": None,
+                "outcome_status": "unreconciled", "reason": "no_linked_entry_fills",
+            }
+        if not exit_legs:
+            return {
+                "realized_pnl": None, "return_pct": None,
+                "outcome_status": "unreconciled", "reason": "no_linked_exit_fills",
+            }
+
+        buy_qty = sum(leg[0] for leg in legs)
+        sell_qty = sum(leg[0] for leg in exit_legs)
+        if buy_qty <= 0:
+            return {
+                "realized_pnl": None, "return_pct": None,
+                "outcome_status": "unreconciled", "reason": "zero_entry_qty",
+            }
+
+        residual = buy_qty - sell_qty
+        if abs(residual) / buy_qty > _QTY_RECONCILE_TOLERANCE:
+            return {
+                "realized_pnl": None, "return_pct": None,
+                "outcome_status": "unreconciled", "reason": "quantity_mismatch",
+                "buy_qty": buy_qty, "sell_qty": sell_qty, "residual_qty": residual,
+            }
+
+        position_basis = sum(leg[0] * leg[1] for leg in legs)
+        proceeds = sum(leg[0] * leg[1] for leg in exit_legs)
+        entry_fees = sum(leg[2] for leg in legs)
+        exit_fees = sum(leg[2] for leg in exit_legs)
+        if position_basis <= 0:
+            return {
+                "realized_pnl": None, "return_pct": None,
+                "outcome_status": "unreconciled", "reason": "zero_position_basis",
+            }
+
+        # Cash flow. The schema records no fee *currency*, so the convention is
+        # inferred from the recorded quantities, which are the primary evidence:
+        #   - entry fee withheld in BASE: residual_qty/buy_qty == entry fee rate,
+        #     and the fee is already inside the reduced proceeds;
+        #   - entry fee charged in QUOTE: quantities match (residual ~ 0) and the
+        #     fee is a separate cash charge.
+        # Both tests are relative, so they hold for any position size. A residual
+        # fitting neither is not a fee at all: the true cost is unknown, so fail
+        # closed rather than guess.
+        residual_frac = residual / buy_qty
+        fee_rate = (entry_fees / position_basis) if position_basis > 0 else 0.0
+        tol_frac = max(1e-6, 0.1 * fee_rate)
+
+        # Fee provenance (2026-10-25 review). ``commission`` is a plain float
+        # with no "verified" flag, and the exchange adapter documents that
+        # Alpaca reports 0.0 on every fill -- the real fee is *estimated*, never
+        # observed (see AlpacaExchange._apply_estimated_commission). A recorded
+        # 0 therefore means "no fee recorded", NOT "no fee charged": the schema
+        # cannot tell a verified zero from an absent one, so a fee-inclusive
+        # P&L cannot be CERTIFIED when a needed fee is 0.
+        #
+        # This gate applies only to a round trip assembled entirely from the
+        # ledger. A caller-substituted leg is already labelled "unreconciled"
+        # (its fee is the caller's observed value, a weaker class of evidence),
+        # so it keeps its best-effort number; the harm here is a *certified*
+        # result, and only ledger rows can be certified. This is what stops an
+        # exact-quantity, zero-fee ledger row -- the shape of every BTC order in
+        # the deployed snapshot -- from being falsely certified as fee-free.
+        if from_ledger and (entry_fees <= 0.0 or exit_fees <= 0.0):
+            return {
+                "realized_pnl": None, "return_pct": None,
+                "outcome_status": "unreconciled", "reason": "unverified_fee_provenance",
+                "buy_qty": buy_qty, "sell_qty": sell_qty, "residual_qty": residual,
+                "entry_fees": entry_fees, "exit_fees": exit_fees,
+            }
+
+        if abs(residual_frac - fee_rate) <= tol_frac:
+            entry_fee_unaccounted = 0.0            # withheld in base; already in proceeds
+        elif abs(residual_frac) <= tol_frac:
+            entry_fee_unaccounted = entry_fees     # charged in quote; subtract in full
+        else:
+            return {
+                "realized_pnl": None, "return_pct": None,
+                "outcome_status": "unreconciled", "reason": "unexplained_residual",
+                "buy_qty": buy_qty, "sell_qty": sell_qty, "residual_qty": residual,
+            }
+        # The exit fee is charged in QUOTE (the whole net position is sold and the
+        # fee is deducted from the cash received), so it is always subtracted.
+        realized_pnl = proceeds - position_basis - exit_fees - entry_fee_unaccounted
+        return_pct = realized_pnl / position_basis * 100.0
+        return {
+            "realized_pnl": realized_pnl,
+            "return_pct": return_pct,
+            # "reconciled" = ledger-assembled and arithmetic balanced, with a
+            # nonzero (but ESTIMATED, not exchange-verified) fee on each leg.
+            # It is not a fee-verification claim -- see the DecisionSnapshot
+            # .outcome_status column comment for the full scope.
+            "outcome_status": "reconciled" if from_ledger else "unreconciled",
+            "reason": None if from_ledger else "leg_substituted_from_caller",
+            "position_basis": position_basis,
+            "proceeds": proceeds,
+            "entry_fees": entry_fees,
+            "exit_fees": exit_fees,
+            "buy_qty": buy_qty,
+            "sell_qty": sell_qty,
+            "residual_qty": residual,
+        }
+    except Exception as e:
+        logger.warning(f"reconstruct_position_outcome failed for {decision_id} (non-fatal): {e}")
+        return {
+            "realized_pnl": None, "return_pct": None,
+            "outcome_status": "unreconciled", "reason": "reconstruction_error",
+        }
+
+
 def get_stale_protective_stops(max_age_sec: float = 7 * 24 * 3600.0) -> list[dict[str, Any]]:
     """Order-ledger protective-stop rows that may still need a fill refresh.
 
@@ -532,6 +883,7 @@ def _ensure_additive_columns() -> None:
     existing row is rewritten and no data is dropped.
     """
     additions = {
+        "decision_snapshots": [("outcome_status", "VARCHAR(16)")],
         "orders": [
             ("fee_source", "VARCHAR(16)"),
             ("mid_at_submit", "FLOAT"),
@@ -1127,6 +1479,15 @@ def get_closed_decision_snapshots(limit: int = 2000, symbol: str | None = None) 
                         "return_pct": row.return_pct,
                         "entry_price": row.entry_price,
                         "qty": row.qty,
+                        # Accounting trust label: "reconciled", "unreconciled",
+                        # or None (historical/unknown). "reconciled" means the
+                        # P&L was rebuilt from linked ledger fills; it does NOT
+                        # mean the fees are exchange-verified. Consumers that
+                        # build training data or statistics SHOULD exclude
+                        # anything not "reconciled", but this is not enforced
+                        # here -- verify each consumer, since some (e.g. the
+                        # rolling loss limit) intentionally use all closed rows.
+                        "outcome_status": row.outcome_status,
                     })
                 except Exception as e:
                     logger.warning(f"Skipping malformed decision snapshot {row.decision_id}: {e}")
@@ -1292,8 +1653,16 @@ def close_decision_snapshot(
     exit_reason: str | None = None,
     max_favorable_pct: float = 0.0,
     max_adverse_pct: float = 0.0,
+    outcome_status: str | None = None,
 ) -> bool:
     """Mark a snapshot closed and record its realized outcome.
+
+    ``outcome_status`` is the accounting trust label ("reconciled" /
+    "unreconciled"). Callers that cannot certify the P&L should pass
+    "unreconciled" so consumers CAN filter the row; leaving it None keeps the
+    row "unknown" (the historical default). Note this is a data-quality label,
+    not an exclusion guarantee -- it does not by itself remove the row from any
+    calculation (the rolling loss limit, for one, sums every closed row).
 
     Also invalidates the in-memory open-snapshot cache for the
     affected symbol so that a subsequent get_open_snapshot() call
@@ -1322,6 +1691,7 @@ def close_decision_snapshot(
                 row.exit_reason = exit_reason
             row.max_favorable_pct = float(max_favorable_pct)
             row.max_adverse_pct = float(max_adverse_pct)
+            row.outcome_status = outcome_status
             row.closed_at = datetime.datetime.now(datetime.UTC)
             session.commit()
         return True
@@ -1335,6 +1705,17 @@ def get_recent_realized_pnl(hours: float) -> float:
 
     Used by the rolling soft loss-limit entry block (bot.py). Fail-safe:
     returns 0.0 on any error so trading is never blocked by a bookkeeping bug.
+
+    LIMITATION (2026-10-25 review, deliberate and unchanged): this sums EVERY
+    closed row regardless of ``outcome_status``, so a mix of reconciled and
+    unreconciled rows -- and rows whose fees are estimated, not exchange-verified
+    -- feeds the loss limit. That is intentional here: the loss limit must fail
+    safe, and under-counting losses to avoid a block is the more dangerous error.
+    The consequence is that reconstructed P&L directly informs a trading
+    decision (whether to block a new entry), and it is NOT audited performance.
+    Changing this to filter on ``outcome_status`` would change trading behavior
+    and is therefore OUT OF SCOPE for the accounting patch -- it needs its own
+    review and authorization.
     """
     try:
         cutoff = datetime.datetime.now(datetime.UTC) - datetime.timedelta(hours=float(hours))

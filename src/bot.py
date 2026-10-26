@@ -165,51 +165,54 @@ async def _record_committee_outcome(
         if entry_price <= 0 or qty == 0:
             return
 
-        if action == "buy":
-            realized_pnl = (exit_price - entry_price) * qty
-        else:  # sell / short
-            realized_pnl = (entry_price - exit_price) * qty
-
-        # Fees are real money. ``commission`` is the fee on the EXIT fill the
-        # caller just observed (exchange.py estimates it when Alpaca reports
-        # none). A round trip also pays a fee on the ENTRY leg, which the exit
-        # caller cannot see -- read it back from the orders ledger so the
-        # snapshot's realized PnL is not entry-fee-blind. Both are estimates
-        # when the exchange reports no commission (flagged commission_estimated
-        # on the order record); we still subtract them so near-zero trades
-        # don't get inflated win labels (audit finding F-B).
-        exit_fee = abs(float(commission))
-        entry_fee = 0.0
-        try:
-            from src.db import get_entry_fee_estimate
-            # Match the entry fills by the snapshot's decision_id and SUM them
-            # (a scale-in folds several buys into this one snapshot, each with
-            # its own fee). Only fall back to the symbol/price heuristic when
-            # there is no decision_id to key on.
-            entry_fee = abs(float(await asyncio.to_thread(
-                get_entry_fee_estimate,
-                symbol.replace("/", ""),
-                entry_price,
-                snap.get("decision_id"),
-            )))
-        except Exception as fee_err:
-            logger.debug(f"entry-fee lookup failed for {symbol} (non-fatal): {fee_err}")
-        realized_pnl -= exit_fee + entry_fee
-
-        # return_pct must be computed from the NET (post-commission) PnL, not
-        # the gross price delta -- otherwise a trade that's a real loser after
-        # fees (e.g. a $10 gross move eaten by a $15 commission, net -$5) can
-        # report a POSITIVE return_pct, since the commission subtraction above
-        # never touches it. This field feeds performance_tracker.py's
-        # Sharpe/win-rate/decay-alert computations, strategy_selector.py's
-        # adaptive-learner reward signal, AND track_record_status.py's
-        # "positive expectancy" foundation-freeze gate -- all three would
-        # silently see inflated, fee-blind performance without this fix.
-        # Matches the net-pnl/notional convention already used correctly in
-        # reconcile_open_snapshots() elsewhere in this file. Found via the
-        # 2026-09-21 financial-correctness audit.
-        notional = entry_price * qty
-        return_pct = (realized_pnl / notional * 100.0) if notional > 0 else 0.0
+        # Reconstruct the WHOLE position's outcome from the order ledger rather
+        # than from this one exit fill. A scaled-out position closes in several
+        # sells; using the final leg's quantity as if it were the position
+        # charged the entire entry fee against a dust-sized gross and could
+        # flip the sign of the result (2026-10-25 accounting audit). The
+        # ledger-based helper sums every linked fill, so it is correct for
+        # partial exits, scale-ins, and dust closes alike. It fails closed:
+        # when the fills cannot be assembled or the quantities do not
+        # reconcile, the row is marked "unreconciled" instead of guessing.
+        from src.db import reconstruct_position_outcome
+        recon = await asyncio.to_thread(
+            reconstruct_position_outcome,
+            snap.get("decision_id"),
+            exit_price=exit_price,
+            exit_qty=qty,
+            exit_commission=abs(float(commission)),
+            entry_price=entry_price,
+            entry_qty=qty,
+        )
+        outcome_status = recon.get("outcome_status", "unreconciled")
+        if recon.get("realized_pnl") is not None:
+            # The helper always returns the best value it can assemble; the
+            # label records whether the WHOLE round trip came from the ledger
+            # ("reconciled") or an exit leg was taken from the fill the caller
+            # just observed ("unreconciled"). The row still carries the computed
+            # number rather than a stale 0. This label is a data-quality warning,
+            # NOT an exclusion guarantee: some consumers (e.g. the rolling loss
+            # limit via get_recent_realized_pnl) use these values regardless of
+            # outcome_status. Inspect each consumer's filtering before treating
+            # "unreconciled" as excluded from decisions.
+            realized_pnl = float(recon["realized_pnl"])
+            return_pct = float(recon["return_pct"])
+            if outcome_status != "reconciled":
+                logger.warning(
+                    f"[ACCOUNTING] {symbol} decision {snap.get('decision_id')} closed "
+                    f"UNRECONCILED ({recon.get('reason')}): realized_pnl/return_pct "
+                    f"written but not certified from the order ledger"
+                )
+        else:
+            # No leg could be assembled at all: keep the row's existing numbers
+            # rather than overwriting them with 0, and label it unreconciled.
+            logger.warning(
+                f"[ACCOUNTING] {symbol} decision {snap.get('decision_id')} closed "
+                f"UNRECONCILED ({recon.get('reason')}): realized_pnl/return_pct could "
+                f"not be assembled from the order ledger"
+            )
+            realized_pnl = float(snap.get("realized_pnl") or 0.0)
+            return_pct = float(snap.get("return_pct") or 0.0)
 
         holding_sec = 0.0
         created = snap.get("created_at")
@@ -245,6 +248,7 @@ async def _record_committee_outcome(
             exit_reason=exit_reason,
             max_favorable_pct=max_fav_pct,
             max_adverse_pct=max_adv_pct,
+            outcome_status=outcome_status,
         )
 
         # Clear peak/trough price tracking for this symbol on any position close
@@ -273,6 +277,11 @@ async def _record_committee_outcome(
                 live_buffer_path = LIVE_BUFFER_PATH
                 os.makedirs(os.path.dirname(live_buffer_path), exist_ok=True)
                 label = 1.0 if realized_pnl > 0 else 0.0
+                # NOTE (2026-10-25 review): this label is derived from the
+                # RECONSTRUCTED P&L, whose fees are estimated, not
+                # exchange-verified. It is a training signal, not audited
+                # performance -- do not read model accuracy as evidence the
+                # accounting is correct.
                 entry = {"tensor": tensor_state, "label": label}
                 # Entry time lets retrain_transformer.py order live trades
                 # chronologically with the historical buffer.
@@ -383,6 +392,10 @@ async def _record_committee_outcome(
 
         learner = get_meta_learner()
         if learner is not None:
+            # NOTE (2026-10-25 review): ``net_pnl``/``return_pct`` here are the
+            # RECONSTRUCTED values -- fees estimated, not exchange-verified. They
+            # drive adaptive weighting, so reconstructed P&L does inform trading
+            # decisions. Treat it as a working signal, never as audited P&L.
             report = learner.update(
                 {
                     "regime": snap.get("regime", "default"),
@@ -984,7 +997,7 @@ async def reconcile_open_snapshots(exchange: AlpacaExchange) -> None:
       - exchange position with NO open snapshot (restart gap) -> warn.
     Fully fail-safe: any error is logged and skipped.
     """
-    from src.db import close_decision_snapshot, get_all_open_snapshots
+    from src.db import close_decision_snapshot, get_all_open_snapshots, reconstruct_position_outcome
     try:
         open_snaps = await asyncio.to_thread(get_all_open_snapshots)
     except Exception as e:
@@ -1222,16 +1235,43 @@ async def reconcile_open_snapshots(exchange: AlpacaExchange) -> None:
                     logger.debug(f"[RECONCILE] No price available for {sym}: {e}")
             entry_price = float(snap.get("entry_price", 0.0))
             qty = float(snap.get("qty", 0.0))
-            if exit_price > 0 and entry_price > 0 and qty != 0:
-                pnl = (exit_price - entry_price) * qty if action == "buy" else (entry_price - exit_price) * qty
+            # Prefer the same ledger reconstruction the live close paths use, so
+            # a restart-reconciled close carries the identical P&L definition.
+            # It only succeeds when the closing fill is on the ledger under this
+            # decision_id; a ghost closed outside the bot has no such fill, so we
+            # fall back to the snapshot-based estimate below and label the row
+            # "unreconciled" rather than presenting the estimate as certified.
+            recon = await asyncio.to_thread(
+                reconstruct_position_outcome,
+                snap["decision_id"],
+                exit_price=exit_price,
+                exit_qty=abs(qty),
+                entry_price=entry_price,
+                entry_qty=abs(qty),
+            )
+            if recon.get("realized_pnl") is not None:
+                pnl = float(recon["realized_pnl"])
+                return_pct = float(recon["return_pct"])
+                outcome_status = recon.get("outcome_status", "unreconciled")
             else:
-                pnl = 0.0
+                if exit_price > 0 and entry_price > 0 and qty != 0:
+                    pnl = (exit_price - entry_price) * qty if action == "buy" else (entry_price - exit_price) * qty
+                else:
+                    pnl = 0.0
+                return_pct = (pnl / (entry_price * qty) * 100.0) if (entry_price > 0 and qty != 0) else 0.0
+                outcome_status = "unreconciled"
+            if outcome_status != "reconciled":
+                logger.warning(
+                    f"[ACCOUNTING] {sym} decision {snap['decision_id']} reconciled after "
+                    f"restart UNRECONCILED ({recon.get('reason')}); stored value is not certified."
+                )
             closed = await asyncio.to_thread(
                 close_decision_snapshot,
                 snap["decision_id"],
                 realized_pnl=pnl,
-                return_pct=(pnl / (entry_price * qty) * 100.0) if (entry_price > 0 and qty != 0 and pnl is not None) else 0.0,
+                return_pct=return_pct,
                 exit_reason=f"reconciled_after_restart:{exit_price_source}",
+                outcome_status=outcome_status,
             )
             logger.warning(
                 f"[RECONCILE] Closed ghost snapshot {snap['decision_id']} for {sym} "

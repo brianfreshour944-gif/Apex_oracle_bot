@@ -190,7 +190,8 @@ class RiskManager:
         self._peak_prices_dirty = False
         return was_dirty
 
-    async def _close_open_snapshot(self, symbol: str, exit_price: float, qty: float, exit_reason: str) -> None:
+    async def _close_open_snapshot(self, symbol: str, exit_price: float, qty: float, exit_reason: str,
+                                   exit_commission: float = 0.0) -> None:
         """Close the open decision snapshot for *symbol* (if any).
 
         Called from liquidate_all_positions / reduce_exposure_to_cap when those
@@ -199,32 +200,59 @@ class RiskManager:
         liquidation would leave the snapshot status='open' forever, so the
         adaptive meta-learner never sees the outcome and the cache would serve
         a stale 'open' record.
+
+        P&L comes from the SAME ledger reconstruction the standard close path
+        uses (src.db.reconstruct_position_outcome), so all three close paths
+        share one definition of realized_pnl/return_pct. The caller persists
+        this exit fill to the ledger before calling here, so the reconstruction
+        normally sees the full round trip; ``exit_commission`` is the fallback
+        fee for when that fail-safe ledger write did NOT land and the exit leg
+        must be substituted from the caller. It is passed so a substituted exit
+        is not silently fee-free -- without it the flatten paths would omit a
+        cost the standard close path includes. If the round trip still cannot
+        be reconciled the row is closed (so the cache stops serving 'open') but
+        labelled "unreconciled" rather than carrying a guessed number.
         """
         try:
-            from src.db import close_decision_snapshot, get_open_snapshot
+            from src.db import close_decision_snapshot, get_open_snapshot, reconstruct_position_outcome
             snap = await asyncio.to_thread(get_open_snapshot, symbol)
-            if snap:
-                # Recompute realized PnL from the snapshot's recorded values
-                action = snap.get("final_action", "buy")
-                entry_price = float(snap.get("entry_price", 0.0))
-                snap_qty = abs(float(snap.get("qty", 0.0)))
-                if entry_price > 0 and snap_qty > 0 and exit_price > 0:
-                    if action == "buy":
-                        pnl = (exit_price - entry_price) * snap_qty
-                        return_pct = (exit_price - entry_price) / entry_price * 100.0
-                    else:
-                        pnl = (entry_price - exit_price) * snap_qty
-                        return_pct = (entry_price - exit_price) / entry_price * 100.0
-                else:
-                    pnl = 0.0
-                    return_pct = 0.0
-                await asyncio.to_thread(
-                    close_decision_snapshot,
-                    snap["decision_id"],
-                    realized_pnl=pnl,
-                    return_pct=return_pct,
-                    exit_reason=exit_reason,
+            if not snap:
+                return
+            recon = await asyncio.to_thread(
+                reconstruct_position_outcome,
+                snap.get("decision_id"),
+                exit_price=exit_price,
+                exit_qty=qty,
+                exit_commission=abs(float(exit_commission or 0.0)),
+                entry_price=float(snap.get("entry_price", 0.0)),
+                entry_qty=abs(float(snap.get("qty", 0.0))),
+            )
+            outcome_status = recon.get("outcome_status", "unreconciled")
+            if recon.get("realized_pnl") is not None:
+                pnl = float(recon["realized_pnl"])
+                return_pct = float(recon["return_pct"])
+                if outcome_status != "reconciled":
+                    logger.warning(
+                        f"[ACCOUNTING] {symbol} decision {snap.get('decision_id')} flattened "
+                        f"UNRECONCILED ({recon.get('reason')}): realized_pnl/return_pct "
+                        f"written but not certified from the order ledger"
+                    )
+            else:
+                logger.warning(
+                    f"[ACCOUNTING] {symbol} decision {snap.get('decision_id')} flattened "
+                    f"UNRECONCILED ({recon.get('reason')}): realized_pnl/return_pct could "
+                    f"not be assembled from the order ledger"
                 )
+                pnl = float(snap.get("realized_pnl") or 0.0)
+                return_pct = float(snap.get("return_pct") or 0.0)
+            await asyncio.to_thread(
+                close_decision_snapshot,
+                snap["decision_id"],
+                realized_pnl=pnl,
+                return_pct=return_pct,
+                exit_reason=exit_reason,
+                outcome_status=outcome_status,
+            )
         except Exception as e:
             logger.warning(f"_close_open_snapshot failed for {symbol} (non-fatal): {e}")
 
@@ -1719,7 +1747,8 @@ class RiskManager:
                 # stay status='open' forever and the cache would serve a
                 # stale 'open' record for the symbol.
                 await self._close_open_snapshot(symbol, filled_price if filled_price > 0 else 0.0,
-                                                qty_abs, exit_reason="exposure_reduction")
+                                                qty_abs, exit_reason="exposure_reduction",
+                                                exit_commission=float(order_result.get("commission", 0.0) or 0.0))
             logger.warning(f"Exposure reduction complete. New exposure: ${current_exposure:.2f} (cap: ${max_portfolio_abs:.2f})")
             return {"status": "exposure_reduced", "results": results, "final_exposure": current_exposure}
         except Exception as e:
@@ -1767,7 +1796,8 @@ class RiskManager:
                 self._reserved_new_position_symbols.pop(symbol, None)
                 liq_fill = order_result.get("filled_avg_price", 0.0)
                 await self._close_open_snapshot(symbol, liq_fill if liq_fill > 0 else 0.0,
-                                                qty_abs, exit_reason="killswitch_liquidation")
+                                                qty_abs, exit_reason="killswitch_liquidation",
+                                                exit_commission=float(order_result.get("commission", 0.0) or 0.0))
 
             logger.critical("ALL POSITIONS LIQUIDATED - KILLSWITCH ACTIVATED")
             return {

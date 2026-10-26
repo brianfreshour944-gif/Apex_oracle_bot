@@ -580,7 +580,14 @@ async def test_stop_that_flattened_position_is_reconciled_from_its_fill(fresh_db
     with db.get_db_session() as session:
         row = session.query(db.DecisionSnapshot).filter_by(decision_id="snap-flat").first()
     assert row.status == "closed"
-    assert row.realized_pnl == pytest.approx(-20.0)  # (90 - 100) * 2
+    # (90 - 100) * 2 = -20 gross, minus the exit fee Alpaca's estimate applies
+    # to the stop fill (2 * 90 * ESTIMATED_TAKER_FEE_BPS = 0.45) -> -20.45.
+    # The close path now nets the round trip's fees like every other exit.
+    # This asserts the ARITHMETIC of a fallback estimate, NOT certified
+    # accounting: the entry leg is caller-substituted, so the row must be
+    # labelled unreconciled and excluded from certified statistics.
+    assert row.realized_pnl == pytest.approx(-20.45)
+    assert row.outcome_status == "unreconciled"
     assert "actual_fill" in row.exit_reason
 
 
