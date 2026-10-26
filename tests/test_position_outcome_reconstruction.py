@@ -674,6 +674,98 @@ def test_additive_migration_adds_outcome_status_to_legacy_db(tmp_path):
         settings.DATABASE_URL = original
 
 
+# ── MFE/MAE capture (report §3) ─────────────────────────────────────────────
+
+class _FakeStrategy:
+    def __init__(self):
+        self._trailing_peaks = {}
+        self._trailing_troughs = {}
+
+
+class _FakeRiskManager:
+    def __init__(self):
+        import threading
+        self.peak_prices = {}
+        self._peak_prices_lock = threading.Lock()
+
+
+@pytest.fixture
+def excursion_state(monkeypatch):
+    """Install minimal strategy/risk state so the recorder can read peaks."""
+    strategy = _FakeStrategy()
+    rm = _FakeRiskManager()
+    monkeypatch.setattr(bot._state, "strategy", strategy)
+    monkeypatch.setattr(bot._state, "risk_manager", rm)
+    return strategy, rm
+
+
+@pytest.mark.asyncio
+async def test_mfe_mae_recorded_from_caller_supplied_excursions(fresh_db, excursion_state, monkeypatch):
+    """The regression from report §3: the standard close path used to pop
+    _trailing_peaks/_trailing_troughs BEFORE the recorder read them, so every
+    trade recorded 0.0/0.0. The fix has the CALLER capture the values before it
+    clears, and pass them in; the recorder must record them."""
+    strategy, _rm = excursion_state
+    _snapshot("dec-mfe", symbol="BTC/USD", entry_price=100.0, qty=1.0)
+    _buy("b1", "dec-mfe", "BTC/USD", 1.0, 100.0)
+    _sell("s1", "dec-mfe", "BTC/USD", 1.0, 110.0)
+    # Price ran to 115 (favorable) and dipped to 92 (adverse) during the hold.
+    # The caller reads these, then clears (as the standard close path does).
+    strategy._trailing_peaks["BTC/USD"] = 115.0
+    strategy._trailing_troughs["BTC/USD"] = 92.0
+    captured_peak = strategy._trailing_peaks.pop("BTC/USD", None)
+    captured_trough = strategy._trailing_troughs.pop("BTC/USD", None)
+
+    await bot._record_committee_outcome(
+        "BTC/USD", 110.0, exit_reason="signal_close",
+        entry_price=100.0, qty=1.0, commission=0.0,
+        excursion_peak=captured_peak, excursion_trough=captured_trough,
+    )
+    snap = _closed("dec-mfe")
+    assert snap.max_favorable_pct == pytest.approx(15.0)   # (115-100)/100*100
+    assert snap.max_adverse_pct == pytest.approx(8.0)      # (100-92)/100*100
+
+
+@pytest.mark.asyncio
+async def test_recorder_clear_timing_matches_head(fresh_db, excursion_state, monkeypatch):
+    """The recorder's own clear runs on its happy path only, exactly as at HEAD.
+    The caller owns excursion-state clearing on every other path, so the recorder
+    must NOT add or move clears (that would retime trailing-stop state)."""
+    strategy, rm = excursion_state
+    _snapshot("dec-timing", symbol="BTC/USD", entry_price=100.0, qty=1.0)
+    _buy("b1", "dec-timing", "BTC/USD", 1.0, 100.0)
+    _sell("s1", "dec-timing", "BTC/USD", 1.0, 110.0)
+    strategy._trailing_peaks["BTC/USD"] = 115.0
+    strategy._trailing_troughs["BTC/USD"] = 92.0
+    rm.peak_prices["BTC/USD"] = 115.0
+
+    await bot._record_committee_outcome(
+        "BTC/USD", 110.0, exit_reason="signal_close",
+        entry_price=100.0, qty=1.0, commission=0.0,
+    )
+    # Happy path: recorder clears, same as HEAD.
+    assert "BTC/USD" not in strategy._trailing_peaks
+    assert "BTC/USD" not in strategy._trailing_troughs
+    assert "BTC/USD" not in rm.peak_prices
+
+
+@pytest.mark.asyncio
+async def test_recorder_early_return_does_not_clear(fresh_db, excursion_state, monkeypatch):
+    """An invalid exit price returns early WITHOUT clearing excursion state --
+    matching HEAD. The caller is responsible for the clear on that path, so the
+    recorder must not touch trailing-stop state here."""
+    strategy, _rm = excursion_state
+    _snapshot("dec-bail", symbol="BTC/USD", entry_price=100.0, qty=1.0)
+    strategy._trailing_peaks["BTC/USD"] = 115.0
+    strategy._trailing_troughs["BTC/USD"] = 92.0
+
+    await bot._record_committee_outcome(
+        "BTC/USD", -1.0, exit_reason="signal_close",   # invalid -> early return
+        entry_price=100.0, qty=1.0, commission=0.0,
+    )
+    assert strategy._trailing_peaks.get("BTC/USD") == 115.0
+    assert strategy._trailing_troughs.get("BTC/USD") == 92.0
+
 # ── 8: adding the column must not change reconstruction output ────────────
 
 def test_fee_source_does_not_change_reconstruction_output(fresh_db):

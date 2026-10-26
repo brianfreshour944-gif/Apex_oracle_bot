@@ -122,6 +122,8 @@ async def _record_committee_outcome(
     entry_price: float | None = None,
     qty: float | None = None,
     commission: float = 0.0,
+    excursion_peak: float | None = None,
+    excursion_trough: float | None = None,
 ) -> None:
     """On position exit, close the open decision snapshot and update the learner.
 
@@ -135,6 +137,13 @@ async def _record_committee_outcome(
     realized PnL (audit finding F-B). Callers should also pass the real fill
     price as ``exit_price`` (not the pre-order signal price) so recorded PnL
     includes slippage.
+
+    ``excursion_peak``/``excursion_trough``: the symbol's running peak/trough
+    price captured by the CALLER at close time, BEFORE any excursion-state
+    cleanup. The caller owns the trailing-stop state and clears it on its own
+    schedule; passing the values in lets MFE/MAE be recorded without this
+    function touching (and therefore retiming) that state. When omitted the
+    values are read from the strategy dicts as before.
 
     Fully fail-safe: realized-PnL bookkeeping for the adaptive layer must never
     interfere with trading. risk.py stays authoritative for the exit itself.
@@ -226,14 +235,21 @@ async def _record_committee_outcome(
         max_fav_pct = 0.0
         max_adv_pct = 0.0
         global _state
-        if _state.strategy is not None and hasattr(_state.strategy, '_trailing_peaks') and symbol in _state.strategy._trailing_peaks:
-            peak = _state.strategy._trailing_peaks[symbol]
+        # Prefer the peak/trough the caller captured at close time. It is taken
+        # before the caller's own excursion cleanup, so it is the value HEAD's
+        # in-recorder read would have seen had the caller not pre-cleared.
+        peak = excursion_peak
+        if peak is None and _state.strategy is not None and hasattr(_state.strategy, '_trailing_peaks'):
+            peak = _state.strategy._trailing_peaks.get(symbol)
+        if peak is not None:
             if action == "buy":
                 max_fav_pct = (peak - entry_price) / entry_price * 100.0 if peak > entry_price else 0.0
             else:
                 max_fav_pct = (entry_price - peak) / entry_price * 100.0 if peak < entry_price else 0.0
-        if _state.strategy is not None and hasattr(_state.strategy, '_trailing_troughs') and symbol in _state.strategy._trailing_troughs:
-            trough = _state.strategy._trailing_troughs[symbol]
+        trough = excursion_trough
+        if trough is None and _state.strategy is not None and hasattr(_state.strategy, '_trailing_troughs'):
+            trough = _state.strategy._trailing_troughs.get(symbol)
+        if trough is not None:
             if action == "buy":
                 max_adv_pct = (entry_price - trough) / entry_price * 100.0 if trough < entry_price else 0.0
             else:
@@ -2915,7 +2931,19 @@ async def process_signal_for_symbol(symbol: str, current_price: float, risk_mana
                     # Reset position pyramid/scale-in tracking on close
                     _state.position_adds.pop(symbol, None)
                     _crash_state_writer.mark_dirty()
-                    # Clear trailing peaks/troughs for this symbol
+                    # Capture the running peak/trough BEFORE clearing them, so
+                    # _record_committee_outcome can record real MFE/MAE. The
+                    # clear itself is unchanged from HEAD (same statements, same
+                    # timing), so trailing-stop state behavior is preserved; only
+                    # the two read lines above it are new. Clearing first is why
+                    # every historical row recorded MFE/MAE as 0.0 (2026-10-25
+                    # accounting audit).
+                    close_peak = None
+                    close_trough = None
+                    if _state.strategy is not None and hasattr(_state.strategy, '_trailing_peaks'):
+                        close_peak = _state.strategy._trailing_peaks.get(symbol)
+                    if _state.strategy is not None and hasattr(_state.strategy, '_trailing_troughs'):
+                        close_trough = _state.strategy._trailing_troughs.get(symbol)
                     if _state.strategy is not None and hasattr(_state.strategy, '_trailing_peaks'):
                         _state.strategy._trailing_peaks.pop(symbol, None)
                     if _state.strategy is not None and hasattr(_state.strategy, '_trailing_troughs'):
@@ -2929,6 +2957,8 @@ async def process_signal_for_symbol(symbol: str, current_price: float, risk_mana
                         entry_price=float(current_position.get("avg_entry_price", 0.0)),
                         qty=qty_abs,
                         commission=commission,
+                        excursion_peak=close_peak,
+                        excursion_trough=close_trough,
                     )
     
         except Exception as e:
