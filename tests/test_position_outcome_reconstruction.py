@@ -794,3 +794,105 @@ def test_fee_source_does_not_change_reconstruction_output(fresh_db):
 
     after = db.reconstruct_position_outcome("dec-rec")
     assert after == before
+
+
+# ── Flatten-path wiring and the loss-limit consumer (2026-10-25 review) ──────
+#
+# The review found B is not purely observational: reconstruct_position_outcome
+# feeds realized_pnl on the flatten/killswitch close paths, and
+# get_recent_realized_pnl (the rolling loss-limit entry gate) sums EVERY closed
+# row regardless of outcome_status. These four tests pin that wiring: the
+# flatten else-branch, the consumer's deliberate unfiltered sum, the cache
+# invalidation on an unreconciled close, and the tolerance boundary as seen
+# through the flatten path.
+
+
+@pytest.mark.asyncio
+async def test_flatten_else_branch_closes_row_with_snapshot_fallback(fresh_db):
+    """When the ledger cannot be reconciled, the flatten path must still close
+    the row (so the cache stops serving 'open') and fall back to the snapshot's
+    recorded numbers rather than guessing a P&L from a partial ledger."""
+    _snapshot("dec-flat-none", symbol="ETH/USD", entry_price=100.0, qty=1.0)
+    _buy("b1", "dec-flat-none", "ETH/USD", 1.0, 100.0, commission=0.5)
+    # 0.7 residual on a 1.0 buy = 70% -> far outside tolerance -> reconstruction
+    # returns realized_pnl=None, driving the caller's else-branch.
+    _sell("s1", "dec-flat-none", "ETH/USD", 0.3, 110.0, commission=0.1)
+
+    from src.risk import RiskManager
+    rm = RiskManager.__new__(RiskManager)
+    await rm._close_open_snapshot("ETH/USD", 110.0, 0.3, "exposure_reduction")
+
+    snap = _closed("dec-flat-none")
+    assert snap.status == "closed"
+    assert snap.outcome_status == "unreconciled"
+    # Snapshot fallback: the row was opened with realized_pnl 0.0 and the
+    # else-branch re-reads it rather than writing a partial-ledger guess.
+    assert snap.realized_pnl == 0.0
+
+
+def test_recent_realized_pnl_includes_unreconciled_rows(fresh_db):
+    """Characterization: get_recent_realized_pnl sums ALL closed rows in the
+    window, including rows labelled 'unreconciled'. This is the deliberate
+    coupling that lets reconstructed P&L inform the rolling loss-limit entry
+    gate -- if a status filter is ever added, update this test on purpose."""
+    _snapshot("dec-rec-ok", symbol="ETH/USD")
+    db.close_decision_snapshot(
+        "dec-rec-ok", realized_pnl=-4.0, return_pct=-4.0,
+        exit_reason="signal_close", outcome_status="reconciled",
+    )
+    _snapshot("dec-unrec", symbol="SOL/USD")
+    db.close_decision_snapshot(
+        "dec-unrec", realized_pnl=-7.5, return_pct=-7.5,
+        exit_reason="exposure_reduction", outcome_status="unreconciled",
+    )
+
+    # Both rows are inside the window and both are summed.
+    assert db.get_recent_realized_pnl(24.0) == pytest.approx(-11.5)
+
+
+@pytest.mark.asyncio
+async def test_flatten_close_clears_open_cache_when_unreconciled(fresh_db):
+    """An unreconciled flatten close must still invalidate the in-memory
+    open-snapshot cache, or the bot keeps seeing a stale 'open' record for a
+    position it has already closed."""
+    _snapshot("dec-cache", symbol="SOL/USD", entry_price=100.0, qty=1.0)
+    assert db.get_open_snapshot("SOL/USD") is not None  # cache warm
+
+    from src.risk import RiskManager
+    rm = RiskManager.__new__(RiskManager)
+    await rm._close_open_snapshot("SOL/USD", 90.0, 1.0, "killswitch_liquidation")
+
+    assert db.get_open_snapshot("SOL/USD") is None
+
+
+@pytest.mark.asyncio
+async def test_flatten_tolerance_boundary(fresh_db):
+    """The _QTY_RECONCILE_TOLERANCE (0.005) comparison is strict '>' and uses
+    binary floats, so residual/buy_qty == 0.005 actually FAILS. Pin clear
+    margins on each side through the flatten path:
+      - residual 0.0045 -> reconciled
+      - residual 0.0060 -> unreconciled (quantity_mismatch)."""
+    from src.risk import RiskManager
+
+    # Below tolerance: 1.0 buy, 0.9955 sell -> residual 0.0045.
+    _snapshot("dec-tol-in", symbol="ETH/USD", entry_price=100.0, qty=1.0)
+    _buy("b1", "dec-tol-in", "ETH/USD", 1.0, 100.0, commission=0.45)
+    _sell("s1", "dec-tol-in", "ETH/USD", 0.9955, 100.0, commission=0.45)
+    await RiskManager.__new__(RiskManager)._close_open_snapshot(
+        "ETH/USD", 100.0, 0.9955, "exposure_reduction",
+    )
+    inside = _closed("dec-tol-in")
+    assert inside.status == "closed"
+    assert inside.outcome_status == "reconciled"
+    assert inside.realized_pnl is not None
+
+    # Above tolerance: 1.0 buy, 0.994 sell -> residual 0.006.
+    _snapshot("dec-tol-out", symbol="BTC/USD", entry_price=100.0, qty=1.0)
+    _buy("b2", "dec-tol-out", "BTC/USD", 1.0, 100.0, commission=0.5)
+    _sell("s2", "dec-tol-out", "BTC/USD", 0.994, 100.0, commission=0.5)
+    await RiskManager.__new__(RiskManager)._close_open_snapshot(
+        "BTC/USD", 100.0, 0.994, "exposure_reduction",
+    )
+    outside = _closed("dec-tol-out")
+    assert outside.status == "closed"
+    assert outside.outcome_status == "unreconciled"
