@@ -17,6 +17,8 @@ No live endpoint is contacted; a fake data client is injected.
 """
 
 import datetime
+import threading
+import time
 import types
 
 import pytest
@@ -25,6 +27,7 @@ from sqlalchemy import select, text
 
 import src.bot as bot
 import src.db as db
+from src import exchange as _exchange_mod
 from src.config import settings
 from src.exchange import AlpacaExchange
 
@@ -327,3 +330,133 @@ async def test_quote_failure_does_not_block_order(monkeypatch):
     res = await ex.create_order("BTC/USD", qty=1.0, side="buy", confirm=False)
     assert res["id"] == "x3"                 # order still succeeded
     assert res["submission_quote"] is None    # quote absent, not fabricated
+
+
+# ── 7: executor isolation (2026-10-25) ─────────────────────────────────────
+#
+# Quote capture runs on its own small pool, NOT the loop's default executor,
+# which submit_order also uses. These tests pin that the order path cannot be
+# starved by a hung quote, that the caller is released by the wait_for bound,
+# that the pool is released on close(), and that the capture genuinely runs off
+# the default executor.
+
+
+def _bare_exchange():
+    """An exchange with the attributes create_order touches, no creds/network."""
+    ex = AlpacaExchange.__new__(AlpacaExchange)
+    ex.trading_client = types.SimpleNamespace()
+    ex.circuit_breaker = types.SimpleNamespace(call=lambda fn, *a, **kw: fn(*a, **kw))
+    ex._order_cache = {}
+    ex._recent_order_submissions = {}
+    ex._duplicate_order_window_sec = 10.0
+    ex._quote_executor = None
+    return ex
+
+
+@pytest.mark.asyncio
+async def test_hung_quote_does_not_starve_submit_order(monkeypatch):
+    """T1: with the quote backend hung, submit_order must still run promptly.
+
+    This is the assertion the isolation design exists for: on the shared default
+    pool a hung capture delayed submit_order by ~1.9s; on the dedicated pool it
+    must not wait for the capture at all.
+    """
+    ex = _bare_exchange()
+    release = threading.Event()
+
+    class _HungDataClient:
+        def get_crypto_latest_quote(self, request):
+            release.wait(5.0)          # simulate a hung socket read
+            return {}
+
+    ex.data_client = _HungDataClient()
+
+    class _FakeOrder:
+        id = "iso1"
+        symbol = "BTC/USD"
+        qty = 1.0
+        status = types.SimpleNamespace(value="new")
+
+    ex.trading_client.submit_order = lambda req: _FakeOrder()
+    monkeypatch.setattr(settings, "CAPTURE_SUBMISSION_QUOTE", True)
+    # Bound the capture wait tightly so the test is fast; the point is that the
+    # order path does not wait on the hung capture thread.
+    monkeypatch.setattr(_exchange_mod, "_QUOTE_CAPTURE_TIMEOUT_SEC", 0.3)
+
+    t0 = time.monotonic()
+    res = await ex.create_order("BTC/USD", qty=1.0, side="buy", confirm=False)
+    elapsed = time.monotonic() - t0
+
+    release.set()                      # let the hung thread finish
+    assert res["id"] == "iso1"         # the order went through
+    assert res["submission_quote"] is None  # hung capture -> no quote, not a guess
+    assert elapsed < 1.5, f"submit waited {elapsed:.2f}s behind a hung quote"
+    if ex._quote_executor is not None:
+        ex._quote_executor.shutdown(wait=False)
+
+
+@pytest.mark.asyncio
+async def test_wait_for_releases_caller_on_slow_quote(monkeypatch):
+    """T2: a quote slower than the bound is abandoned and the order proceeds."""
+    ex = _bare_exchange()
+
+    class _SlowDataClient:
+        def get_crypto_latest_quote(self, request):
+            time.sleep(2.0)
+            return {}
+
+    ex.data_client = _SlowDataClient()
+
+    class _FakeOrder:
+        id = "iso2"
+        symbol = "BTC/USD"
+        qty = 1.0
+        status = types.SimpleNamespace(value="new")
+
+    ex.trading_client.submit_order = lambda req: _FakeOrder()
+    monkeypatch.setattr(settings, "CAPTURE_SUBMISSION_QUOTE", True)
+    monkeypatch.setattr(_exchange_mod, "_QUOTE_CAPTURE_TIMEOUT_SEC", 0.2)
+
+    q = await ex.get_latest_quote("BTC/USD")
+    assert q is None                   # timed out -> None, never raises
+
+    res = await ex.create_order("BTC/USD", qty=1.0, side="buy", confirm=False)
+    assert res["id"] == "iso2"
+    assert res["submission_quote"] is None
+    if ex._quote_executor is not None:
+        ex._quote_executor.shutdown(wait=False)
+
+
+@pytest.mark.asyncio
+async def test_close_shuts_down_quote_executor():
+    """T3: close() must release the dedicated pool (no leaked threads)."""
+    ex = _bare_exchange()
+    ex.trading_client = types.SimpleNamespace()
+    ex.data_client = types.SimpleNamespace()
+
+    pool = ex._get_quote_executor()
+    assert pool is not None
+
+    await ex.close()
+    assert ex._quote_executor is None
+    # A shut-down pool rejects new work rather than silently queueing it.
+    with pytest.raises(RuntimeError):
+        pool.submit(lambda: None)
+
+
+@pytest.mark.asyncio
+async def test_capture_runs_off_default_executor():
+    """T4: the capture must run on the dedicated pool, not the default executor."""
+    ex = _bare_exchange()
+    seen = {}
+
+    class _NameDataClient:
+        def get_crypto_latest_quote(self, request):
+            seen["thread"] = threading.current_thread().name
+            return {}
+
+    ex.data_client = _NameDataClient()
+    await ex.get_latest_quote("BTC/USD")
+
+    assert "quote-capture" in seen.get("thread", "")
+    ex._quote_executor.shutdown(wait=False)

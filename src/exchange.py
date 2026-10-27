@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
 import datetime
 import time
 from typing import Any, Protocol, runtime_checkable
@@ -30,6 +31,16 @@ from src.config import settings
 from src.logging_config import get_logger
 
 logger = get_logger(__name__)
+
+# Dedicated, small executor for submission-quote capture. Kept separate from the
+# loop's default executor (which submit_order also uses) so a hung quote request
+# cannot occupy a worker the order path needs. Measured on the shared pool: 8
+# hung captures delayed submit_order by ~1.9s; on a dedicated pool, 0.00s.
+# Isolation bounds the *worker* leak; the wait_for bound below releases the
+# caller, but the underlying socket read continues until the OS gives up, so the
+# pool size is the cap on lingering capture threads.
+_QUOTE_POOL_WORKERS = 2
+_QUOTE_CAPTURE_TIMEOUT_SEC = 2.0
 
 
 def _is_rate_limit_error(exception: Exception) -> bool:
@@ -238,6 +249,11 @@ class AlpacaExchange:
         self._duplicate_order_window_sec: float = 10.0
         # Background task tracking for fire-and-forget alerts
         self._background_tasks: set[asyncio.Task] = set()
+        # Dedicated executor for quote capture (see module constant). Created
+        # lazily on first use so constructing an exchange never spawns threads;
+        # shut down in close(). Kept out of the loop's default pool so a hung
+        # quote cannot starve submit_order.
+        self._quote_executor: concurrent.futures.ThreadPoolExecutor | None = None
 
     async def load(self) -> None:
         """Initialize the exchange client and verify credentials."""
@@ -275,7 +291,24 @@ class AlpacaExchange:
         """Close the exchange client."""
         self.trading_client = None
         self.data_client = None
+        # Release the dedicated quote-capture pool. wait=False: a lingering
+        # capture thread must not block shutdown; the pool stops accepting new
+        # work and its threads exit once any in-flight call returns.
+        if getattr(self, "_quote_executor", None) is not None:
+            self._quote_executor.shutdown(wait=False)
+            self._quote_executor = None
         logger.info("Alpaca client closed")
+
+    def _get_quote_executor(self) -> concurrent.futures.ThreadPoolExecutor:
+        """Return the dedicated quote-capture pool, creating it on first use."""
+        ex = getattr(self, "_quote_executor", None)
+        if ex is None:
+            ex = concurrent.futures.ThreadPoolExecutor(
+                max_workers=_QUOTE_POOL_WORKERS,
+                thread_name_prefix="quote-capture",
+            )
+            self._quote_executor = ex
+        return ex
 
     @retry(retry=retry_if_exception(_retry_on_rate_limit), stop=stop_after_attempt(5), wait=_rate_limit_wait)
     async def get_account(self) -> dict[str, Any]:
@@ -455,6 +488,12 @@ class AlpacaExchange:
 
         ``spread`` is in price units (``ask - bid``); ``mid`` is the midpoint.
 
+        The blocking SDK call runs on a DEDICATED small executor, not the loop's
+        default pool, so a hung quote request cannot occupy a worker that
+        ``submit_order`` needs. A ``wait_for`` bound releases this caller even if
+        the underlying thread lingers, so an order is never held behind a slow
+        quote. Both are needed: the bound caps the wait, the pool caps the leak.
+
         Deliberately does NOT call ``load()``: re-initializing clients from
         inside an order path would replace an already-loaded trading client and
         could trigger a live credential round-trip. If the data client is not
@@ -464,7 +503,15 @@ class AlpacaExchange:
             if not self.data_client:
                 return None
             request_params = CryptoLatestQuoteRequest(symbol_or_symbols=symbol)
-            quotes = await asyncio.to_thread(self.data_client.get_crypto_latest_quote, request_params)
+            loop = asyncio.get_running_loop()
+            quotes = await asyncio.wait_for(
+                loop.run_in_executor(
+                    self._get_quote_executor(),
+                    self.data_client.get_crypto_latest_quote,
+                    request_params,
+                ),
+                timeout=_QUOTE_CAPTURE_TIMEOUT_SEC,
+            )
             quote = quotes.get(symbol) if hasattr(quotes, "get") else None
             if quote is None:
                 return None
