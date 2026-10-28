@@ -1,0 +1,863 @@
+{
+  "by_exit_reason": {
+    "[MOMENTUM] Momentum: Loss of bullish momentum": {
+      "losses": 6,
+      "net_pnl": -0.18123368348371593,
+      "profit_factor": 0.26098615585742674,
+      "trades": 10,
+      "wins": 4
+    },
+    "[TREND_FOLLOWING] Trend Following: Macro trend flipped bearish": {
+      "losses": 2,
+      "net_pnl": -0.2533091429744657,
+      "profit_factor": 0.0,
+      "trades": 2,
+      "wins": 0
+    },
+    "max_hold_time_exceeded": {
+      "losses": 8,
+      "net_pnl": -1.67076564275981,
+      "profit_factor": 0.448230489395999,
+      "trades": 12,
+      "wins": 4
+    }
+  },
+  "by_regime": {
+    "bull": {
+      "losses": 0,
+      "net_pnl": 1.1465012387610902,
+      "profit_factor": null,
+      "trades": 1,
+      "wins": 1
+    },
+    "low_volatility": {
+      "losses": 6,
+      "net_pnl": -0.18123368348371593,
+      "profit_factor": 0.26098615585742674,
+      "trades": 10,
+      "wins": 4
+    },
+    "neutral": {
+      "losses": 2,
+      "net_pnl": -0.2533091429744657,
+      "profit_factor": 0.0,
+      "trades": 2,
+      "wins": 0
+    },
+    "sideways": {
+      "losses": 8,
+      "net_pnl": -2.8172668815209003,
+      "profit_factor": 0.06959903371611281,
+      "trades": 11,
+      "wins": 3
+    }
+  },
+  "by_symbol": {
+    "BTC/USD": {
+      "losses": 6,
+      "net_pnl": -0.18123368348371593,
+      "profit_factor": 0.26098615585742674,
+      "trades": 10,
+      "wins": 4
+    },
+    "ETH/USD": {
+      "losses": 5,
+      "net_pnl": -2.2081302126315285,
+      "profit_factor": 0.014492511832948345,
+      "trades": 6,
+      "wins": 1
+    },
+    "SOL/USD": {
+      "losses": 5,
+      "net_pnl": 0.28405542689725294,
+      "profit_factor": 1.2729410787314739,
+      "trades": 8,
+      "wins": 3
+    }
+  },
+  "closed_trades": 24,
+  "excursion_fields": {
+    "n": 24,
+    "zero_mae": 24,
+    "zero_mfe": 24
+  },
+  "integrity": "ok",
+  "open_trades": 0,
+  "orders": {
+    "fee_provenance": "unknown (orders.commission only; no estimated/observed flag)",
+    "filled": 84,
+    "filled_missing_decision_id": 11,
+    "filled_orphan_decision_id": 18,
+    "filled_with_nonzero_commission": 42,
+    "joinable_to_decision": 55,
+    "recorded_commission_sum": 1.4886436498376583,
+    "total": 84
+  },
+  "overall": {
+    "gross_loss": -3.5265600495088174,
+    "gross_profit": 1.4212515802908257,
+    "losses": 16,
+    "max_drawdown_pct": -282.04204536975783,
+    "net_pnl": -2.1053084692179915,
+    "profit_factor": 0.4030135770660644,
+    "win_rate": 33.33333333333333,
+    "wins": 8
+  },
+  "reconciliation": {
+    "fully_linked": 24,
+    "mfe_mae_trustworthy": 0,
+    "n": 24,
+    "note": "recalculated_pnl uses the snapshot's own entry_price/qty; it is NOT exchange-confirmed. recorded_return_pct is flagged separately when it disagrees with recalculated_return_pct.",
+    "trades": [
+      {
+        "action": "buy",
+        "commission_provenance": "unknown (orders.commission only; no estimated flag)",
+        "decision_id": "930a65f5fdcf44ca96ee4da09dfff7bb",
+        "entry_order_ids": [
+          "fbf344e0-a801-4257-89cb-19da02c34214"
+        ],
+        "entry_price": 85276.19725,
+        "entry_time": "2026-10-02 03:16:43.756726",
+        "exit_order_ids": [],
+        "exit_reason": "[MOMENTUM] Momentum: Loss of bullish momentum",
+        "exit_time": "2026-10-02 03:19:41.998637",
+        "implied_exit_price": 85167.50889977478,
+        "linked_order_count": 1,
+        "mfe_mae_trustworthy": false,
+        "pnl_delta": 0.0,
+        "qty": 0.00058,
+        "recalculated_pnl": -0.06303924313062778,
+        "recalculated_return_pct": -0.12745449929783345,
+        "recorded_commission": 0.0,
+        "recorded_mae_pct": 0.0,
+        "recorded_mfe_pct": 0.0,
+        "recorded_pnl": -0.06303924313062778,
+        "recorded_return_pct": -0.1277692888328611,
+        "return_pct_denominator": 49.460194404999996,
+        "symbol": "BTC/USD",
+        "unreconciled": []
+      },
+      {
+        "action": "buy",
+        "commission_provenance": "unknown (orders.commission only; no estimated flag)",
+        "decision_id": "b66773a3fba7466a82e2aa28cf729415",
+        "entry_order_ids": [
+          "ec1c5225-8c31-4b16-b9c0-4392f15574bb"
+        ],
+        "entry_price": 85523.789879967,
+        "entry_time": "2026-10-02 03:57:46.220337",
+        "exit_order_ids": [],
+        "exit_reason": "[MOMENTUM] Momentum: Loss of bullish momentum",
+        "exit_time": "2026-10-02 04:00:45.266725",
+        "implied_exit_price": 85519.37648435484,
+        "linked_order_count": 1,
+        "mfe_mae_trustworthy": false,
+        "pnl_delta": 0.0,
+        "qty": 0.000604,
+        "recalculated_pnl": -0.002665690949740635,
+        "recalculated_return_pct": -0.005160430353177273,
+        "recorded_commission": 0.0,
+        "recorded_mae_pct": 0.0,
+        "recorded_mfe_pct": 0.0,
+        "recorded_pnl": -0.002665690949740635,
+        "recorded_return_pct": -0.005174234436771179,
+        "return_pct_denominator": 51.65636908750007,
+        "symbol": "BTC/USD",
+        "unreconciled": []
+      },
+      {
+        "action": "buy",
+        "commission_provenance": "unknown (orders.commission only; no estimated flag)",
+        "decision_id": "1d0a22f8f44047dc97e26b5ade98fd47",
+        "entry_order_ids": [
+          "5676b90e-fc31-4e63-99f3-9bd62ee34736"
+        ],
+        "entry_price": 85967.30698006749,
+        "entry_time": "2026-10-02 06:39:01.056172",
+        "exit_order_ids": [],
+        "exit_reason": "[MOMENTUM] Momentum: Loss of bullish momentum",
+        "exit_time": "2026-10-02 06:41:58.622039",
+        "implied_exit_price": 85970.41656106329,
+        "linked_order_count": 1,
+        "mfe_mae_trustworthy": false,
+        "pnl_delta": 0.0,
+        "qty": 0.000592,
+        "recalculated_pnl": 0.0018408719495208621,
+        "recalculated_return_pct": 0.003617166926647196,
+        "recorded_commission": 0.0,
+        "recorded_mae_pct": 0.0,
+        "recorded_mfe_pct": 0.0,
+        "recorded_pnl": 0.0018408719495208621,
+        "recorded_return_pct": 0.003626516882254945,
+        "return_pct_denominator": 50.89264573219995,
+        "symbol": "BTC/USD",
+        "unreconciled": []
+      },
+      {
+        "action": "buy",
+        "commission_provenance": "unknown (orders.commission only; no estimated flag)",
+        "decision_id": "ad018313e5a64d0da61b28d2a8afc908",
+        "entry_order_ids": [
+          "aa772b96-bba1-40a8-9a3a-8121ec5dc1f8"
+        ],
+        "entry_price": 86374.10475,
+        "entry_time": "2026-10-02 10:00:16.395129",
+        "exit_order_ids": [],
+        "exit_reason": "[MOMENTUM] Momentum: Loss of bullish momentum",
+        "exit_time": "2026-10-02 10:03:15.116783",
+        "implied_exit_price": 86323.40765568377,
+        "linked_order_count": 1,
+        "mfe_mae_trustworthy": false,
+        "pnl_delta": 0.0,
+        "qty": 0.0006,
+        "recalculated_pnl": -0.03041825658973894,
+        "recalculated_return_pct": -0.05869478411726353,
+        "recorded_commission": 0.0,
+        "recorded_mae_pct": 0.0,
+        "recorded_mfe_pct": 0.0,
+        "recorded_pnl": -0.03041825658973894,
+        "recorded_return_pct": -0.05883645238906343,
+        "return_pct_denominator": 51.824462849999996,
+        "symbol": "BTC/USD",
+        "unreconciled": []
+      },
+      {
+        "action": "buy",
+        "commission_provenance": "unknown (orders.commission only; no estimated flag)",
+        "decision_id": "a5c225a28be940ba8291301f93b7f802",
+        "entry_order_ids": [
+          "4b781899-c2e5-495b-8c95-a0447fd8c0b3"
+        ],
+        "entry_price": 86442.1066650325,
+        "entry_time": "2026-10-02 10:35:19.118041",
+        "exit_order_ids": [],
+        "exit_reason": "[MOMENTUM] Momentum: Loss of bullish momentum",
+        "exit_time": "2026-10-02 10:38:17.762890",
+        "implied_exit_price": 86322.49918279453,
+        "linked_order_count": 1,
+        "mfe_mae_trustworthy": false,
+        "pnl_delta": 0.0,
+        "qty": 0.000612,
+        "recalculated_pnl": -0.07319977912963066,
+        "recalculated_return_pct": -0.13836715329190621,
+        "recorded_commission": 0.0,
+        "recorded_mae_pct": 0.0,
+        "recorded_mfe_pct": 0.0,
+        "recorded_pnl": -0.07319977912963066,
+        "recorded_return_pct": -0.13868966520117368,
+        "return_pct_denominator": 52.90256927899989,
+        "symbol": "BTC/USD",
+        "unreconciled": []
+      },
+      {
+        "action": "buy",
+        "commission_provenance": "unknown (orders.commission only; no estimated flag)",
+        "decision_id": "21f6a8c1f3ce44aa8b512e27d5065640",
+        "entry_order_ids": [
+          "783c9762-7be5-4f64-b580-54209b978cbf"
+        ],
+        "entry_price": 86436.692778261,
+        "entry_time": "2026-10-02 10:44:19.829248",
+        "exit_order_ids": [],
+        "exit_reason": "[MOMENTUM] Momentum: Loss of bullish momentum",
+        "exit_time": "2026-10-02 10:47:18.387556",
+        "implied_exit_price": 86384.94687501295,
+        "linked_order_count": 1,
+        "mfe_mae_trustworthy": false,
+        "pnl_delta": 0.0,
+        "qty": 0.000598,
+        "recalculated_pnl": -0.030944050142334846,
+        "recalculated_return_pct": -0.05986566767518178,
+        "recorded_commission": 0.0,
+        "recorded_mae_pct": 0.0,
+        "recorded_mfe_pct": 0.0,
+        "recorded_pnl": -0.030944050142334846,
+        "recorded_return_pct": -0.060020522378225645,
+        "return_pct_denominator": 51.68914228140008,
+        "symbol": "BTC/USD",
+        "unreconciled": []
+      },
+      {
+        "action": "buy",
+        "commission_provenance": "unknown (orders.commission only; no estimated flag)",
+        "decision_id": "6cb5b42b1d524902a2148d753e36230b",
+        "entry_order_ids": [
+          "f5dc26e2-f0e1-45df-b803-f7ef8d36d156"
+        ],
+        "entry_price": 86285.534397483,
+        "entry_time": "2026-10-02 10:53:20.580453",
+        "exit_order_ids": [],
+        "exit_reason": "[MOMENTUM] Momentum: Loss of bullish momentum",
+        "exit_time": "2026-10-02 10:56:19.033785",
+        "implied_exit_price": 86331.02683489825,
+        "linked_order_count": 1,
+        "mfe_mae_trustworthy": false,
+        "pnl_delta": 0.0,
+        "qty": 0.000596,
+        "recalculated_pnl": 0.02711349269948977,
+        "recalculated_return_pct": 0.05272313341154706,
+        "recorded_commission": 0.0,
+        "recorded_mae_pct": 0.0,
+        "recorded_mfe_pct": 0.0,
+        "recorded_pnl": 0.02711349269948977,
+        "recorded_return_pct": 0.052855269192603346,
+        "return_pct_denominator": 51.426178500899866,
+        "symbol": "BTC/USD",
+        "unreconciled": []
+      },
+      {
+        "action": "buy",
+        "commission_provenance": "unknown (orders.commission only; no estimated flag)",
+        "decision_id": "edad1c2a818644e989a25122af095c68",
+        "entry_order_ids": [
+          "5e2f6e72-7c5c-4e93-9342-6d6682ea5546"
+        ],
+        "entry_price": 86435.37711202644,
+        "entry_time": "2026-10-02 11:08:21.558384",
+        "exit_order_ids": [],
+        "exit_reason": "[MOMENTUM] Momentum: Loss of bullish momentum",
+        "exit_time": "2026-10-02 11:11:20.123526",
+        "implied_exit_price": 86491.23191411825,
+        "linked_order_count": 1,
+        "mfe_mae_trustworthy": false,
+        "pnl_delta": 0.0,
+        "qty": 0.000607,
+        "recalculated_pnl": 0.033903864869732285,
+        "recalculated_return_pct": 0.06462030242480939,
+        "recorded_commission": 0.0,
+        "recorded_mae_pct": 0.0,
+        "recorded_mfe_pct": 0.0,
+        "recorded_pnl": 0.033903864869732285,
+        "recorded_return_pct": 0.06478822590831851,
+        "return_pct_denominator": 52.46627390700005,
+        "symbol": "BTC/USD",
+        "unreconciled": []
+      },
+      {
+        "action": "buy",
+        "commission_provenance": "unknown (orders.commission only; no estimated flag)",
+        "decision_id": "45a1989bb4a44ddeb89ee5c231e4b7ff",
+        "entry_order_ids": [
+          "4a77126d-666b-4912-bd5f-736593282db4"
+        ],
+        "entry_price": 86468.90042158515,
+        "entry_time": "2026-10-02 11:31:23.461213",
+        "exit_order_ids": [],
+        "exit_reason": "[MOMENTUM] Momentum: Loss of bullish momentum",
+        "exit_time": "2026-10-02 11:34:21.874110",
+        "implied_exit_price": 86470.83176008365,
+        "linked_order_count": 1,
+        "mfe_mae_trustworthy": false,
+        "pnl_delta": 0.0,
+        "qty": 0.000593,
+        "recalculated_pnl": 0.0011452837296116562,
+        "recalculated_return_pct": 0.0022335643093477245,
+        "recorded_commission": 0.0,
+        "recorded_mae_pct": 0.0,
+        "recorded_mfe_pct": 0.0,
+        "recorded_pnl": 0.0011452837296116562,
+        "recorded_return_pct": 0.0022387627784948225,
+        "return_pct_denominator": 51.27605794999999,
+        "symbol": "BTC/USD",
+        "unreconciled": []
+      },
+      {
+        "action": "buy",
+        "commission_provenance": "unknown (orders.commission only; no estimated flag)",
+        "decision_id": "968d419347d1477caa5c943ce0b3a70d",
+        "entry_order_ids": [
+          "6bce1d17-90e2-40a3-893c-c6be7065ffb6"
+        ],
+        "entry_price": 86503.11575,
+        "entry_time": "2026-10-02 11:40:23.892584",
+        "exit_order_ids": [],
+        "exit_reason": "[MOMENTUM] Momentum: Loss of bullish momentum",
+        "exit_time": "2026-10-02 11:43:22.509230",
+        "implied_exit_price": 86430.11221625,
+        "linked_order_count": 1,
+        "mfe_mae_trustworthy": false,
+        "pnl_delta": 0.0,
+        "qty": 0.000616,
+        "recalculated_pnl": -0.044970176789997644,
+        "recalculated_return_pct": -0.0843941089486088,
+        "recorded_commission": 0.0,
+        "recorded_mae_pct": 0.0,
+        "recorded_mfe_pct": 0.0,
+        "recorded_pnl": -0.044970176789997644,
+        "recorded_return_pct": -0.08459528539452098,
+        "return_pct_denominator": 53.285919301999996,
+        "symbol": "BTC/USD",
+        "unreconciled": []
+      },
+      {
+        "action": "buy",
+        "commission_provenance": "unknown (orders.commission only; no estimated flag)",
+        "decision_id": "82caeaba02084dcba815c70f9b68e27b",
+        "entry_order_ids": [
+          "36727b3f-c4dd-44dd-972f-a065aca95b14"
+        ],
+        "entry_price": 2711.3257296207144,
+        "entry_time": "2026-10-05 12:58:05.118228",
+        "exit_order_ids": [],
+        "exit_reason": "max_hold_time_exceeded",
+        "exit_time": "2026-10-05 20:58:45.627033",
+        "implied_exit_price": 2713.4382761957063,
+        "linked_order_count": 1,
+        "mfe_mae_trustworthy": false,
+        "pnl_delta": 0.0,
+        "qty": 0.015371000000000001,
+        "recalculated_pnl": 0.03247195340420253,
+        "recalculated_return_pct": 0.07791563189597124,
+        "recorded_commission": 0.0,
+        "recorded_mae_pct": 0.0,
+        "recorded_mfe_pct": 0.0,
+        "recorded_pnl": 0.03247195340420253,
+        "recorded_return_pct": 0.07810012623129582,
+        "return_pct_denominator": 41.67578779,
+        "symbol": "ETH/USD",
+        "unreconciled": []
+      },
+      {
+        "action": "buy",
+        "commission_provenance": "unknown (orders.commission only; no estimated flag)",
+        "decision_id": "1fd27498650643ec87e4ab5fc8351288",
+        "entry_order_ids": [
+          "135c4a96-d212-4b16-909c-80c0fa8fb0a1"
+        ],
+        "entry_price": 107.88906318899238,
+        "entry_time": "2026-10-08 16:05:07.117474",
+        "exit_order_ids": [
+          "ae1122a8-2c7c-4f67-a1d0-d3fc28e1ef31"
+        ],
+        "exit_reason": "max_hold_time_exceeded",
+        "exit_time": "2026-10-09 00:05:25.660220",
+        "implied_exit_price": 109.1486695185058,
+        "linked_order_count": 2,
+        "mfe_mae_trustworthy": false,
+        "pnl_delta": 0.0,
+        "qty": 0.9102059999999998,
+        "recalculated_pnl": 1.1465012387610902,
+        "recalculated_return_pct": 1.167501405871816,
+        "recorded_commission": 0.0,
+        "recorded_mae_pct": 0.0,
+        "recorded_mfe_pct": 0.0,
+        "recorded_pnl": 1.1465012387610902,
+        "recorded_return_pct": 1.4234773634336986,
+        "return_pct_denominator": 98.20127264899999,
+        "symbol": "SOL/USD",
+        "unreconciled": []
+      },
+      {
+        "action": "buy",
+        "commission_provenance": "unknown (orders.commission only; no estimated flag)",
+        "decision_id": "8a4518ec03974f228b3ff98380053f08",
+        "entry_order_ids": [
+          "ab0a966a-b67d-42ed-b8bc-2963e68cde7b"
+        ],
+        "entry_price": 105.355,
+        "entry_time": "2026-10-13 02:08:04.197174",
+        "exit_order_ids": [
+          "fe0f8ca9-2f9d-41b2-b244-e2666f3908d0"
+        ],
+        "exit_reason": "max_hold_time_exceeded",
+        "exit_time": "2026-10-13 10:08:45.998954",
+        "implied_exit_price": 106.47004898696676,
+        "linked_order_count": 2,
+        "mfe_mae_trustworthy": false,
+        "pnl_delta": 0.0,
+        "qty": 0.142376,
+        "recalculated_pnl": 0.15875621456837796,
+        "recalculated_return_pct": 1.0583731070824827,
+        "recorded_commission": 0.07551693478187563,
+        "recorded_mae_pct": 0.0,
+        "recorded_mfe_pct": 0.0,
+        "recorded_pnl": 0.15875621456837796,
+        "recorded_return_pct": 1.0606733048264934,
+        "return_pct_denominator": 15.000023480000001,
+        "symbol": "SOL/USD",
+        "unreconciled": []
+      },
+      {
+        "action": "buy",
+        "commission_provenance": "unknown (orders.commission only; no estimated flag)",
+        "decision_id": "f110556591b7407e81d524da4ddc2caa",
+        "entry_order_ids": [
+          "5620056b-7c62-4407-b1df-ff56e22dda21"
+        ],
+        "entry_price": 2496.1248265458157,
+        "entry_time": "2026-10-13 02:23:04.965987",
+        "exit_order_ids": [
+          "fec75d2c-16e9-4f23-a9d0-854702b383e9",
+          "fb018637-8c16-4022-89a6-0266863c9715",
+          "8920731f-4ebc-4033-abd5-3ed5a444408d",
+          "f96debc0-63bd-4f52-9c36-8b398e44e269"
+        ],
+        "exit_reason": "max_hold_time_exceeded",
+        "exit_time": "2026-10-13 10:23:47.613890",
+        "implied_exit_price": 2493.0241615738205,
+        "linked_order_count": 5,
+        "mfe_mae_trustworthy": false,
+        "pnl_delta": 0.0,
+        "qty": 0.012081,
+        "recalculated_pnl": -0.037459133526674994,
+        "recalculated_return_pct": -0.12421914717646713,
+        "recorded_commission": 0.075412543346675,
+        "recorded_mae_pct": 0.0,
+        "recorded_mfe_pct": 0.0,
+        "recorded_pnl": -0.037459133526674994,
+        "recorded_return_pct": -804.7630771718506,
+        "return_pct_denominator": 30.155684029499998,
+        "symbol": "ETH/USD",
+        "unreconciled": []
+      },
+      {
+        "action": "buy",
+        "commission_provenance": "unknown (orders.commission only; no estimated flag)",
+        "decision_id": "35e92c4ad143451bad087674fd9bde9e",
+        "entry_order_ids": [
+          "64a3c5ae-ca79-42bb-ad80-3fca46fcbe3b"
+        ],
+        "entry_price": 106.17740072076552,
+        "entry_time": "2026-10-13 10:22:47.808111",
+        "exit_order_ids": [
+          "9ce3e111-31ff-45eb-bc77-1f5ccebbb5b4",
+          "8e1509f7-7131-4c88-8f77-c18a6c270baf",
+          "7eede78d-e2b1-4902-ae5a-54e31d2caa26",
+          "3afdb1ea-d8e6-4ac5-a59b-7953d8503d5f",
+          "3c1cd923-682d-490b-a3fb-7303e074c084"
+        ],
+        "exit_reason": "max_hold_time_exceeded",
+        "exit_time": "2026-10-13 18:23:32.148882",
+        "implied_exit_price": 106.04384663069095,
+        "linked_order_count": 6,
+        "mfe_mae_trustworthy": false,
+        "pnl_delta": 0.0,
+        "qty": 0.281645,
+        "recalculated_pnl": -0.03761484169905001,
+        "recalculated_return_pct": -0.1257839136840372,
+        "recorded_commission": 0.07478211958905,
+        "recorded_mae_pct": 0.0,
+        "recorded_mfe_pct": 0.0,
+        "recorded_pnl": -0.03761484169905001,
+        "recorded_return_pct": -70218.31463210976,
+        "return_pct_denominator": 29.904334026,
+        "symbol": "SOL/USD",
+        "unreconciled": []
+      },
+      {
+        "action": "buy",
+        "commission_provenance": "unknown (orders.commission only; no estimated flag)",
+        "decision_id": "c6a6d0423cc24ffcb0177363c5fbae62",
+        "entry_order_ids": [
+          "f2ccc84a-d11a-4dc3-a3cf-5479622d9271",
+          "7818927f-4c6c-4e70-b15b-0f39e3872af9"
+        ],
+        "entry_price": 2503.514660568314,
+        "entry_time": "2026-10-13 10:33:49.009864",
+        "exit_order_ids": [
+          "2a5a0b36-fbcb-4398-9bbb-a4e5c686ab4a",
+          "ef72a835-b718-47aa-9334-29e9ff5da22e",
+          "d7fcec41-bb11-4815-8d15-1ba3281013c1",
+          "c34086db-5ad1-4302-ac69-70d00b42046e"
+        ],
+        "exit_reason": "max_hold_time_exceeded",
+        "exit_time": "2026-10-13 18:34:32.985601",
+        "implied_exit_price": 2492.979580314962,
+        "linked_order_count": 6,
+        "mfe_mae_trustworthy": false,
+        "pnl_delta": 0.0,
+        "qty": 0.017983000000000002,
+        "recalculated_pnl": -0.1894523481960291,
+        "recalculated_return_pct": -0.42081160615054963,
+        "recorded_commission": 0.1497817544767,
+        "recorded_mae_pct": 0.0,
+        "recorded_mfe_pct": 0.0,
+        "recorded_pnl": -0.1894523481960291,
+        "recorded_return_pct": -1.2662514156280658,
+        "return_pct_denominator": 45.020704140999996,
+        "symbol": "ETH/USD",
+        "unreconciled": []
+      },
+      {
+        "action": "buy",
+        "commission_provenance": "unknown (orders.commission only; no estimated flag)",
+        "decision_id": "0dca7665d8f84bdc97672b790ebaa127",
+        "entry_order_ids": [
+          "d43e3ca2-ff67-47af-b9af-e6de17c0e137",
+          "ac2c5ef0-b47e-4f14-9dc4-660f4f954061"
+        ],
+        "entry_price": 2500.639227360147,
+        "entry_time": "2026-10-13 18:36:34.695952",
+        "exit_order_ids": [
+          "79927ad8-6c0d-4c54-835a-17637329915c"
+        ],
+        "exit_reason": "max_hold_time_exceeded",
+        "exit_time": "2026-10-14 02:36:47.224271",
+        "implied_exit_price": 2487.764672480842,
+        "linked_order_count": 3,
+        "mfe_mae_trustworthy": false,
+        "pnl_delta": 0.0,
+        "qty": 0.011959000000000001,
+        "recalculated_pnl": -0.15396680180160952,
+        "recalculated_return_pct": -0.5148505525483732,
+        "recorded_commission": 0.149324217101,
+        "recorded_mae_pct": 0.0,
+        "recorded_mfe_pct": 0.0,
+        "recorded_pnl": -0.15396680180160952,
+        "recorded_return_pct": -0.5161512563154671,
+        "return_pct_denominator": 29.905144519999997,
+        "symbol": "ETH/USD",
+        "unreconciled": []
+      },
+      {
+        "action": "buy",
+        "commission_provenance": "unknown (orders.commission only; no estimated flag)",
+        "decision_id": "0a9c6aefecd447d4abd60fe97780b601",
+        "entry_order_ids": [
+          "68b6fac8-4a92-403e-8e0a-dfd3a91e9a37"
+        ],
+        "entry_price": 107.245,
+        "entry_time": "2026-10-13 19:46:40.515863",
+        "exit_order_ids": [
+          "5b1da74a-d2bb-439a-be77-3a1f3ed49e4f"
+        ],
+        "exit_reason": "max_hold_time_exceeded",
+        "exit_time": "2026-10-14 03:46:51.484320",
+        "implied_exit_price": 107.38491470000001,
+        "linked_order_count": 2,
+        "mfe_mae_trustworthy": false,
+        "pnl_delta": 0.0,
+        "qty": 0.139504,
+        "recalculated_pnl": 0.019518660308800298,
+        "recalculated_return_pct": 0.13046267891277183,
+        "recorded_commission": 0.0749677476512,
+        "recorded_mae_pct": 0.0,
+        "recorded_mfe_pct": 0.0,
+        "recorded_pnl": 0.019518660308800298,
+        "recorded_return_pct": 0.13075551481595873,
+        "return_pct_denominator": 14.96110648,
+        "symbol": "SOL/USD",
+        "unreconciled": []
+      },
+      {
+        "action": "buy",
+        "commission_provenance": "unknown (orders.commission only; no estimated flag)",
+        "decision_id": "5d3d4d462b634c2ba54d468a9ddab666",
+        "entry_order_ids": [
+          "da92f79b-9f0c-4948-897c-05eafce3d7c5",
+          "6dbea77b-4d12-4c8b-9a50-e7c7dac67270",
+          "3ef12da5-4efd-4e74-a049-de67565e108f"
+        ],
+        "entry_price": 2510.9809994397756,
+        "entry_time": "2026-10-14 02:52:47.918762",
+        "exit_order_ids": [
+          "a4e001be-9473-40ab-84f8-a877ab4788e7"
+        ],
+        "exit_reason": "max_hold_time_exceeded",
+        "exit_time": "2026-10-14 10:53:23.919816",
+        "implied_exit_price": 2486.6149820347746,
+        "linked_order_count": 4,
+        "mfe_mae_trustworthy": false,
+        "pnl_delta": 0.0,
+        "qty": 0.01785,
+        "recalculated_pnl": -0.43493341067926866,
+        "recalculated_return_pct": -0.9703784063056368,
+        "recorded_commission": 0.2233229626875,
+        "recorded_mae_pct": 0.0,
+        "recorded_mfe_pct": 0.0,
+        "recorded_pnl": -0.43493341067926866,
+        "recorded_return_pct": -0.9726928099587411,
+        "return_pct_denominator": 44.82101084,
+        "symbol": "ETH/USD",
+        "unreconciled": []
+      },
+      {
+        "action": "buy",
+        "commission_provenance": "unknown (orders.commission only; no estimated flag)",
+        "decision_id": "aec34b61346746e69d7801f243252b04",
+        "entry_order_ids": [
+          "a7e7d444-e6c2-4a3b-9cfe-7555784bba84"
+        ],
+        "entry_price": 107.8765,
+        "entry_time": "2026-10-14 04:35:55.395060",
+        "exit_order_ids": [
+          "3d9f146e-a368-4ebb-bd4f-ae78eb1c15c2"
+        ],
+        "exit_reason": "max_hold_time_exceeded",
+        "exit_time": "2026-10-14 12:36:31.757995",
+        "implied_exit_price": 105.15616250887224,
+        "linked_order_count": 2,
+        "mfe_mae_trustworthy": false,
+        "pnl_delta": 0.0,
+        "qty": 0.138409,
+        "recalculated_pnl": -0.37651919180950033,
+        "recalculated_return_pct": -2.5217146376900876,
+        "recorded_commission": 0.0740232092025,
+        "recorded_mae_pct": 0.0,
+        "recorded_mfe_pct": 0.0,
+        "recorded_pnl": -0.37651919180950033,
+        "recorded_return_pct": -2.5206859992542627,
+        "return_pct_denominator": 14.931078488499999,
+        "symbol": "SOL/USD",
+        "unreconciled": []
+      },
+      {
+        "action": "buy",
+        "commission_provenance": "unknown (orders.commission only; no estimated flag)",
+        "decision_id": "c47889fa4d0649ee8b6a6ac021b669ce",
+        "entry_order_ids": [
+          "a85cd605-5a07-465c-8ee9-b154e7d1d8c4",
+          "1216e84f-768f-45e1-b873-9c27181471a6",
+          "5c0386f5-364b-41bb-aee7-723932cdb497"
+        ],
+        "entry_price": 2496.465059570642,
+        "entry_time": "2026-10-14 11:17:26.382883",
+        "exit_order_ids": [
+          "feaa7779-cf32-43c4-8224-2ba0002c9c60"
+        ],
+        "exit_reason": "max_hold_time_exceeded",
+        "exit_time": "2026-10-14 19:18:07.833172",
+        "implied_exit_price": 2416.39366068157,
+        "linked_order_count": 4,
+        "mfe_mae_trustworthy": false,
+        "pnl_delta": 0.0,
+        "qty": 0.017794,
+        "recalculated_pnl": -1.424790471832149,
+        "recalculated_return_pct": -3.2073911301944396,
+        "recorded_commission": 0.21886125652785002,
+        "recorded_mae_pct": 0.0,
+        "recorded_mfe_pct": 0.0,
+        "recorded_pnl": -1.424790471832149,
+        "recorded_return_pct": -3.214803431491444,
+        "return_pct_denominator": 44.422099270000004,
+        "symbol": "ETH/USD",
+        "unreconciled": []
+      },
+      {
+        "action": "buy",
+        "commission_provenance": "unknown (orders.commission only; no estimated flag)",
+        "decision_id": "e161b321f2bb47269edcd9fd0ac692ed",
+        "entry_order_ids": [
+          "61849ee9-1076-4b60-84dc-450b86ab28f7"
+        ],
+        "entry_price": 105.979,
+        "entry_time": "2026-10-14 12:38:33.180268",
+        "exit_order_ids": [
+          "99e632c4-8982-44bf-978b-9269cecf99c6"
+        ],
+        "exit_reason": "max_hold_time_exceeded",
+        "exit_time": "2026-10-14 20:39:15.558726",
+        "implied_exit_price": 103.300449,
+        "linked_order_count": 2,
+        "mfe_mae_trustworthy": false,
+        "pnl_delta": 0.0,
+        "qty": 0.139358,
+        "recalculated_pnl": -0.37327751025799955,
+        "recalculated_return_pct": -2.5274356240387217,
+        "recorded_commission": 0.07301676345800001,
+        "recorded_mae_pct": 0.0,
+        "recorded_mfe_pct": 0.0,
+        "recorded_pnl": -0.37327751025799955,
+        "recorded_return_pct": -2.5332680758499992,
+        "return_pct_denominator": 14.769021482000001,
+        "symbol": "SOL/USD",
+        "unreconciled": []
+      },
+      {
+        "action": "buy",
+        "commission_provenance": "unknown (orders.commission only; no estimated flag)",
+        "decision_id": "97a1335e96414102b9ad4f035cfee343",
+        "entry_order_ids": [
+          "b246f06b-fe54-4e63-8be2-6ef28df2afb3",
+          "845718f7-bb4f-4e93-8dce-79b9697f17a1"
+        ],
+        "entry_price": 102.11741151775773,
+        "entry_time": "2026-10-24 00:56:52.269744",
+        "exit_order_ids": [
+          "b32f229f-6052-408f-bc71-e53304beabb2"
+        ],
+        "exit_reason": "[TREND_FOLLOWING] Trend Following: Macro trend flipped bearish",
+        "exit_time": "2026-10-24 01:26:54.116946",
+        "implied_exit_price": 101.72356725774908,
+        "linked_order_count": 3,
+        "mfe_mae_trustworthy": false,
+        "pnl_delta": 0.0,
+        "qty": 0.293703,
+        "recalculated_pnl": -0.1156732406973221,
+        "recalculated_return_pct": -0.38567787231873546,
+        "recorded_commission": 0.1498847223803077,
+        "recorded_mae_pct": 0.0,
+        "recorded_mfe_pct": 0.0,
+        "recorded_pnl": -0.1156732406973221,
+        "recorded_return_pct": -0.386578164707126,
+        "return_pct_denominator": 29.992190115,
+        "symbol": "SOL/USD",
+        "unreconciled": []
+      },
+      {
+        "action": "buy",
+        "commission_provenance": "unknown (orders.commission only; no estimated flag)",
+        "decision_id": "4fb8f387227c49eabae7dfe00c5ea05b",
+        "entry_order_ids": [
+          "e8b6b0e3-b8be-44fd-9099-ece47063a04b",
+          "a6a0786f-3a3a-4f1a-a5ca-5ca703c73982"
+        ],
+        "entry_price": 102.40797778681495,
+        "entry_time": "2026-10-24 03:51:06.495331",
+        "exit_order_ids": [
+          "e9ed0607-c39d-455e-afa9-bd0da52d9c53"
+        ],
+        "exit_reason": "[TREND_FOLLOWING] Trend Following: Macro trend flipped bearish",
+        "exit_time": "2026-10-24 04:21:08.380985",
+        "implied_exit_price": 101.93761905318131,
+        "linked_order_count": 3,
+        "mfe_mae_trustworthy": false,
+        "pnl_delta": 0.0,
+        "qty": 0.29261899999999996,
+        "recalculated_pnl": -0.1376359022771436,
+        "recalculated_return_pct": -0.4592989177198692,
+        "recorded_commission": 0.14974941863500002,
+        "recorded_mae_pct": 0.0,
+        "recorded_mfe_pct": 0.0,
+        "recorded_pnl": -0.1376359022771436,
+        "recorded_return_pct": -0.46022299890722307,
+        "return_pct_denominator": 29.966520052,
+        "symbol": "SOL/USD",
+        "unreconciled": []
+      }
+    ],
+    "with_gaps": 0
+  },
+  "return_pct_anomalies": {
+    "bound_pct": 100.0,
+    "examples": [
+      {
+        "decision_id": "f110556591b7407e81d524da4ddc2caa",
+        "implied_notional": 0.00465467845,
+        "realized_pnl": -0.037459133526674994,
+        "reason": "magnitude_out_of_bounds",
+        "return_pct": -804.7630771718506,
+        "symbol": "ETH/USD"
+      },
+      {
+        "decision_id": "35e92c4ad143451bad087674fd9bde9e",
+        "implied_notional": 5.3568419999999995e-05,
+        "realized_pnl": -0.03761484169905001,
+        "reason": "magnitude_out_of_bounds",
+        "return_pct": -70218.31463210976,
+        "symbol": "SOL/USD"
+      }
+    ],
+    "flagged": 2,
+    "n": 24,
+    "verdict": "return_pct NOT trustworthy until each flagged row is traced to source"
+  },
+  "shadow_trades": {
+    "distinct_qty_values": [
+      1.0
+    ],
+    "net_pnl": -48521700.30769358,
+    "total": 8180
+  },
+  "snapshots_total": 24
+}
