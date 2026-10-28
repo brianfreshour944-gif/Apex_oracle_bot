@@ -18,6 +18,7 @@ from alpaca.data.timeframe import TimeFrameUnit
 from tenacity import RetryError, stop_after_attempt
 
 from src.exchange import AlpacaExchange
+from tests.helpers import paper_trading_client
 
 
 @pytest.fixture
@@ -65,7 +66,7 @@ class TestGetAccount:
         fake_account.equity = "5000.00"
         fake_account.portfolio_value = "5000.00"
 
-        exchange.trading_client = MagicMock()
+        exchange.trading_client = paper_trading_client()
         exchange.trading_client.get_account = MagicMock(return_value=fake_account)
 
         result = await exchange.get_account()
@@ -91,7 +92,7 @@ class TestGetOrdersStatusMapping:
 
     @pytest.mark.asyncio
     async def test_status_new_does_not_raise_and_maps_to_open(self, exchange):
-        exchange.trading_client = MagicMock()
+        exchange.trading_client = paper_trading_client()
         exchange.trading_client.get_orders = MagicMock(return_value=[])
 
         # Must not raise -- this is the real GetOrdersRequest construction,
@@ -103,7 +104,7 @@ class TestGetOrdersStatusMapping:
 
     @pytest.mark.asyncio
     async def test_status_filled_does_not_raise_and_maps_to_closed(self, exchange):
-        exchange.trading_client = MagicMock()
+        exchange.trading_client = paper_trading_client()
         exchange.trading_client.get_orders = MagicMock(return_value=[])
 
         await exchange.get_orders(status="filled", limit=100)
@@ -115,7 +116,7 @@ class TestGetOrdersStatusMapping:
     async def test_alpaca_native_status_values_still_work(self, exchange):
         """Callers that already pass "open"/"closed"/"all" directly (the
         real Alpaca query vocabulary) must keep working unchanged."""
-        exchange.trading_client = MagicMock()
+        exchange.trading_client = paper_trading_client()
         exchange.trading_client.get_orders = MagicMock(return_value=[])
 
         await exchange.get_orders(status="closed", limit=100)
@@ -135,7 +136,7 @@ class TestGetPositions:
         fake_position.unrealized_pl = "10.0"
         fake_position.unrealized_plpc = "0.04"
 
-        exchange.trading_client = MagicMock()
+        exchange.trading_client = paper_trading_client()
         exchange.trading_client.get_all_positions = MagicMock(return_value=[fake_position])
 
         result = await exchange.get_positions()
@@ -163,7 +164,7 @@ class TestCreateOrderConfirmation:
         fake_filled_order.side = "buy"
         fake_filled_order.type = "market"
 
-        exchange.trading_client = MagicMock()
+        exchange.trading_client = paper_trading_client()
         exchange.trading_client.submit_order = MagicMock(return_value=fake_order)
         exchange.trading_client.get_order_by_id = MagicMock(return_value=fake_filled_order)
 
@@ -182,7 +183,7 @@ class TestCreateOrderConfirmation:
         fake_order.qty = "3.0"
         fake_order.status = "pending_new"
 
-        exchange.trading_client = MagicMock()
+        exchange.trading_client = paper_trading_client()
         exchange.trading_client.submit_order = MagicMock(return_value=fake_order)
 
         result = await exchange.create_order(
@@ -206,7 +207,7 @@ class TestCreateOrderIdempotentRecovery:
 
     @pytest.mark.asyncio
     async def test_uses_existing_order_instead_of_resubmitting(self, exchange):
-        exchange.trading_client = MagicMock()
+        exchange.trading_client = paper_trading_client()
         exchange.trading_client.submit_order = MagicMock(side_effect=RuntimeError("connection reset"))
 
         existing_order = MagicMock()
@@ -236,7 +237,7 @@ class TestCreateOrderIdempotentRecovery:
         to this fix), so tenacity wraps the exhausted final attempt in its
         own RetryError rather than propagating RuntimeError directly --
         unwrap it to check the real cause."""
-        exchange.trading_client = MagicMock()
+        exchange.trading_client = paper_trading_client()
         exchange.trading_client.submit_order = MagicMock(side_effect=RuntimeError("connection reset"))
         exchange.trading_client.get_order_by_client_id = MagicMock(side_effect=RuntimeError("404 not found"))
 
@@ -259,7 +260,7 @@ class TestCreateOrderIdempotentRecovery:
     async def test_does_not_look_up_existing_order_without_a_client_order_id(self, exchange):
         """No client_order_id means there's nothing to look up by -- must
         just re-raise, not call get_order_by_client_id at all."""
-        exchange.trading_client = MagicMock()
+        exchange.trading_client = paper_trading_client()
         exchange.trading_client.submit_order = MagicMock(side_effect=RuntimeError("connection reset"))
         exchange.trading_client.get_order_by_client_id = MagicMock()
 
@@ -307,7 +308,7 @@ class TestCreateOrderIdempotencyRace:
             time.sleep(0.3)  # widen the race window
             return FakeOrder(order_id=f"order-{n}")
 
-        exchange.trading_client = MagicMock()
+        exchange.trading_client = paper_trading_client()
         exchange.trading_client.submit_order = fake_submit_order
 
         same_client_order_id = "race-test-id"
@@ -329,7 +330,7 @@ class TestCreateOrderIdempotencyRace:
         legitimate retry with the same client_order_id would be blocked for
         the rest of the cache TTL (5 minutes) instead of being allowed to
         actually try again."""
-        exchange.trading_client = MagicMock()
+        exchange.trading_client = paper_trading_client()
         exchange.trading_client.submit_order = MagicMock(side_effect=RuntimeError("connection reset"))
         # Real Alpaca raises (404) for "not found", it never returns None --
         # matches _find_existing_order_by_client_id's own except-and-return-
@@ -367,7 +368,7 @@ class TestProtectiveStopLimit:
         fake_order.symbol = "BTC/USD"
         fake_order.qty = "0.5"
         fake_order.status = "new"
-        exchange.trading_client = MagicMock()
+        exchange.trading_client = paper_trading_client()
         exchange.trading_client.submit_order = MagicMock(return_value=fake_order)
 
         info = await exchange.submit_protective_stop(
@@ -384,7 +385,7 @@ class TestProtectiveStopLimit:
 
     @pytest.mark.asyncio
     async def test_rejects_nonpositive_inputs(self, exchange):
-        exchange.trading_client = MagicMock()
+        exchange.trading_client = paper_trading_client()
         with pytest.raises(ValueError):
             await exchange.submit_protective_stop("BTC/USD", qty=0.0, stop_price=1.0, limit_price=0.9)
 
@@ -410,7 +411,7 @@ class TestProtectiveStopLimit:
         ends up unprotected."""
         from alpaca.common.exceptions import APIError
 
-        exchange.trading_client = MagicMock()
+        exchange.trading_client = paper_trading_client()
         http_err = MagicMock()
         http_err.response.status_code = 422
         exchange.trading_client.submit_order = MagicMock(
@@ -443,7 +444,7 @@ class TestProtectiveStopLimit:
         client_order_id and return the new live stop."""
         from alpaca.common.exceptions import APIError
 
-        exchange.trading_client = MagicMock()
+        exchange.trading_client = paper_trading_client()
         http_err = MagicMock()
         http_err.response.status_code = 422
         fresh_order = self._fake_stop_order("stop_fresh", "new", "BTCUSD_ps_deadbeef_1712345678")
@@ -482,7 +483,7 @@ class TestProtectiveStopLimit:
         it is not."""
         from alpaca.common.exceptions import APIError
 
-        exchange.trading_client = MagicMock()
+        exchange.trading_client = paper_trading_client()
         http_err = MagicMock()
         http_err.response.status_code = 422
         exchange.trading_client.submit_order = MagicMock(
@@ -498,7 +499,7 @@ class TestProtectiveStopLimit:
 
     @pytest.mark.asyncio
     async def test_cancel_order_calls_sdk(self, exchange):
-        exchange.trading_client = MagicMock()
+        exchange.trading_client = paper_trading_client()
         exchange.trading_client.cancel_order_by_id = MagicMock(return_value=None)
         assert await exchange.cancel_order("stop_1") is True
         exchange.trading_client.cancel_order_by_id.assert_called_once_with("stop_1")
@@ -507,7 +508,7 @@ class TestProtectiveStopLimit:
     async def test_cancel_order_treats_already_gone_as_done(self, exchange):
         from alpaca.common.exceptions import APIError
 
-        exchange.trading_client = MagicMock()
+        exchange.trading_client = paper_trading_client()
         http_err = MagicMock()
         http_err.response.status_code = 404
         err = APIError('{"code": 40410000, "message": "order not found"}', http_error=http_err)
@@ -518,7 +519,7 @@ class TestProtectiveStopLimit:
 
     @pytest.mark.asyncio
     async def test_cancel_order_reports_real_failure(self, exchange):
-        exchange.trading_client = MagicMock()
+        exchange.trading_client = paper_trading_client()
         exchange.trading_client.cancel_order_by_id = MagicMock(side_effect=RuntimeError("network down"))
         assert await exchange.cancel_order("stop_2") is False
 

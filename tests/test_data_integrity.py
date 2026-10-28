@@ -17,6 +17,7 @@ import pytest
 from src.config import settings
 from src.exchange import AlpacaExchange
 from src.risk import RiskManager
+from tests.helpers import paper_trading_client
 
 
 class TestExchangeFillDataIntegrity:
@@ -48,7 +49,7 @@ class TestExchangeFillDataIntegrity:
         # NOTE: real alpaca-py>=0.43 Order has NO .commission attribute; bot must not read it.
         fake_filled_order.filled_at = datetime.now(UTC).isoformat()
 
-        exchange.trading_client = MagicMock()
+        exchange.trading_client = paper_trading_client()
         exchange.trading_client.submit_order = MagicMock(return_value=MagicMock(id="ord_123", status="pending_new"))
         exchange.trading_client.get_order_by_id = MagicMock(return_value=fake_filled_order)
 
@@ -82,7 +83,7 @@ class TestExchangeFillDataIntegrity:
         # NOTE: real alpaca-py>=0.43 Order has NO .commission attribute.
         fake_filled_order.filled_at = datetime.now(UTC).isoformat()
 
-        exchange.trading_client = MagicMock()
+        exchange.trading_client = paper_trading_client()
         exchange.trading_client.submit_order = MagicMock(return_value=MagicMock(id="ord_123", status="pending_new"))
         exchange.trading_client.get_order_by_id = MagicMock(return_value=fake_filled_order)
 
@@ -108,7 +109,7 @@ class TestExchangeFillDataIntegrity:
         fake_filled_order.filled_avg_price = "50000.00"
         fake_filled_order.filled_at = datetime.now(UTC).isoformat()
 
-        exchange.trading_client = MagicMock()
+        exchange.trading_client = paper_trading_client()
         exchange.trading_client.submit_order = MagicMock(return_value=MagicMock(id="ord_789", status="pending_new"))
         exchange.trading_client.get_order_by_id = MagicMock(return_value=fake_filled_order)
 
@@ -132,7 +133,7 @@ class TestExchangeFillDataIntegrity:
         fake_filled_order.commission = "0.30"
         fake_filled_order.filled_at = datetime.now(UTC).isoformat()
 
-        exchange.trading_client = MagicMock()
+        exchange.trading_client = paper_trading_client()
         exchange.trading_client.submit_order = MagicMock(return_value=MagicMock(id="ord_123", status="pending_new"))
         exchange.trading_client.get_order_by_id = MagicMock(return_value=fake_filled_order)
 
@@ -157,7 +158,7 @@ class TestExchangeFillDataIntegrity:
         fake_filled_order.commission = "0.50"
         fake_filled_order.filled_at = datetime.now(UTC).isoformat()
 
-        exchange.trading_client = MagicMock()
+        exchange.trading_client = paper_trading_client()
         exchange.trading_client.submit_order = MagicMock(return_value=MagicMock(id="ord_123", status="pending_new"))
         exchange.trading_client.get_order_by_id = MagicMock(return_value=fake_filled_order)
 

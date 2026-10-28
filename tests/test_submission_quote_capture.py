@@ -30,6 +30,7 @@ import src.db as db
 from src import exchange as _exchange_mod
 from src.config import settings
 from src.exchange import AlpacaExchange
+from src.paper_guard import PAPER_BASE_URL
 
 # ── fakes ──────────────────────────────────────────────────────────────────
 
@@ -247,7 +248,7 @@ async def test_capture_disabled_skips_quote(monkeypatch):
     """With the flag off, create_order must not call get_latest_quote."""
     calls = []
     ex = AlpacaExchange.__new__(AlpacaExchange)
-    ex.trading_client = types.SimpleNamespace()
+    ex.trading_client = types.SimpleNamespace(_base_url=PAPER_BASE_URL)
     # circuit_breaker.call(fn, *args) must be a passthrough in the fake.
     ex.circuit_breaker = types.SimpleNamespace(
         call=lambda fn, *a, **kw: fn(*a, **kw)
@@ -279,7 +280,7 @@ async def test_capture_disabled_skips_quote(monkeypatch):
 async def test_capture_enabled_attaches_quote(monkeypatch):
     """With the flag on, create_order attaches the captured quote to its result."""
     ex = AlpacaExchange.__new__(AlpacaExchange)
-    ex.trading_client = types.SimpleNamespace()
+    ex.trading_client = types.SimpleNamespace(_base_url=PAPER_BASE_URL)
     ex.circuit_breaker = types.SimpleNamespace(call=lambda fn, *a, **kw: fn(*a, **kw))
     ex._order_cache = {}
     ex._recent_order_submissions = {}
@@ -308,7 +309,7 @@ async def test_capture_enabled_attaches_quote(monkeypatch):
 async def test_quote_failure_does_not_block_order(monkeypatch):
     """A raising quote helper must not fail the order; quote is simply absent."""
     ex = AlpacaExchange.__new__(AlpacaExchange)
-    ex.trading_client = types.SimpleNamespace()
+    ex.trading_client = types.SimpleNamespace(_base_url=PAPER_BASE_URL)
     ex.circuit_breaker = types.SimpleNamespace(call=lambda fn, *a, **kw: fn(*a, **kw))
     ex._order_cache = {}
     ex._recent_order_submissions = {}
@@ -344,7 +345,7 @@ async def test_quote_failure_does_not_block_order(monkeypatch):
 def _bare_exchange():
     """An exchange with the attributes create_order touches, no creds/network."""
     ex = AlpacaExchange.__new__(AlpacaExchange)
-    ex.trading_client = types.SimpleNamespace()
+    ex.trading_client = types.SimpleNamespace(_base_url=PAPER_BASE_URL)
     ex.circuit_breaker = types.SimpleNamespace(call=lambda fn, *a, **kw: fn(*a, **kw))
     ex._order_cache = {}
     ex._recent_order_submissions = {}
@@ -431,7 +432,7 @@ async def test_wait_for_releases_caller_on_slow_quote(monkeypatch):
 async def test_close_shuts_down_quote_executor():
     """T3: close() must release the dedicated pool (no leaked threads)."""
     ex = _bare_exchange()
-    ex.trading_client = types.SimpleNamespace()
+    ex.trading_client = types.SimpleNamespace(_base_url=PAPER_BASE_URL)
     ex.data_client = types.SimpleNamespace()
 
     pool = ex._get_quote_executor()

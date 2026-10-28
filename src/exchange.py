@@ -29,6 +29,11 @@ from tenacity import RetryCallState, retry, retry_if_exception, stop_after_attem
 from src.circuit_breaker import CircuitBreaker
 from src.config import settings
 from src.logging_config import get_logger
+from src.paper_guard import (
+    PaperTradingViolation,
+    assert_paper_endpoint,
+    verify_account_for_order_placement,
+)
 
 logger = get_logger(__name__)
 
@@ -133,6 +138,12 @@ def _retry_unless_circuit_open(exception: Exception) -> bool:
     """
     if _is_circuit_open_error(exception):
         return False
+    # A paper-trading violation is a permanent configuration fault, not a
+    # transient one. Retrying it cannot succeed, and each attempt would count
+    # as a failure against the shared 'alpaca_exchange' circuit, so retrying
+    # could trip the breaker and block unrelated calls. Never retry it.
+    if isinstance(exception, PaperTradingViolation):
+        return False
     if isinstance(exception, APIError):
         status = getattr(exception, "status_code", None)
         if status is not None and 400 <= status < 500 and status != 429:
@@ -220,7 +231,12 @@ class AlpacaExchange:
         self.secret_key = settings.ALPACA_SECRET_KEY
         base_url = settings.ALPACA_BASE_URL or "https://paper-api.alpaca.markets"
         self.paper = "paper" in base_url.lower()
-        
+        # Fail closed on the CONFIGURED endpoint: refuse to even construct a
+        # live-capable client. The settings validator already rejects a live
+        # URL at startup; this guards the case where settings were mutated or
+        # bypassed (e.g. a test or a script constructing the client directly).
+        assert_paper_endpoint(base_url, context="exchange client construction")
+
         self.trading_client: TradingClient | None = None
         self.data_client: CryptoHistoricalDataClient | None = None
         
@@ -267,11 +283,36 @@ class AlpacaExchange:
             # Initialize Alpaca-py clients (these are synchronous under the hood, but we wrap calls in threads/async if needed)
             self.trading_client = TradingClient(self.api_key, self.secret_key, paper=self.paper)
             self.data_client = CryptoHistoricalDataClient(self.api_key, self.secret_key)
-            
+
+            # Fail closed on the endpoint the client ACTUALLY resolved, not just
+            # the configured string. The SDK picks the host from `paper=`, so if
+            # the two ever disagree (mutated settings, an SDK default change, or
+            # a future url_override) the resolved host is what orders would hit.
+            assert_paper_endpoint(
+                getattr(self.trading_client, "_base_url", None),
+                context="exchange client initialization",
+            )
+
             # Verify credentials by fetching account
             account = await asyncio.to_thread(self.trading_client.get_account)
             if account.account_blocked:
                 raise RuntimeError("Alpaca account is blocked.")
+            # Verify the ACCOUNT (not just the endpoint). This is a separate,
+            # fail-closed check: the account must be usable (unblocked, not in a
+            # dead status) AND corroborated as a paper account. Alpaca exposes no
+            # authoritative "is paper" boolean, so a missing/ambiguous account
+            # response is NOT treated as verified -- refusing here is deliberate,
+            # because otherwise the bot would declare its environment verified
+            # without having confirmed it.
+            acct_ok, acct_reason = verify_account_for_order_placement(account)
+            if not acct_ok:
+                self.trading_client = None
+                self.data_client = None
+                raise RuntimeError(
+                    "Authenticated Alpaca account is not verified for order "
+                    f"placement: {acct_reason}. Refusing to enable order placement."
+                )
+            logger.info(f"Alpaca account verified for order placement: {acct_reason}")
         except APIError as e:
             # Auth/config errors (401, 403, etc.) - these are fatal configuration issues
             self.trading_client = None
@@ -309,6 +350,22 @@ class AlpacaExchange:
             )
             self._quote_executor = ex
         return ex
+
+    def _assert_order_placement_allowed(self) -> None:
+        """Last-line fail-closed check before ANY order submission.
+
+        Called immediately before every ``submit_order`` (entry, protective
+        stop, and stop re-arm) so that even a client constructed or mutated by
+        some other path cannot submit against a non-paper endpoint. It checks
+        the client's ACTUAL resolved base URL, and also the configured URL, so a
+        disagreement between the two refuses the order. Risk-reducing exits do
+        NOT bypass this: the guard is about the venue, not the intent.
+        """
+        assert_paper_endpoint(
+            getattr(self.trading_client, "_base_url", None),
+            context="order submission",
+        )
+        assert_paper_endpoint(settings.ALPACA_BASE_URL, context="order submission")
 
     @retry(retry=retry_if_exception(_retry_on_rate_limit), stop=stop_after_attempt(5), wait=_rate_limit_wait)
     async def get_account(self) -> dict[str, Any]:
@@ -879,6 +936,13 @@ class AlpacaExchange:
                 order_kwargs["client_order_id"] = client_order_id
             request = MarketOrderRequest(**order_kwargs)
 
+        # Fail closed BEFORE the submission call, on both the client's actual
+        # endpoint and the configured one. Placed here so no branch (circuit
+        # bypass included) can reach submit_order without passing it. Checked
+        # first, before the quote capture below, so a non-paper endpoint is
+        # refused without making any further network call.
+        self._assert_order_placement_allowed()
+
         # Capture the submission-time quote BEFORE submitting, so the recorded
         # mid/spread is contemporaneous with the decision rather than the
         # post-fill market. Gated by CAPTURE_SUBMISSION_QUOTE and
@@ -1104,6 +1168,11 @@ class AlpacaExchange:
             order_kwargs["client_order_id"] = client_order_id
         request = StopLimitOrderRequest(**order_kwargs)
 
+        # Fail closed before the protective-stop submission (same choke point as
+        # entries). A stop is risk-REDUCING, but it must never bypass the
+        # paper-only restriction.
+        self._assert_order_placement_allowed()
+
         try:
             if bypass_circuit_breaker:
                 order = await asyncio.to_thread(self.trading_client.submit_order, request)
@@ -1190,6 +1259,9 @@ class AlpacaExchange:
         if client_order_id is not None:
             order_kwargs["client_order_id"] = client_order_id
         request = StopLimitOrderRequest(**order_kwargs)
+        # Same choke point as the other submission paths: the re-arm path must
+        # not be a way around the paper-only restriction.
+        self._assert_order_placement_allowed()
         if bypass_circuit_breaker:
             order = await asyncio.to_thread(self.trading_client.submit_order, request)
         else:

@@ -34,6 +34,10 @@ class TradingBotSettings(BaseSettings):
         extra="ignore",
         case_sensitive=True,
         env_prefix="",
+        # Never echo raw input values in ValidationError messages: a rejected
+        # value (e.g. ALPACA_BASE_URL) could embed credentials, and the error
+        # text ends up in startup logs and tracebacks.
+        hide_input_in_errors=True,
     )
 
     # --- Alpaca Credentials (Crypto) ---
@@ -834,11 +838,21 @@ class TradingBotSettings(BaseSettings):
     @field_validator("ALPACA_BASE_URL")
     @classmethod
     def clean_alpaca_base_url(cls, v: str) -> str:
-        """Clean the Alpaca base URL by stripping surrounding parentheses, quotes, and whitespace."""
+        """Clean the Alpaca base URL, then enforce the paper-only guard.
+
+        Cleaning strips surrounding parentheses, quotes, and whitespace and adds
+        a scheme if missing. The cleaned value is then passed to the fail-closed
+        paper guard, so a live or malformed endpoint is rejected HERE -- during
+        settings validation, before the process can start placing orders. An
+        unset field uses the paper default and passes.
+        """
         if v:
             v = v.strip("()\"' ")
             if v and not v.startswith(("http://", "https://")):
                 v = "https://" + v
+        from src.paper_guard import validate_configured_endpoint
+
+        validate_configured_endpoint(v)
         return v
 
     @field_validator("DATABASE_URL")
