@@ -436,10 +436,14 @@ async def bayesian_transformer_brain(
                 data_scaled = brain.scaler.transform(data).astype(np.float32)
                 data_scaled = np.nan_to_num(data_scaled, nan=0.0, posinf=0.0, neginf=0.0)
                 
-                # Shadow arena
+                # Shadow arena -- only writes when the caller explicitly
+                # declared live execution (see transformer_brain).
                 try:
                     from src.shadow_arena import evaluate_candidates
-                    evaluate_candidates(symbol, price, df_feat)
+                    evaluate_candidates(
+                        symbol, price, df_feat,
+                        is_live=(signal.get("execution_mode") == "live"),
+                    )
                 except Exception:
                     pass
                 

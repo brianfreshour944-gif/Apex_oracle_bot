@@ -64,7 +64,7 @@ def test_unique_open_index_exists(fresh_db):
 def test_repeated_buy_signals_open_exactly_one(fresh_db):
     from src.shadow_arena import _evaluate_shadow_position
     for _ in range(5):
-        _evaluate_shadow_position("Bot_A_Light", "BTC/USD", 83682.98, 0.02, 0.04, new_action="buy")
+        _evaluate_shadow_position("Bot_A_Light", "BTC/USD", 83682.98, 0.02, 0.04, new_action="buy", is_live=True)
     assert _open_count() == 1
 
 
@@ -76,7 +76,7 @@ def test_concurrent_buy_signals_open_exactly_one(fresh_db):
     def worker():
         try:
             barrier.wait()
-            _evaluate_shadow_position("Bot_A_Light", "BTC/USD", 83682.98, 0.02, 0.04, new_action="buy")
+            _evaluate_shadow_position("Bot_A_Light", "BTC/USD", 83682.98, 0.02, 0.04, new_action="buy", is_live=True)
         except Exception as e:  # pragma: no cover - surfaced via assertion below
             errors.append(repr(e))
 

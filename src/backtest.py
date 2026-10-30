@@ -194,12 +194,17 @@ def _generate_synthetic_bars(
         for _ in range(n):
             price += (100.0 - price) * 0.05 + rng.randn() * 1.2
             closes.append(price)
-    else:  # volatile
+    elif regime == "volatile":
         price = 100.0
         closes = []
         for _ in range(n):
             price *= (1 + rng.randn() * 0.04)
             closes.append(price)
+    else:
+        raise ValueError(
+            f"Unsupported synthetic regime {regime!r}; expected one of "
+            "'trending', 'mean_reverting', 'volatile'."
+        )
 
     closes = np.array(closes)
     highs = closes * (1 + np.abs(rng.randn(n)) * 0.005)

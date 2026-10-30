@@ -49,7 +49,7 @@ async def run_experiment(symbol: str, config: dict[str, Any], seed: int = 42) ->
             n_bars=1000,
             start_equity=10000.0,
             seed=seed,
-            regime="all" # Run over a mix, though we use the synthetic generator
+            regime="volatile"  # valid synthetic regime; "all" is not a generator regime
         )
         return res
     finally:

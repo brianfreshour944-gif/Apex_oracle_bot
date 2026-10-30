@@ -72,7 +72,7 @@ async def evaluate_fitness(symbol: str, config: dict[str, Any], seed: int = 42) 
         for k, v in config.items():
             setattr(settings, k, v)
             
-        res = await run_backtest(symbol=symbol, n_bars=800, start_equity=10000.0, seed=seed, regime="all")
+        res = await run_backtest(symbol=symbol, n_bars=800, start_equity=10000.0, seed=seed, regime="volatile")
         mc_res = run_monte_carlo_analysis(res, n_simulations=500)
         
         # Fitness penalizes Risk of Ruin severely

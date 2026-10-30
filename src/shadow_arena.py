@@ -114,8 +114,20 @@ def get_candidates():
     
     return _candidates_cache
 
-def evaluate_candidates(symbol: str, current_price: float, df_feat: Any) -> None:
-    """Evaluates all candidate models using the raw input DataFrame."""
+def evaluate_candidates(
+    symbol: str, current_price: float, df_feat: Any, is_live: bool = False
+) -> None:
+    """Evaluates all candidate models using the raw input DataFrame.
+
+    ``is_live`` must be established explicitly by the caller from an execution
+    mode, never inferred from the presence/absence of ``backtest_df`` or from
+    whether Alpaca credentials happen to be set. Shadow-trade rows are only
+    written during live execution; backtest, research, benchmark and synthetic
+    runs must not touch the live shadow ledger. Defaults to False (fail closed)
+    so a caller that forgets the flag writes nothing rather than corrupting it.
+    """
+    if not is_live:
+        return
     import numpy as np
     candidates = get_candidates()
     if not candidates:
@@ -163,6 +175,7 @@ def evaluate_candidates(symbol: str, current_price: float, df_feat: Any) -> None
             _evaluate_shadow_position(
                 name, symbol, current_price, stop_loss, profit_target,
                 new_action="buy" if action == "buy" else ("close" if action == "sell" else None),
+                is_live=True,  # only reached after the is_live gate above
             )
                 
         except Exception as e:
@@ -175,6 +188,7 @@ def _evaluate_shadow_position(
     stop_loss_pct: float,
     profit_target_pct: float,
     new_action: str | None,
+    is_live: bool = False,
 ) -> None:
     """Combines what used to be two separate DB sessions
     (check_shadow_stops() + process_shadow_signal()) into one: fetch the
@@ -186,7 +200,12 @@ def _evaluate_shadow_position(
     The whole check-then-act runs under a per-(candidate, symbol) lock so two
     concurrent evaluations cannot both observe "no open trade" and each open
     one; the unique partial index on shadow_trades is the DB-level backstop.
+
+    ``is_live`` defaults to False (fail closed): any caller that has not
+    explicitly established live execution writes nothing.
     """
+    if not is_live:
+        return
     try:
         _ensure_tables()
         with _get_shadow_lock(candidate_name, symbol), get_db_session() as session:
@@ -249,14 +268,18 @@ def _evaluate_shadow_position(
     except Exception as e:
         logger.error(f"Shadow arena error for {candidate_name} {symbol}: {e}")
 
-def process_shadow_signal(candidate_name: str, symbol: str, current_price: float, action: str, qty: float = 1.0) -> None:
+def process_shadow_signal(candidate_name: str, symbol: str, current_price: float, action: str, qty: float = 1.0, is_live: bool = False) -> None:
     """Processes a signal for a candidate model in the Shadow Arena.
 
     Kept as a standalone entry point for any external/direct callers; the
     hot path in evaluate_candidates() now uses _evaluate_shadow_position()
     instead, which merges this with check_shadow_stops() into one DB
     session per candidate per symbol per cycle instead of two.
+
+    ``is_live`` defaults to False (fail closed).
     """
+    if not is_live:
+        return
     try:
         # _ensure_tables() is a one-time-cached no-op after the first call
         # (shared with src.db's other save functions) instead of re-running
@@ -307,8 +330,13 @@ def process_shadow_signal(candidate_name: str, symbol: str, current_price: float
     except Exception as e:
         logger.error(f"Shadow arena error for {candidate_name} {symbol}: {e}")
 
-def check_shadow_stops(candidate_name: str, symbol: str, current_price: float, stop_loss_pct: float, profit_target_pct: float) -> None:
-    """Checks stop loss and profit targets for an open shadow position."""
+def check_shadow_stops(candidate_name: str, symbol: str, current_price: float, stop_loss_pct: float, profit_target_pct: float, is_live: bool = False) -> None:
+    """Checks stop loss and profit targets for an open shadow position.
+
+    ``is_live`` defaults to False (fail closed).
+    """
+    if not is_live:
+        return
     try:
         with get_db_session() as session:
             stmt = select(ShadowTrade).where(

@@ -360,10 +360,15 @@ async def _run_fast_ensemble_inference(
         data_scaled = scaler.transform(data).astype(np.float32)
         data_scaled = np.nan_to_num(data_scaled, nan=0.0, posinf=0.0, neginf=0.0)
         
-        # Shadow arena
+        # Shadow arena -- only writes when the caller explicitly declared
+        # live execution. Do NOT infer from `is_live` (derived from
+        # backtest_df / Alpaca credential availability).
         try:
             from src.shadow_arena import evaluate_candidates
-            evaluate_candidates(symbol, price, df_feat)
+            evaluate_candidates(
+                symbol, price, df_feat,
+                is_live=(signal.get("execution_mode") == "live"),
+            )
         except Exception:
             pass
         
@@ -575,9 +580,13 @@ async def transformer_brain(symbol: str, price: float, signal: dict) -> BrainVot
                 data_scaled = np.nan_to_num(data_scaled, nan=0.0, posinf=0.0, neginf=0.0)
                 
     # Let the shadow arena candidates process the raw dataframe using their own scaler
+                # Shadow arena -- explicit live mode only (see above).
                 try:
                     from src.shadow_arena import evaluate_candidates
-                    evaluate_candidates(symbol, price, df_feat)
+                    evaluate_candidates(
+                        symbol, price, df_feat,
+                        is_live=(signal.get("execution_mode") == "live"),
+                    )
                 except Exception as shadow_e:
                     import logging
                     logging.getLogger("shadow_arena").error(f"Shadow evaluation failed: {shadow_e}")

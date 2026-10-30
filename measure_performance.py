@@ -363,7 +363,7 @@ async def run_measured_cycle():
     
 # Measure shadow arena
         with Timer("evaluate_candidates_shadow_arena", {"symbol": "BTC/USD"}):
-            evaluate_candidates("BTC/USD", 50000.0, None)
+            evaluate_candidates("BTC/USD", 50000.0, None, is_live=False)
     
     # Measure risk manager operations
     with Timer("update_account_status"):

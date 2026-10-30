@@ -1937,6 +1937,11 @@ async def process_signal_for_symbol(symbol: str, current_price: float, risk_mana
                     calculate_directional_majority,
                     disagreement_from_entropy,
                 )
+                # This is the ONLY site that may declare live execution. The
+                # shadow arena is fail-closed, so every other caller (backtest,
+                # research, replay, benchmark) writes nothing unless it stamps
+                # this itself -- and none of them do.
+                signal["execution_mode"] = "live"
                 committee_result = await run_committee(symbol, current_price, signal)
 
                 # Brain disagreement comes from the committee vote entropy.
