@@ -64,6 +64,7 @@ class TestGetAccount:
         fake_account.currency = "USD"
         fake_account.buying_power = "1000.50"
         fake_account.equity = "5000.00"
+        fake_account.cash = "4000.25"
         fake_account.portfolio_value = "5000.00"
 
         exchange.trading_client = paper_trading_client()
@@ -74,6 +75,10 @@ class TestGetAccount:
         assert result["id"] == "acct_123"
         assert result["buying_power"] == pytest.approx(1000.50)
         assert result["equity"] == pytest.approx(5000.00)
+        # Regression: get_account() must expose "cash". It was previously
+        # omitted, so risk.py's account.get("cash", 0) silently read 0.0 for
+        # every live account regardless of the real balance.
+        assert result["cash"] == pytest.approx(4000.25)
 
 
 class TestGetOrdersStatusMapping:

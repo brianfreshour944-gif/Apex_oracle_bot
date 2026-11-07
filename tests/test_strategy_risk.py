@@ -104,6 +104,25 @@ async def test_risk_limits_scaled():
     assert status["reason"] == "daily_loss_limit_exceeded", status
     assert abs(status["daily_pnl"] - loss) < 0.01, f"daily_pnl wrong: {status['daily_pnl']} vs {loss}"
 
+def test_regime_confidence_clamped_to_unit_interval():
+    """Regression: a regime observed far on the 'wrong' side of its threshold
+    (e.g. low_volatility with a huge ATR) previously returned a NEGATIVE
+    confidence, which leaked into position_scale. Confidence must stay in [0, 1]."""
+    from src.strategies import TradingStrategy
+
+    strat = TradingStrategy(None)
+    cases = [
+        ("trending", 0.50, 0.0, 50.0),        # below HURST_TREND_UP -> was -0.20
+        ("sideways", 0.70, 0.0, 50.0),        # above HURST_MEAN_REVERT -> was -0.24
+        ("high_volatility", 0.5, 0.0, 50.0),  # ATR below threshold -> was -1.0
+        ("low_volatility", 0.5, 99.0, 50.0),  # ATR far above -> was -78.2
+        ("low_volatility", 0.5, 0.0, 50.0),   # in-range -> 1.0
+    ]
+    for regime, hurst, atr, rsi in cases:
+        c = strat._calculate_regime_confidence(regime, hurst, atr, rsi)
+        assert 0.0 <= c <= 1.0, f"{regime} confidence out of [0,1]: {c}"
+
+
 if __name__ == "__main__":
     print("=" * 60)
     print("INTEGRATION TEST: strategy + risk logic")

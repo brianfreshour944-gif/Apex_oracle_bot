@@ -29,9 +29,10 @@ _model = None
 # None to mean "not loaded" unambiguously. Previously this function cached
 # a failed load as `_model = False` -- `False is not None` is True, so the
 # committee gate reported "PPO model loaded" for a model that was never
-# actually loaded. stable_baselines3 isn't in requirements.txt/pyproject.toml
-# at all, so a load failure via missing import is the default production
-# state, not an edge case. Found via an external correctness audit,
+# actually loaded. stable_baselines3 is pinned (requirements.txt / pyproject.toml),
+# but a load can still fail at runtime (missing weight bundle, version/ABI
+# mismatch), so a load failure remains a real production state, not an edge case.
+# Found via an external correctness audit,
 # reproduced directly (get_ppo_model() -> False, gate -> "PPO model
 # loaded"), 2026-09-22.
 _model_load_attempted = False

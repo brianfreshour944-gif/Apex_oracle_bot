@@ -609,17 +609,25 @@ class TradingStrategy:
         return float(rsi[-1]), 50.0
 
     def _calculate_regime_confidence(self, regime: str, hurst: float, atr: float, rsi: float) -> float:
-        """Calculate confidence in regime classification."""
+        """Calculate confidence in regime classification (clamped to [0, 1]).
+
+        Each branch scales a distance from a threshold, so a regime observed far
+        on the "wrong" side of its threshold (e.g. low_volatility with a large
+        ATR) would otherwise return a negative confidence. Confidence is a
+        probability-like score, so clamp it to [0, 1] rather than letting a
+        negative value leak into downstream sizing/logging.
+        """
         if regime in ["bull", "bear", "trending"]:
-            return min(1.0, (hurst - settings.HURST_TREND_UP) * 2.0)
+            raw = (hurst - settings.HURST_TREND_UP) * 2.0
         elif regime == "sideways":
-            return min(1.0, (settings.HURST_MEAN_REVERT - hurst) * 2.0)
+            raw = (settings.HURST_MEAN_REVERT - hurst) * 2.0
         elif regime == "high_volatility":
-            return min(1.0, (atr - settings.HIGH_VOLATILITY_PCT) / settings.HIGH_VOLATILITY_PCT)
+            raw = (atr - settings.HIGH_VOLATILITY_PCT) / settings.HIGH_VOLATILITY_PCT
         elif regime == "low_volatility":
-            return min(1.0, (settings.HIGH_VOLATILITY_PCT * 0.25 - atr) / (settings.HIGH_VOLATILITY_PCT * 0.25))
+            raw = (settings.HIGH_VOLATILITY_PCT * 0.25 - atr) / (settings.HIGH_VOLATILITY_PCT * 0.25)
         else:
-            return 1.0 - abs(0.5 - hurst) * 2.0
+            raw = 1.0 - abs(0.5 - hurst) * 2.0
+        return max(0.0, min(1.0, raw))
 
     async def generate_trading_signal(self, symbol: str, current_price: float, position: dict | None = None) -> dict[str, Any]:
         """Generate trading signal based on current regime and market conditions."""

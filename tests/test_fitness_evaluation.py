@@ -93,3 +93,22 @@ def test_gate_rejects_negative_fitness():
     ok, reason = promotion_gate(**{**GOOD, "fitness": -0.02})
     assert ok is False
     assert "fitness" in reason
+
+
+def test_gate_rejects_non_finite_metrics():
+    """Regression: a NaN metric must fail the gate (fail closed). `nan < x` is
+    always False, so without an explicit isfinite guard a non-finite Sharpe,
+    win rate, or fitness passed every `<` check and the gate returned 'passed'."""
+    nan = float("nan")
+    for key in ("shadow_sharpe", "shadow_win_rate", "fitness"):
+        ok, reason = promotion_gate(**{**GOOD, key: nan})
+        assert ok is False, key
+        assert "non-finite" in reason, (key, reason)
+
+
+def test_gate_rejects_infinite_metrics():
+    for key in ("shadow_sharpe", "shadow_win_rate", "fitness"):
+        for bad in (float("inf"), float("-inf")):
+            ok, reason = promotion_gate(**{**GOOD, key: bad})
+            assert ok is False, (key, bad)
+            assert "non-finite" in reason, (key, bad, reason)

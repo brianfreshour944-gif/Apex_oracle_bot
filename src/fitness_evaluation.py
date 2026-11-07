@@ -5,6 +5,7 @@ Never promotes solely on raw historical PnL — requires OOS walk-forward
 and shadow live validation.
 """
 
+import math
 
 
 def compute_fitness(
@@ -72,12 +73,21 @@ def promotion_gate(
     if n_shadow_trades < min_shadow_trades:
         return False, f"insufficient shadow trades ({n_shadow_trades} < {min_shadow_trades})"
     
+    # Non-finite metrics must fail closed: `nan < x` is always False, so a NaN
+    # Sharpe/win-rate/fitness would otherwise slip through every `<` check below
+    # and pass the gate.
+    if not math.isfinite(shadow_sharpe):
+        return False, f"non-finite shadow Sharpe ({shadow_sharpe!r})"
     if shadow_sharpe < min_shadow_sharpe:
         return False, f"shadow Sharpe too low ({shadow_sharpe:.3f} < {min_shadow_sharpe})"
     
+    if not math.isfinite(shadow_win_rate):
+        return False, f"non-finite shadow win rate ({shadow_win_rate!r})"
     if shadow_win_rate < min_shadow_win_rate:
         return False, f"shadow win rate too low ({shadow_win_rate:.3f} < {min_shadow_win_rate})"
     
+    if not math.isfinite(fitness):
+        return False, f"non-finite fitness ({fitness!r})"
     if fitness < min_fitness:
         return False, f"fitness negative ({fitness:.3f} < {min_fitness}) — overfit or unstable"
     

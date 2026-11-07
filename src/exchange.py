@@ -374,13 +374,16 @@ class AlpacaExchange:
             await self.load()
 
         account = await self.circuit_breaker.call(asyncio.to_thread, self.trading_client.get_account)
-        # Return a dictionary mimicking old JSON response
+        # Return a dictionary mimicking old JSON response. `cash` is included so
+        # risk.py's account.get("cash", 0) reads the real balance instead of
+        # silently defaulting to 0.0.
         return {
             "id": str(account.id),
             "status": str(account.status),
             "currency": str(account.currency),
             "buying_power": float(account.buying_power),
             "equity": float(account.equity),
+            "cash": float(account.cash),
             "portfolio_value": float(account.portfolio_value),
         }
         
